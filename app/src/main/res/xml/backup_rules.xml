@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="unattended_sync.xml" />
+        <exclude domain="sharedpref" path="workday_read.xml" />
+        <exclude domain="sharedpref" path="full_sync_control.xml" />
+</full-backup-content>

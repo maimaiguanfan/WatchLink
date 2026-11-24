@@ -1,0 +1,74 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Subtle watch strap lugs -->
+    <path
+        android:fillColor="#BFE4F4FF"
+        android:pathData="M43,23 H65 Q67,23 67.3,25.2 L68,32.5 H40 L40.7,25.2 Q41,23 43,23 Z" />
+    <path
+        android:fillColor="#BFE4F4FF"
+        android:pathData="M40,75.5 H68 L67.3,82.8 Q67,85 65,85 H43 Q41,85 40.7,82.8 Z" />
+
+    <!-- Soft drop shadow under watch case -->
+    <path
+        android:fillColor="#260A1E5C"
+        android:pathData="M44,33 H64 Q75,33 75,44 V68 Q75,79 64,79 H44 Q33,79 33,68 V44 Q33,33 44,33 Z" />
+
+    <!-- Digital crown on right bezel -->
+    <path
+        android:fillColor="#F0F6FF"
+        android:pathData="M75.5,46 H78.5 Q80.5,46 80.5,48 V56 Q80.5,58 78.5,58 H75.5 Z" />
+
+    <!-- Smartwatch case bezel -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,31 H64 Q75,31 75,42 V66 Q75,77 64,77 H44 Q33,77 33,66 V42 Q33,31 44,31 Z" />
+
+    <!-- Deep sapphire watch dial -->
+    <path android:pathData="M45,35 H63 Q71,35 71,43 V65 Q71,73 63,73 H45 Q37,73 37,65 V43 Q37,35 45,35 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="38"
+                android:startY="36"
+                android:endX="70"
+                android:endY="72">
+                <item android:offset="0.0" android:color="#10297C" />
+                <item android:offset="1.0" android:color="#1D4EC4" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Cardinal dial ticks -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#66FFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M54,39 V41.5 M54,66.5 V69 M41,54 H43.5 M64.5,54 H67" />
+
+    <!-- Clock hands (10:10) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M46.5,46.5 L54,54 L64,46.5" />
+
+    <!-- Luminous amber alarm pivot -->
+    <path
+        android:fillColor="#FFBA2E"
+        android:pathData="M54,50.8 A3.2,3.2 0,1 1,53.99 50.8 Z" />
+
+    <!-- Alarm ringing / wireless sync arcs -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFD86B"
+        android:strokeWidth="2.8"
+        android:strokeLineCap="round"
+        android:pathData="M28.5,39.5 A13.5,13.5 0,0 1,38,27.5 M70,27.5 A13.5,13.5 0,0 1,79.5,39.5" />
+</vector>

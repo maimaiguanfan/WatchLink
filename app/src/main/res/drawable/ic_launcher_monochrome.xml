@@ -1,0 +1,46 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Top and bottom watch strap lugs -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M43,23 H65 Q67,23 67.3,25.2 L67.8,29.5 H40.2 L40.7,25.2 Q41,23 43,23 Z" />
+    <path
+        android:fillColor="#000000"
+        android:pathData="M40.2,78.5 H67.8 L67.3,82.8 Q67,85 65,85 H43 Q41,85 40.7,82.8 Z" />
+
+    <!-- Digital crown -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M76,46 H78.5 Q80.5,46 80.5,48 V56 Q80.5,58 78.5,58 H76 Z" />
+
+    <!-- Watch case outline -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#000000"
+        android:strokeWidth="4.2"
+        android:strokeLineJoin="round"
+        android:pathData="M44,32 H64 Q74,32 74,42 V66 Q74,76 64,76 H44 Q34,76 34,66 V42 Q34,32 44,32 Z" />
+
+    <!-- Clock hands & center dot -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#000000"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M46.5,46.5 L54,54 L64,46.5" />
+    <path
+        android:fillColor="#000000"
+        android:pathData="M54,50.8 A3.2,3.2 0,1 1,53.99 50.8 Z" />
+
+    <!-- Ringing / sync waves -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#000000"
+        android:strokeWidth="3.0"
+        android:strokeLineCap="round"
+        android:pathData="M28.5,39.5 A13.5,13.5 0,0 1,38,27.5 M70,27.5 A13.5,13.5 0,0 1,79.5,39.5" />
+</vector>

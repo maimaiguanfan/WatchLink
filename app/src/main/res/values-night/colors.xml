@@ -1,0 +1,6 @@
+<resources>
+    <color name="surface_page">#101010</color>
+    <color name="text_primary">#F2F2F2</color>
+    <color name="text_secondary">#ADADAD</color>
+    <color name="brand">#7DAAFF</color>
+</resources>

@@ -1,0 +1,30 @@
+# Gradle & Kotlin
+.gradle/
+.kotlin/
+/build/
+**/build/
+
+# IDE & OS
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local configuration & signing keys
+local.properties
+*.jks
+*.keystore
+
+# Build artifacts & local archives
+*.apk
+*.aab
+*.ap_
+*.zip
+*.tar.gz
+
+# Local development notes, test records & helper scripts
+docs/
+tools/
+backups/
+AGENTS.md
+__pycache__/

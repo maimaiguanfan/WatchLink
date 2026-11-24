@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WatchLink</string>
+    <string name="module_description">连接一加系统时钟与华为运动健康，在华为手表上原生同步手机闹钟响铃与双向停止、延后</string>
+</resources>

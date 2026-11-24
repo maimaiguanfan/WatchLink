@@ -1,0 +1,121 @@
+package io.github.watchlink.xposed;
+
+import android.content.Context;
+import android.database.Cursor;
+import android.net.Uri;
+import androidx.annotation.RequiresApi;
+import io.github.watchlink.alarm.probe.DeviceToken;
+import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Base64;
+import java.util.List;
+
+/** Worker-only reads of the native cooperative reminder's device capability and switch. */
+final class HealthCooperativeReadiness {
+    record Result(String kind, String matchingRawDevice) {
+        // This short-lived device identifier only scopes the physical receiver. Never log it.
+        @Override public String toString() { return kind; }
+    }
+    private final Method manager, connected, identify, expand;
+    private final Object mainDevices;
+
+    @RequiresApi(34)
+    HealthCooperativeReadiness(AlarmObserverInstaller installer, HealthSymbolResolver.Symbols symbols)
+            throws ReflectiveOperationException {
+        if (symbols == null || symbols.deviceCatalogClass() == null || symbols.deviceCatalogClass().isEmpty()) {
+            throw new NoSuchMethodException("Missing Health device catalog symbol");
+        }
+        Class<?> api = installer.target("com.huawei.health.devicemgr.api.DeviceMgrApi");
+        Class<?> proxy = installer.target("com.huawei.haf.bundle.AppBundlePluginProxy");
+        manager = HealthReminderCatalog.factory(proxy, api, candidate(installer, symbols.deviceCatalogClass()));
+        Class<?> device = installer.target("com.huawei.health.devicemgr.business.entity.DeviceInfo");
+        Class<?> mode = installer.target("com.huawei.health.devicemgr.api.constant.HwGetDevicesMode");
+        mainDevices = mode.getField("CONNECTED_MAIN_DEVICES").get(null);
+        connected = installer.method(api, "getDeviceList", List.class, false, mode,
+                installer.target("com.huawei.health.devicemgr.business.entity.HwGetDevicesParameter"), String.class);
+        identify = installer.method(device, "getDeviceIdentify", String.class, false);
+        expand = installer.method(device, "getExpandCapability", String.class, false);
+    }
+
+    @RequiresApi(34)
+    private static Class<?> candidate(AlarmObserverInstaller installer, String name) {
+        try { return installer.target(name); }
+        catch (ClassNotFoundException absent) { return null; }
+    }
+
+    Result read(Context context, String expectedDeviceToken) {
+        return read(context, expectedDeviceToken, false);
+    }
+
+    Result readSingle(Context context, String expectedDeviceToken) {
+        return read(context, expectedDeviceToken, true);
+    }
+
+    private List<?> connectedDevices(Object mode) throws ReflectiveOperationException {
+        return (List<?>) connected.invoke(manager.invoke(null), mode, null, "ExternalPhoneService");
+    }
+
+    private boolean onlyRouteMatches(String key) throws ReflectiveOperationException {
+        Object all = connected.getParameterTypes()[0].getField("CONNECTED_DEVICES").get(null);
+        List<?> routes = connectedDevices(all);
+        return routes != null && routes.size() == 1 && key != null && key.equals(identify.invoke(routes.get(0)));
+    }
+
+    String connectedToken() {
+        try {
+            List<?> primary = connectedDevices(mainDevices);
+            if (primary == null || primary.size() != 1) return null;
+            String key = (String) identify.invoke(primary.get(0));
+            return onlyRouteMatches(key) ? DeviceToken.of(key) : null;
+        } catch (Exception unavailable) {
+            return null;
+        }
+    }
+
+    private Result read(Context context, String expectedDeviceToken, boolean requireSingle) {
+        String matched = "";
+        try {
+            List<?> devices = connectedDevices(mainDevices);
+            if (devices == null || devices.isEmpty()) return new Result("READY_UNKNOWN", "");
+            if (requireSingle && devices.size() != 1) return new Result("READY_DEVICE_MISMATCH", "");
+            Object device = devices.get(0);
+            String key = (String) identify.invoke(device);
+            if (!DeviceToken.of(key).equals(expectedDeviceToken)) return new Result("READY_DEVICE_MISMATCH", "");
+            if (requireSingle && !onlyRouteMatches(key)) return new Result("READY_DEVICE_MISMATCH", "");
+            matched = key;
+            Boolean supports = capability200((String) expand.invoke(device));
+            if (supports == null) return new Result("READY_UNKNOWN", matched);
+            if (!supports) return new Result("READY_UNSUPPORTED", matched);
+
+            // Health initializes missing rows to true. Restrict the probe to its SELECT.
+            String encoded = Base64.getEncoder().encodeToString(
+                    MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8)));
+            Uri clockState = Uri.parse("content://com.huawei.health.HwNotificationContentProvider/ClockState");
+            try (Cursor cursor = context.getContentResolver().query(clockState, new String[]{"clockValue"},
+                    "deviceMac = ?", new String[]{encoded}, null)) {
+                if (cursor == null) return new Result("READY_UNKNOWN", matched);
+                if (!cursor.moveToFirst()) return new Result("READY_SUPPORTED_UNSET", matched);
+                String value = cursor.getString(cursor.getColumnIndexOrThrow("clockValue"));
+                if (cursor.moveToNext()) return new Result("READY_UNKNOWN", matched);
+                return new Result(switchState(value), matched);
+            }
+        } catch (Exception unavailable) {
+            return new Result("READY_UNKNOWN", matched);
+        }
+    }
+
+    static String switchState(String value) {
+        if ("true".equals(value)) return "READY_SUPPORTED_ON";
+        if ("false".equals(value)) return "READY_SUPPORTED_OFF";
+        return "READY_UNKNOWN";
+    }
+
+    static Boolean capability200(String expanded) {
+        if (expanded == null || expanded.isEmpty() || expanded.length() > 65_536) return null;
+        String hex = expanded.replace(" ", "");
+        if (hex.isEmpty() || (hex.length() & 1) != 0 || !hex.matches("[a-fA-F0-9]+")) return null;
+        // Both native adapters check byte[index/8] & (1 << index%8), in input order.
+        return hex.length() >= 52 && (Character.digit(hex.charAt(51), 16) & 1) != 0;
+    }
+}
