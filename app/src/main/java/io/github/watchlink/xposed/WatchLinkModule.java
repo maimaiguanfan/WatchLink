@@ -23,6 +23,7 @@ import java.util.function.Consumer;
 public final class WatchLinkModule extends XposedModule {
     private volatile String processName;
     private volatile TargetProfile activeProfile;
+    private volatile boolean activeDaemon;
     private volatile ClassLoader hostLoader;
     private volatile String[] hostSources;
     private volatile Context hostContext;
@@ -38,10 +39,12 @@ public final class WatchLinkModule extends XposedModule {
     @Override public void onPackageReady(PackageReadyParam param) {
         if (Build.VERSION.SDK_INT < 34 || processName == null || !param.isFirstPackage()) return;
         TargetProfile profile = TargetProfile.fromPackage(param.getPackageName());
-        if (profile == null || !profile.isReminderProcess(processName)) return;
+        if (profile == null || !profile.isAnyHostedProcess(processName)) return;
         if (!scheduled.compareAndSet(false, true)) return;
 
-        ProbeLog.info("MODULE_LOADED source=" + profile + " api=" + getApiVersion());
+        boolean daemonProcess = profile.isDaemonProcess(processName);
+        String logSource = daemonProcess ? "HEALTH_DAEMON" : profile.name();
+        ProbeLog.info("MODULE_LOADED source=" + logSource + " api=" + getApiVersion());
         ApplicationInfo owner = getModuleApplicationInfo();
         if (owner == null || owner.uid < 0 || !BuildConfig.APPLICATION_ID.equals(owner.packageName)) {
             ProbeLog.info("ALARM_INSTALL_OWNER_MISMATCH");
@@ -55,13 +58,14 @@ public final class WatchLinkModule extends XposedModule {
         if (splits != null) System.arraycopy(splits, 0, sources, 1, splits.length);
 
         activeProfile = profile;
+        activeDaemon = daemonProcess;
         hostLoader = loader;
         hostSources = sources;
         int ownerUid = owner.uid;
 
         Consumer<Application> start = app -> {
             if (app != null) hostContext = app.getApplicationContext();
-            launchInstall(profile, loader, sources, ownerUid, app, "WatchLink-hook-install");
+            launchInstall(profile, daemonProcess, loader, sources, ownerUid, app, "WatchLink-hook-install");
         };
         XposedInterface.HookHandle handle = HostApplicationReady.observe(
                 this, profile.packageName, param.getApplicationInfo().className, loader, start);
@@ -75,12 +79,14 @@ public final class WatchLinkModule extends XposedModule {
 
     @Override public boolean onHotReloading(HotReloadingParam param) {
         if (Build.VERSION.SDK_INT < 34) return false;
+        String sourceTag = activeDaemon ? " source=HEALTH_DAEMON"
+                : activeProfile != null ? " source=" + activeProfile : "";
         AlarmObserverInstaller installer = currentInstaller;
         if (installer != null && installer.isBusy()) {
-            ProbeLog.info("MODULE_HOT_RELOAD_DEFERRED" + (activeProfile != null ? " source=" + activeProfile : ""));
+            ProbeLog.info("MODULE_HOT_RELOAD_DEFERRED" + sourceTag);
             return false;
         }
-        ProbeLog.info("MODULE_HOT_RELOADING" + (activeProfile != null ? " source=" + activeProfile : ""));
+        ProbeLog.info("MODULE_HOT_RELOADING" + sourceTag);
         XposedInterface.HookHandle boot = bootstrapHandle;
         bootstrapHandle = null;
         if (boot != null) {
@@ -119,7 +125,8 @@ public final class WatchLinkModule extends XposedModule {
         String[] savedSources = saved[4] instanceof String[] arr ? arr : null;
 
         TargetProfile profile = TargetProfile.fromPackage(pkg);
-        if (profile == null || !profile.isReminderProcess(processName) || savedLoader == null) return;
+        if (profile == null || !profile.isAnyHostedProcess(processName) || savedLoader == null) return;
+        boolean daemonProcess = profile.isDaemonProcess(processName);
 
         ApplicationInfo owner = getModuleApplicationInfo();
         if (owner == null || owner.uid < 0 || !BuildConfig.APPLICATION_ID.equals(owner.packageName)) {
@@ -127,20 +134,24 @@ public final class WatchLinkModule extends XposedModule {
             return;
         }
         activeProfile = profile;
+        activeDaemon = daemonProcess;
         hostContext = savedContext;
         hostLoader = savedLoader;
         hostSources = savedSources;
         scheduled.set(true);
 
-        ProbeLog.info("MODULE_HOT_RELOADED source=" + profile + " api=" + getApiVersion());
-        launchInstall(profile, savedLoader, savedSources, owner.uid, savedContext, "WatchLink-hot-reload-install");
+        String logSource = daemonProcess ? "HEALTH_DAEMON" : profile.name();
+        ProbeLog.info("MODULE_HOT_RELOADED source=" + logSource + " api=" + getApiVersion());
+        launchInstall(profile, daemonProcess, savedLoader, savedSources, owner.uid, savedContext,
+                "WatchLink-hot-reload-install");
     }
 
     @RequiresApi(34)
-    private void launchInstall(TargetProfile profile, ClassLoader loader, String[] sources,
+    private void launchInstall(TargetProfile profile, boolean daemonProcess, ClassLoader loader, String[] sources,
                                int ownerUid, Context readyContext, String threadName) {
         SharedPreferences remote = openRemotePreferences();
-        AlarmObserverInstaller installer = new AlarmObserverInstaller(this, profile, loader, ownerUid, remote);
+        AlarmObserverInstaller installer = new AlarmObserverInstaller(
+                this, profile, daemonProcess, loader, ownerUid, remote);
         currentInstaller = installer;
         Thread worker = new Thread(() -> {
             try {

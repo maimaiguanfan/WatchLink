@@ -47,4 +47,13 @@ public enum TargetProfile {
     public boolean isReminderProcess(String processName) {
         return (this == HEALTH ? packageName + ":PhoneService" : packageName).equals(processName);
     }
+
+    /** Huawei Health hosts NotificationPushListener in :DaemonService for notification pictures and VoIP. */
+    public boolean isDaemonProcess(String processName) {
+        return this == HEALTH && (packageName + ":DaemonService").equals(processName);
+    }
+
+    public boolean isAnyHostedProcess(String processName) {
+        return isReminderProcess(processName) || isDaemonProcess(processName);
+    }
 }

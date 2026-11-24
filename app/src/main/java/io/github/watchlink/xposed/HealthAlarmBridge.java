@@ -52,6 +52,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     private volatile boolean installed;
     private volatile boolean serviceWitnessReady;
     private volatile boolean sdkObserverReady;
+    private volatile boolean voipAllowlistReady;
     private volatile String symbolSource = "DEGRADED";
 
     private volatile TargetProfile activeDailySource;
@@ -115,10 +116,15 @@ final class HealthAlarmBridge extends BroadcastReceiver {
 
         // Optional SDK hooks & device catalog: degrade cleanly across future Health updates.
         sdkObserverReady = symbols != null && symbols.completeSdk() && installOptionalSdkHooks(installer, symbols);
-        symbolSource = sdkObserverReady && symbols != null ? symbols.source() : "DEGRADED";
+        voipAllowlistReady = symbols != null && symbols.hasVoipAllowlist()
+                && installVoipAllowlistHook(installer, symbols.voipAllowlistMethod());
+        symbolSource = (sdkObserverReady || voipAllowlistReady) && symbols != null ? symbols.source() : "DEGRADED";
         ProbeLog.info("HEALTH_SYMBOLS_RESOLVED source=HEALTH resolver=" + symbolSource);
         ProbeLog.info((sdkObserverReady ? "HEALTH_SDK_OBSERVER_READY" : "HEALTH_SDK_OBSERVER_DEGRADED")
                 + " sdk_observer=" + sdkObserverReady);
+        if (voipAllowlistReady) {
+            ProbeLog.info("HEALTH_VOIP_ALLOWLIST_READY voip_allowlist=true");
+        }
 
         settings.onDisabled(() -> worker.execute(() -> cancelActiveDailyFor(TargetProfile.CLOCK)));
         settings.onCalendarDisabled(() -> worker.execute(() -> cancelActiveDailyFor(TargetProfile.CALENDAR)));
@@ -193,6 +199,26 @@ final class HealthAlarmBridge extends BroadcastReceiver {
             return true;
         } catch (Exception | LinkageError degraded) {
             readiness = null;
+            return false;
+        }
+    }
+
+    private boolean installVoipAllowlistHook(AlarmObserverInstaller installer, String methodName) {
+        try {
+            Class<?> receiver = installer.target("com.huawei.hwdevice.phoneprocess.receiver.IntegratedServicesReceiver");
+            Method allowlist = installer.method(receiver, methodName, boolean.class, true, String.class);
+            installer.guard("health.phone.voip.allowlist", allowlist, chain -> {
+                if (settings.isVoipCallEnabled()) {
+                    String pkg = (String) chain.getArg(0);
+                    if (VoipCallClassifier.isEligibleVoipPackage(pkg)) {
+                        ProbeLog.info("HEALTH_VOIP_ALLOWLIST_UNLOCKED");
+                        return Boolean.TRUE;
+                    }
+                }
+                return chain.proceed();
+            });
+            return true;
+        } catch (Exception | LinkageError degraded) {
             return false;
         }
     }
@@ -538,6 +564,8 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 settings.setLocalCalendarFallback(false);
                 cancelActiveDailyFor(TargetProfile.CALENDAR);
             }
+            case HealthHostControl.ENABLE_VOIP -> settings.setLocalVoipCallFallback(true);
+            case HealthHostControl.DISABLE_VOIP -> settings.setLocalVoipCallFallback(false);
             case HealthHostControl.TEST -> startManualTestLocked();
             case HealthHostControl.CANCEL_TEST -> cancelTestLocked(true);
             default -> {}
@@ -547,9 +575,11 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 true,
                 settings.isEnabled(),
                 settings.isCalendarEnabled(),
+                settings.isVoipCallEnabled(),
                 settings.remoteAvailable(),
                 serviceWitnessReady,
                 sdkObserverReady,
+                voipAllowlistReady,
                 symbolSource,
                 watch.state(),
                 lastDispatchMode,

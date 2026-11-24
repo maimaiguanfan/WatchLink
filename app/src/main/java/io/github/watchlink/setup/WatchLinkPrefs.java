@@ -5,6 +5,8 @@ public final class WatchLinkPrefs {
     public static final String GROUP = "watchlink_settings_v1";
     public static final String KEY_ENABLED = "daily_reminder_enabled";
     public static final String KEY_CALENDAR_ENABLED = "calendar_reminder_enabled";
+    public static final String KEY_NOTIF_PICTURE_ENABLED = "notif_picture_enabled";
+    public static final String KEY_VOIP_CALL_ENABLED = "voip_call_enabled";
     public static final String KEY_UPDATED_AT = "updated_at";
 
     private WatchLinkPrefs() {}

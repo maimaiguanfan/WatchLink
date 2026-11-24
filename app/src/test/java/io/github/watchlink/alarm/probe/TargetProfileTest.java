@@ -48,5 +48,11 @@ public class TargetProfileTest {
         assertFalse(health.isReminderProcess(clock.packageName + ":PhoneService"));
         assertFalse(health.isReminderProcess(health.packageName + ":PhoneServiceHelper"));
         assertFalse(clock.isReminderProcess(null));
+        assertTrue(health.isDaemonProcess(health.packageName + ":DaemonService"));
+        assertFalse(health.isDaemonProcess(health.packageName + ":PhoneService"));
+        assertFalse(clock.isDaemonProcess(clock.packageName + ":DaemonService"));
+        assertTrue(health.isAnyHostedProcess(health.packageName + ":DaemonService"));
+        assertTrue(health.isAnyHostedProcess(health.packageName + ":PhoneService"));
+        assertFalse(health.isAnyHostedProcess(health.packageName));
     }
 }

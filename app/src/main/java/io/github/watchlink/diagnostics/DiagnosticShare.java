@@ -40,32 +40,40 @@ public final class DiagnosticShare {
     private static final String QQ = "com.tencent.mobileqq";
     private static final String REQUEST = OWNER + ".diagnostics.READ_V1";
     private static final String REPLY = OWNER + ".diagnostics.REPORT_V1";
+    private static final String REQUEST_DAEMON = OWNER + ".diagnostics.READ_DAEMON_V1";
+    private static final String REPLY_DAEMON = OWNER + ".diagnostics.REPORT_DAEMON_V1";
     private static Runnable hostCleanup;
 
     public static synchronized AutoCloseable installHost(Context context, int ownerUid) {
         if (Build.VERSION.SDK_INT < 34) return () -> {};
-        return installHostApi34(context, ownerUid);
+        return installHostApi34(context, ownerUid, "", REQUEST, REPLY);
+    }
+
+    public static synchronized AutoCloseable installDaemonHost(Context context, int ownerUid) {
+        if (Build.VERSION.SDK_INT < 34) return () -> {};
+        return installHostApi34(context, ownerUid, "-daemon", REQUEST_DAEMON, REPLY_DAEMON);
     }
 
     @RequiresApi(34)
-    private static AutoCloseable installHostApi34(Context context, int ownerUid) {
+    private static AutoCloseable installHostApi34(Context context, int ownerUid, String journalSuffix,
+                                                  String requestAction, String replyAction) {
         if (hostCleanup != null) {
             hostCleanup.run();
             hostCleanup = null;
         }
         try {
             Context app = context.getApplicationContext();
-            DiagnosticJournal.install(app);
+            DiagnosticJournal.install(app, journalSuffix);
             BroadcastReceiver receiver = new BroadcastReceiver() {
                 @Override public void onReceive(Context ignored, Intent intent) {
-                    if (!REQUEST.equals(intent.getAction()) || !app.getPackageName().equals(intent.getPackage())
+                    if (!requestAction.equals(intent.getAction()) || !app.getPackageName().equals(intent.getPackage())
                             || !OWNER.equals(getSentFromPackage()) || getSentFromUid() != ownerUid) return;
                     String request = intent.getStringExtra("request");
                     if (request == null || request.length() != 36) return;
                     PendingResult pending = goAsync();
                     DiagnosticJournal.onWorker(() -> {
                         try {
-                            Intent reply = DailyAlarmWire.route(REPLY, OWNER).putExtra("request", request);
+                            Intent reply = DailyAlarmWire.route(replyAction, OWNER).putExtra("request", request);
                             try { reply.putExtra("events", DiagnosticJournal.snapshot()); }
                             catch (IOException | RuntimeException unavailable) { /* Report read failure. */ }
                             DailyAlarmWire.send(app, reply);
@@ -75,7 +83,7 @@ public final class DiagnosticShare {
                     });
                 }
             };
-            app.registerReceiver(receiver, new IntentFilter(REQUEST), ClockActionWire.PERMISSION, null, Context.RECEIVER_EXPORTED);
+            app.registerReceiver(receiver, new IntentFilter(requestAction), ClockActionWire.PERMISSION, null, Context.RECEIVER_EXPORTED);
             Runnable cleanup = () -> {
                 try { app.unregisterReceiver(receiver); } catch (RuntimeException ignored) {}
             };
@@ -95,10 +103,11 @@ public final class DiagnosticShare {
     public static Intent prepare(Context context) throws IOException {
         if (Looper.myLooper() == Looper.getMainLooper()) throw new IllegalStateException("Requires background IO");
         Context app = context.getApplicationContext();
-        Map<TargetProfile, String> results = Build.VERSION.SDK_INT >= 34 ? collect(app) : Collections.emptyMap();
+        Collected collected = Build.VERSION.SDK_INT >= 34 ? collect(app) : new Collected(Collections.emptyMap(), false, null);
+        Map<TargetProfile, String> results = collected.targets();
         ModuleScope.View scope = ModuleScope.inspect();
         HuaweiReminderService.HealthEndpoint health = HuaweiReminderService.inspectHealthEndpoint(app);
-        StringBuilder report = new StringBuilder("WatchLink 闹钟联动诊断\n导出时间（UTC） ")
+        StringBuilder report = new StringBuilder("WatchLink 联动诊断\n导出时间（UTC） ")
                 .append(Instant.now()).append("\nAndroid API ").append(Build.VERSION.SDK_INT)
                 .append("\n模块包名 ").append(OWNER)
                 .append("\n模块版本 ").append(BuildConfig.VERSION_NAME).append(" (").append(BuildConfig.VERSION_CODE).append(')')
@@ -108,8 +117,9 @@ public final class DiagnosticShare {
                 .append("\n系统时钟作用域 ").append(scopeSummary(scope, TargetProfile.CLOCK))
                 .append("\n系统日历作用域（可选） ").append(scopeSummary(scope, TargetProfile.CALENDAR))
                 .append("\n运动健康作用域 ").append(scopeSummary(scope, TargetProfile.HEALTH))
+                .append("\n运动健康通知服务（DaemonService） ").append(daemonSummary(scope))
                 .append("\n每个来源最多包含最近 ").append(DiagnosticEvents.LIMIT)
-                .append(" 条闹钟联动事件，时间统一为 UTC。\n");
+                .append(" 条联动事件，时间统一为 UTC。\n");
         String local;
         try { local = DiagnosticJournal.snapshot(); }
         catch (IOException | RuntimeException unavailable) { local = null; }
@@ -125,7 +135,21 @@ public final class DiagnosticShare {
             };
             section(report, label, version(app, target.packageName), results.get(target), unavailable);
         }
+        String daemonUnavailable = Build.VERSION.SDK_INT < 34 ? "此 Android 版本不支持验证宿主来源"
+                : collected.daemonReplied() ? "宿主已回复，记录读取失败"
+                : "未收到 DaemonService 回复（需开启运动健康通知访问权限并重启/热重载运动健康）";
+        section(report, "华为运动健康（DaemonService）", version(app, TargetProfile.HEALTH.packageName),
+                collected.daemonEvents(), daemonUnavailable);
         return chooser(app, write(app.getCacheDir(), report.toString()));
+    }
+
+    private static String daemonSummary(ModuleScope.View scope) {
+        if (!scope.supportsApi102() || scope.healthDaemonRuntime() == null
+                || "UNSUPPORTED".equals(scope.healthDaemonRuntime().state())) {
+            return "以宿主实际应答为准";
+        }
+        ModuleScope.TargetRuntime rt = scope.healthDaemonRuntime();
+        return "API 102: " + rt.state() + (rt.loadedVersionCode() > 0 ? " code=" + rt.loadedVersionCode() : "");
     }
 
     private static String frameworkSummary(ModuleScope.View scope) {
@@ -160,23 +184,36 @@ public final class DiagnosticShare {
         return grant + "，" + witness;
     }
 
+    private record Collected(Map<TargetProfile, String> targets, boolean daemonReplied, String daemonEvents) {}
+
     @RequiresApi(34)
-    private static Map<TargetProfile, String> collect(Context app) {
+    private static Collected collect(Context app) {
         String request = UUID.randomUUID().toString();
         Map<TargetProfile, String> replies = new EnumMap<>(TargetProfile.class);
-        CountDownLatch latch = new CountDownLatch(TargetProfile.values().length);
+        boolean[] daemonState = new boolean[1];
+        String[] daemonText = new String[1];
+        CountDownLatch latch = new CountDownLatch(TargetProfile.values().length + 1);
         BroadcastReceiver receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context ignored, Intent intent) {
                 String pkg = getSentFromPackage();
                 TargetProfile target = TargetProfile.fromPackage(pkg);
-                if (!REPLY.equals(intent.getAction()) || !OWNER.equals(intent.getPackage()) || target == null
+                String action = intent.getAction();
+                boolean mainReply = REPLY.equals(action);
+                boolean daemonReply = REPLY_DAEMON.equals(action) && target == TargetProfile.HEALTH;
+                if ((!mainReply && !daemonReply) || !OWNER.equals(intent.getPackage()) || target == null
                         || !SenderVerifier.verifyReminderSender(app, target, getSentFromUid(), pkg)) return;
                 try {
                     if (!request.equals(intent.getStringExtra("request"))) return;
                     String events = intent.getStringExtra("events");
                     if (events != null && events.length() > DiagnosticEvents.MAX_TEXT) events = null;
                     synchronized (replies) {
-                        if (!replies.containsKey(target)) {
+                        if (daemonReply) {
+                            if (!daemonState[0]) {
+                                daemonState[0] = true;
+                                daemonText[0] = events;
+                                latch.countDown();
+                            }
+                        } else if (!replies.containsKey(target)) {
                             replies.put(target, events);
                             latch.countDown();
                         }
@@ -186,7 +223,9 @@ public final class DiagnosticShare {
         };
         boolean registered = false;
         try {
-            app.registerReceiver(receiver, new IntentFilter(REPLY), Context.RECEIVER_EXPORTED);
+            IntentFilter filter = new IntentFilter(REPLY);
+            filter.addAction(REPLY_DAEMON);
+            app.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
             registered = true;
             for (TargetProfile target : TargetProfile.values()) {
                 try {
@@ -194,6 +233,10 @@ public final class DiagnosticShare {
                             .putExtra("request", request));
                 } catch (RuntimeException unavailable) { /* The other source can still be read. */ }
             }
+            try {
+                DailyAlarmWire.send(app, DailyAlarmWire.route(REQUEST_DAEMON, TargetProfile.HEALTH.packageName)
+                        .putExtra("request", request));
+            } catch (RuntimeException unavailable) { /* Main hosts can still reply. */ }
             latch.await(3, TimeUnit.SECONDS);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -202,7 +245,9 @@ public final class DiagnosticShare {
         } finally {
             if (registered) app.unregisterReceiver(receiver);
         }
-        synchronized (replies) { return new EnumMap<>(replies); }
+        synchronized (replies) {
+            return new Collected(new EnumMap<>(replies), daemonState[0], daemonText[0]);
+        }
     }
 
     private static String version(Context app, String pkg) {

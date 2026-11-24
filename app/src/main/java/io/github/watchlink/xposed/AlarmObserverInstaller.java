@@ -22,12 +22,13 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-/** Installs live cooperative alarm/calendar hooks atomically inside Clock, Calendar, or Health :PhoneService. */
+/** Installs live cooperative hooks atomically inside Clock, Calendar, or Huawei Health (:PhoneService / :DaemonService). */
 @RequiresApi(34)
 final class AlarmObserverInstaller {
     private final XposedInterface module;
     private final int ownerUid;
     private final TargetProfile profile;
+    private final boolean daemonProcess;
     private final ClassLoader loader;
     private final SharedPreferences remotePrefs;
     private final List<XposedInterface.HookHandle> handles = new ArrayList<>();
@@ -41,13 +42,15 @@ final class AlarmObserverInstaller {
     private ClockNovemberLive clockLive;
     private CalendarLiveBridge calendarLive;
     private HealthAlarmBridge healthBridge;
+    private HealthDaemonBridge healthDaemonBridge;
     private HostSettings hostSettings;
 
-    AlarmObserverInstaller(XposedInterface module, TargetProfile profile, ClassLoader loader,
-                           int ownerUid, SharedPreferences remotePrefs) {
+    AlarmObserverInstaller(XposedInterface module, TargetProfile profile, boolean daemonProcess,
+                           ClassLoader loader, int ownerUid, SharedPreferences remotePrefs) {
         this.module = module;
         this.ownerUid = ownerUid;
         this.profile = profile;
+        this.daemonProcess = daemonProcess;
         this.loader = loader;
         this.remotePrefs = remotePrefs;
     }
@@ -80,8 +83,11 @@ final class AlarmObserverInstaller {
             if (waitForUnlock(hostContext, sources, onContextReady)) return;
             if (closed.get()) return;
 
-            diagnosticHandle = DiagnosticShare.installHost(hostContext, ownerUid);
-            String localSuffix = switch (profile) {
+            String logSource = daemonProcess ? "HEALTH_DAEMON" : profile.name();
+            diagnosticHandle = daemonProcess
+                    ? DiagnosticShare.installDaemonHost(hostContext, ownerUid)
+                    : DiagnosticShare.installHost(hostContext, ownerUid);
+            String localSuffix = daemonProcess ? ".health_daemon_settings_v1" : switch (profile) {
                 case CLOCK -> ".clock_settings_v1";
                 case CALENDAR -> ".calendar_settings_v1";
                 case HEALTH -> ".health_settings_v1";
@@ -90,8 +96,23 @@ final class AlarmObserverInstaller {
                     BuildConfig.APPLICATION_ID + localSuffix, Context.MODE_PRIVATE);
             HostSettings settings = new HostSettings(remotePrefs, local);
             hostSettings = settings;
-            ProbeLog.info(settings.remoteAvailable() ? "REMOTE_PREFS_READY source=" + profile
-                    : "REMOTE_PREFS_UNAVAILABLE source=" + profile);
+            ProbeLog.info(settings.remoteAvailable() ? "REMOTE_PREFS_READY source=" + logSource
+                    : "REMOTE_PREFS_UNAVAILABLE source=" + logSource);
+
+            if (daemonProcess) {
+                HealthDaemonBridge daemon = new HealthDaemonBridge(hostContext, ownerUid, settings, sources);
+                healthDaemonBridge = daemon;
+                daemon.install(this);
+                if (closed.get()) {
+                    close();
+                    return;
+                }
+                active.set(true);
+                ProbeLog.info("HEALTH_DAEMON_READY pic_hook=" + daemon.pictureHookReady()
+                        + " voip_hook=" + daemon.voipHookReady()
+                        + " remote_prefs=" + settings.remoteAvailable());
+                return;
+            }
 
             boolean localControl = false;
             if (profile == TargetProfile.CLOCK) {
@@ -162,7 +183,8 @@ final class AlarmObserverInstaller {
             }
         } catch (Exception | LinkageError error) {
             close();
-            ProbeLog.failure("REMINDER_ADAPTER_UNAVAILABLE source=" + profile, error);
+            ProbeLog.failure(daemonProcess ? "HEALTH_DAEMON_UNAVAILABLE source=HEALTH_DAEMON"
+                    : "REMINDER_ADAPTER_UNAVAILABLE source=" + profile, error);
         }
     }
 
@@ -200,6 +222,10 @@ final class AlarmObserverInstaller {
         if (healthBridge != null) {
             try { healthBridge.close(); } catch (RuntimeException ignored) {}
             healthBridge = null;
+        }
+        if (healthDaemonBridge != null) {
+            try { healthDaemonBridge.close(); } catch (RuntimeException ignored) {}
+            healthDaemonBridge = null;
         }
         if (hostSettings != null) {
             try { hostSettings.close(); } catch (RuntimeException ignored) {}

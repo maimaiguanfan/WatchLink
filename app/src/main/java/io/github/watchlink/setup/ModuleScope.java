@@ -54,10 +54,13 @@ public final class ModuleScope {
                        int frameworkApiVersion,
                        boolean clockGranted, boolean healthGranted, boolean calendarGranted,
                        boolean clockActive, boolean healthActive, boolean calendarActive,
-                       TargetRuntime clockRuntime, TargetRuntime healthRuntime, TargetRuntime calendarRuntime,
+                       TargetRuntime clockRuntime, TargetRuntime healthRuntime,
+                       TargetRuntime healthDaemonRuntime, TargetRuntime calendarRuntime,
                        boolean checking,
                        boolean requestPending, String requestResult,
-                       boolean remotePrefsSupported, Boolean remoteEnabled, Boolean remoteCalendarEnabled) {
+                       boolean remotePrefsSupported,
+                       Boolean remoteEnabled, Boolean remoteCalendarEnabled,
+                       Boolean remoteNotifPictureEnabled, Boolean remoteVoipCallEnabled) {
         public boolean configured() { return frameworkConnected && clockGranted && healthGranted; }
 
         public boolean active() {
@@ -74,12 +77,14 @@ public final class ModuleScope {
 
         public boolean hasStaleTarget() {
             return supportsApi102() && (clockRuntime.isStale() || healthRuntime.isStale()
+                    || healthDaemonRuntime.isStale()
                     || (calendarGranted && calendarRuntime.isStale()));
         }
 
         public boolean canHotReloadAny() {
             return supportsApi102()
-                    && (clockRuntime.isRunning() || healthRuntime.isRunning() || calendarRuntime.isRunning());
+                    && (clockRuntime.isRunning() || healthRuntime.isRunning()
+                    || healthDaemonRuntime.isRunning() || calendarRuntime.isRunning());
         }
     }
 
@@ -104,8 +109,9 @@ public final class ModuleScope {
             false, "", "", 0,
             false, false, false,
             false, false, false,
-            TargetRuntime.UNSUPPORTED, TargetRuntime.UNSUPPORTED, TargetRuntime.UNSUPPORTED,
-            false, false, "IDLE", false, null, null);
+            TargetRuntime.UNSUPPORTED, TargetRuntime.UNSUPPORTED,
+            TargetRuntime.UNSUPPORTED, TargetRuntime.UNSUPPORTED,
+            false, false, "IDLE", false, null, null, null, null);
     private static boolean listening;
     private static XposedService framework;
     private static String frameworkName = "";
@@ -115,10 +121,14 @@ public final class ModuleScope {
     private static boolean remotePrefsSupported;
     private static Boolean remoteEnabled;
     private static Boolean remoteCalendarEnabled;
+    private static Boolean remoteNotifPictureEnabled;
+    private static Boolean remoteVoipCallEnabled;
     private static TargetRuntime clockRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime healthRuntime = TargetRuntime.UNSUPPORTED;
+    private static TargetRuntime healthDaemonRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime calendarRuntime = TargetRuntime.UNSUPPORTED;
     private static final Map<TargetProfile, HookedTarget> runningTargets = new HashMap<>();
+    private static HookedTarget runningHealthDaemon;
     private static final Set<String> awaiting = new HashSet<>();
     private static List<String> awaitingRequested = List.of();
     private static long requestId;
@@ -178,6 +188,16 @@ public final class ModuleScope {
         writeRemoteBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, enabled, callback);
     }
 
+    /** Persists the Notification Picture toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteNotifPictureEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_NOTIF_PICTURE_ENABLED, enabled, callback);
+    }
+
+    /** Persists the VoIP Call & Watch Reject toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteVoipCallEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_VOIP_CALL_ENABLED, enabled, callback);
+    }
+
     private static void writeRemoteBoolean(String key, boolean enabled, Consumer<Boolean> callback) {
         worker.execute(() -> {
             listen();
@@ -194,6 +214,8 @@ public final class ModuleScope {
                         remotePrefsSupported = true;
                         if (WatchLinkPrefs.KEY_ENABLED.equals(key)) remoteEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_CALENDAR_ENABLED.equals(key)) remoteCalendarEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_NOTIF_PICTURE_ENABLED.equals(key)) remoteNotifPictureEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_VOIP_CALL_ENABLED.equals(key)) remoteVoipCallEnabled = enabled;
                         ProbeLog.info("REMOTE_PREFS_SAVED");
                         publish();
                     }
@@ -233,6 +255,11 @@ public final class ModuleScope {
                 HookedTarget.State state = target.getState();
                 boolean stale = state == HookedTarget.State.STALE || state == HookedTarget.State.FAILED;
                 if (!onlyStale || stale) candidates.add(target);
+            }
+            if (runningHealthDaemon != null) {
+                HookedTarget.State state = runningHealthDaemon.getState();
+                boolean stale = state == HookedTarget.State.STALE || state == HookedTarget.State.FAILED;
+                if (!onlyStale || stale) candidates.add(runningHealthDaemon);
             }
             if (candidates.isEmpty()) {
                 postResult(callback, "NO_TARGETS");
@@ -384,10 +411,14 @@ public final class ModuleScope {
         remotePrefsSupported = false;
         remoteEnabled = null;
         remoteCalendarEnabled = null;
+        remoteNotifPictureEnabled = null;
+        remoteVoipCallEnabled = null;
         clockRuntime = TargetRuntime.UNSUPPORTED;
         healthRuntime = TargetRuntime.UNSUPPORTED;
+        healthDaemonRuntime = TargetRuntime.UNSUPPORTED;
         calendarRuntime = TargetRuntime.UNSUPPORTED;
         runningTargets.clear();
+        runningHealthDaemon = null;
         if (!awaiting.isEmpty()) result = "UNAVAILABLE";
         awaiting.clear();
         awaitingRequested = List.of();
@@ -412,11 +443,15 @@ public final class ModuleScope {
         remotePrefsSupported = false;
         remoteEnabled = null;
         remoteCalendarEnabled = null;
+        remoteNotifPictureEnabled = null;
+        remoteVoipCallEnabled = null;
         runningTargets.clear();
+        runningHealthDaemon = null;
         XposedService service = framework;
         if (service == null) {
             clockRuntime = TargetRuntime.UNSUPPORTED;
             healthRuntime = TargetRuntime.UNSUPPORTED;
+            healthDaemonRuntime = TargetRuntime.UNSUPPORTED;
             calendarRuntime = TargetRuntime.UNSUPPORTED;
             return;
         }
@@ -440,6 +475,10 @@ public final class ModuleScope {
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_ENABLED, false) : null;
                 remoteCalendarEnabled = prefs.contains(WatchLinkPrefs.KEY_CALENDAR_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, false) : null;
+                remoteNotifPictureEnabled = prefs.contains(WatchLinkPrefs.KEY_NOTIF_PICTURE_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_NOTIF_PICTURE_ENABLED, false) : null;
+                remoteVoipCallEnabled = prefs.contains(WatchLinkPrefs.KEY_VOIP_CALL_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_VOIP_CALL_ENABLED, false) : null;
             } catch (RuntimeException error) {
                 ProbeLog.failure("REMOTE_PREFS_READ_FAILED", error);
             }
@@ -449,6 +488,7 @@ public final class ModuleScope {
                 List<HookedTarget> targets = service.getRunningTargets();
                 clockRuntime = TargetRuntime.ABSENT;
                 healthRuntime = TargetRuntime.ABSENT;
+                healthDaemonRuntime = TargetRuntime.ABSENT;
                 calendarRuntime = TargetRuntime.ABSENT;
                 if (targets != null) {
                     for (HookedTarget target : targets) {
@@ -461,6 +501,9 @@ public final class ModuleScope {
                         } else if (TargetProfile.HEALTH.isReminderProcess(proc)) {
                             runningTargets.put(TargetProfile.HEALTH, target);
                             healthRuntime = classifyState(state, target.getLoadedVersionCode());
+                        } else if (TargetProfile.HEALTH.isDaemonProcess(proc)) {
+                            runningHealthDaemon = target;
+                            healthDaemonRuntime = classifyState(state, target.getLoadedVersionCode());
                         } else if (TargetProfile.CALENDAR.isReminderProcess(proc)) {
                             runningTargets.put(TargetProfile.CALENDAR, target);
                             calendarRuntime = classifyState(state, target.getLoadedVersionCode());
@@ -470,11 +513,13 @@ public final class ModuleScope {
             } catch (RuntimeException error) {
                 clockRuntime = TargetRuntime.UNSUPPORTED;
                 healthRuntime = TargetRuntime.UNSUPPORTED;
+                healthDaemonRuntime = TargetRuntime.UNSUPPORTED;
                 calendarRuntime = TargetRuntime.UNSUPPORTED;
             }
         } else {
             clockRuntime = TargetRuntime.UNSUPPORTED;
             healthRuntime = TargetRuntime.UNSUPPORTED;
+            healthDaemonRuntime = TargetRuntime.UNSUPPORTED;
             calendarRuntime = TargetRuntime.UNSUPPORTED;
         }
     }
@@ -529,10 +574,11 @@ public final class ModuleScope {
                 grants != null && grants.contains(TargetProfile.HEALTH.packageName),
                 grants != null && grants.contains(TargetProfile.CALENDAR.packageName),
                 clockActive, healthActive, calendarActive,
-                clockRuntime, healthRuntime, calendarRuntime,
+                clockRuntime, healthRuntime, healthDaemonRuntime, calendarRuntime,
                 probe != null,
                 !awaiting.isEmpty(), result,
-                remotePrefsSupported, remoteEnabled, remoteCalendarEnabled);
+                remotePrefsSupported, remoteEnabled, remoteCalendarEnabled,
+                remoteNotifPictureEnabled, remoteVoipCallEnabled);
     }
 
     private ModuleScope() {}

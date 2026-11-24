@@ -17,16 +17,16 @@ final class DiagnosticEvents {
     private static final Set<String> EVENTS = words(
             "OWNER_STARTED MODULE_LOADED MODULE_HOT_RELOADING MODULE_HOT_RELOADED MODULE_HOT_RELOAD_DEFERRED "
             + "HOT_RELOAD_REQUESTED HOT_RELOAD_RESULT "
-            + "CLOCK_SYMBOLS_RESOLVED CALENDAR_SYMBOLS_RESOLVED HEALTH_SYMBOLS_RESOLVED "
+            + "CLOCK_SYMBOLS_RESOLVED CALENDAR_SYMBOLS_RESOLVED HEALTH_SYMBOLS_RESOLVED HEALTH_DAEMON_SYMBOLS_RESOLVED "
             + "ALARM_INSTALL_OWNER_MISMATCH ALARM_INSTALL_WORKER_FAILED "
             + "REMINDER_APPLICATION_CALLBACK_UNAVAILABLE REMINDER_APPLICATION_CONTEXT_FALLBACK REMINDER_APPLICATION_START_FAILED "
-            + "REMINDER_ADAPTER_READY REMINDER_ADAPTER_UNAVAILABLE "
+            + "REMINDER_ADAPTER_READY REMINDER_ADAPTER_UNAVAILABLE HEALTH_DAEMON_READY HEALTH_DAEMON_UNAVAILABLE "
             + "REMOTE_PREFS_READY REMOTE_PREFS_UNAVAILABLE REMOTE_PREFS_SAVED REMOTE_PREFS_READ_FAILED REMOTE_PREFS_WRITE_FAILED "
             + "SCOPE_REQUEST_FAILED SCOPE_READ_FAILED SCOPE_HOST_READ_FAILED REMINDER_SCOPE_WITNESS_UNAVAILABLE "
             + "REMINDER_CLOCK_ACTION_RECEIVER_UNAVAILABLE REMINDER_CLOCK_ACTIONS_UNAVAILABLE "
             + "REMINDER_CALENDAR_ACTIONS_UNAVAILABLE "
             + "REMINDER_CLOCK_ACTION_SHAPE_UNAVAILABLE CLOCK_ACTION_UNREGISTER_FAILED "
-            + "CLOCK_HOST_CONTROL_FAILED CALENDAR_HOST_CONTROL_FAILED HEALTH_HOST_CONTROL_FAILED "
+            + "CLOCK_HOST_CONTROL_FAILED CALENDAR_HOST_CONTROL_FAILED HEALTH_HOST_CONTROL_FAILED HEALTH_DAEMON_CONTROL_FAILED "
             + "DAILY_CLOCK_TITLE_UNAVAILABLE DAILY_CLOCK_OPEN_SENT DAILY_CLOCK_OPEN_FAILED "
             + "DAILY_CLOCK_END_UNCONFIRMED DAILY_CLOCK_EVENT_FAILED DAILY_CLOCK_QUEUE_FULL "
             + "DAILY_CLOCK_RING_CHANGED DAILY_CLOCK_HEALTH_OUTBOUND DAILY_CLOCK_HEALTH_UNANSWERED "
@@ -36,6 +36,9 @@ final class DiagnosticEvents {
             + "DAILY_CALENDAR_HEALTH_OUTBOUND DAILY_CALENDAR_HEALTH_UNANSWERED DAILY_CALENDAR_STATUS "
             + "CALENDAR_LIVE_ACTION CALENDAR_ACTION_TERMINAL "
             + "HEALTH_SDK_OBSERVER_READY HEALTH_SDK_OBSERVER_DEGRADED HEALTH_SERVICE_WITNESS_UNAVAILABLE "
+            + "HEALTH_VOIP_ALLOWLIST_READY HEALTH_VOIP_ALLOWLIST_UNLOCKED "
+            + "HEALTH_NOTIF_PIC_ENCODED HEALTH_NOTIF_PIC_SKIPPED HEALTH_NOTIF_PIC_FAILED "
+            + "HEALTH_VOIP_CALL_DETECTED HEALTH_VOIP_ONGOING_SUPPRESSED HEALTH_VOIP_REJECT_SENT HEALTH_VOIP_REJECT_FAILED "
             + "HEALTH_DISPATCH_START_SERVICE HEALTH_DISPATCH_BG_RESTRICTED HEALTH_DISPATCH_DENIED "
             + "HEALTH_DISPATCH_FALLBACK_DIRECT HEALTH_DISPATCH_FAILED "
             + "HEALTH_DEVICE_ACTION_INTENT HEALTH_SDK_ACTION HEALTH_ACTION_DUAL_CONFIRMED "
@@ -50,8 +53,11 @@ final class DiagnosticEvents {
             + "ALARM_BEFORE_FAILED ALARM_AFTER_FAILED ALARM_CAPTURE_FAILED ALARM_HOOK_ROLLBACK_FAILED");
 
     private static final Set<String> SAFE_FIELDS = words(
-            "source=CLOCK source=CALENDAR source=HEALTH mode=START_SERVICE mode=DIRECT_SDK "
+            "source=CLOCK source=CALENDAR source=HEALTH source=HEALTH_DAEMON mode=START_SERVICE mode=DIRECT_SDK "
             + "ui_mode=LOCK_SCREEN ui_mode=TOP_WINDOW ui_mode=FLUID_CARD ui_mode=LISTENER "
+            + "pic_source=MESSAGING_URI pic_source=BIG_PICTURE pic_source=BIG_PICTURE_ICON "
+            + "voip_source=CALL_STYLE voip_source=CATEGORY_CALL "
+            + "reason=UNSUPPORTED reason=TOO_SMALL reason=DECODE_FAILED reason=ALREADY_SET reason=MISSING_INTENT reason=EXPIRED "
             + "api=101 api=102 "
             + "resolver=CACHE resolver=FAST_PATH resolver=DEX_SCAN resolver=DEGRADED resolver=UNAVAILABLE "
             + "operation=DISMISS operation=SNOOZE "
@@ -68,9 +74,11 @@ final class DiagnosticEvents {
             + "local_clock_control=true local_clock_control=false "
             + "local_calendar_control=true local_calendar_control=false "
             + "remote_prefs=true remote_prefs=false sdk_observer=true sdk_observer=false "
+            + "voip_allowlist=true voip_allowlist=false pic_hook=true pic_hook=false voip_hook=true voip_hook=false "
             + "type=SecurityException type=IllegalStateException type=BackgroundServiceStartNotAllowedException "
             + "type=NoSuchMethodException type=ClassNotFoundException type=UnsupportedOperationException "
-            + "type=IOException type=IllegalArgumentException type=RejectedExecutionException");
+            + "type=IOException type=IllegalArgumentException type=RejectedExecutionException "
+            + "type=CanceledException type=OutOfMemoryError");
 
     static String event(String raw) {
         if (raw == null || raw.length() > 512 || raw.indexOf('\n') >= 0 || raw.indexOf('\r') >= 0) return null;

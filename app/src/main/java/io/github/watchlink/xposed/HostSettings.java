@@ -16,6 +16,7 @@ final class HostSettings {
     private final SharedPreferences.OnSharedPreferenceChangeListener remoteListener;
     private volatile Runnable disabledCallback;
     private volatile Runnable calendarDisabledCallback;
+    private volatile Runnable voipDisabledCallback;
 
     HostSettings(SharedPreferences remote, SharedPreferences local) {
         this.remote = remote;
@@ -28,6 +29,10 @@ final class HostSettings {
                 } else if (WatchLinkPrefs.KEY_CALENDAR_ENABLED.equals(key)
                         && !prefs.getBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, false)) {
                     Runnable callback = calendarDisabledCallback;
+                    if (callback != null) callback.run();
+                } else if (WatchLinkPrefs.KEY_VOIP_CALL_ENABLED.equals(key)
+                        && !prefs.getBoolean(WatchLinkPrefs.KEY_VOIP_CALL_ENABLED, false)) {
+                    Runnable callback = voipDisabledCallback;
                     if (callback != null) callback.run();
                 }
             };
@@ -49,6 +54,14 @@ final class HostSettings {
 
     boolean isCalendarEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED);
+    }
+
+    boolean isNotifPictureEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_NOTIF_PICTURE_ENABLED);
+    }
+
+    boolean isVoipCallEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_VOIP_CALL_ENABLED);
     }
 
     boolean isEnabledFor(TargetProfile source) {
@@ -76,6 +89,14 @@ final class HostSettings {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, enabled).commit();
     }
 
+    boolean setLocalNotifPictureFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_NOTIF_PICTURE_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalVoipCallFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_VOIP_CALL_ENABLED, enabled).commit();
+    }
+
     void onDisabled(Runnable callback) {
         disabledCallback = callback;
     }
@@ -84,9 +105,14 @@ final class HostSettings {
         calendarDisabledCallback = callback;
     }
 
+    void onVoipDisabled(Runnable callback) {
+        voipDisabledCallback = callback;
+    }
+
     void close() {
         disabledCallback = null;
         calendarDisabledCallback = null;
+        voipDisabledCallback = null;
         if (remote != null && remoteListener != null) {
             try { remote.unregisterOnSharedPreferenceChangeListener(remoteListener); }
             catch (RuntimeException ignored) { /* Closing. */ }

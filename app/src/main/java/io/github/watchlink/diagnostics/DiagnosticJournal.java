@@ -25,13 +25,19 @@ public final class DiagnosticJournal {
     private final ArrayDeque<String> pending = new ArrayDeque<>();
     private boolean scheduled;
 
-    private DiagnosticJournal(Context app) {
-        file = new AtomicFile(new File(app.getNoBackupFilesDir(), BuildConfig.APPLICATION_ID + "-diagnostics-v1.txt"));
+    private DiagnosticJournal(Context app, String suffix) {
+        String tag = suffix == null ? "" : suffix;
+        file = new AtomicFile(new File(app.getNoBackupFilesDir(),
+                BuildConfig.APPLICATION_ID + tag + "-diagnostics-v1.txt"));
     }
 
     public static synchronized void install(Context app) {
+        install(app, "");
+    }
+
+    public static synchronized void install(Context app, String suffix) {
         if (current != null) return;
-        try { current = new DiagnosticJournal(app); }
+        try { current = new DiagnosticJournal(app, suffix); }
         catch (RuntimeException unavailable) { Log.w("WatchLink", "DIAGNOSTIC_STORAGE_UNAVAILABLE"); }
     }
 

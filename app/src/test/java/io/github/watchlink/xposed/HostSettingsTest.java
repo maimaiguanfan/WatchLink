@@ -111,4 +111,24 @@ public class HostSettingsTest {
         assertEquals(0, clockDisabled.get());
         assertEquals(1, calDisabled.get());
     }
+
+    @Test public void notificationPictureAndVoipTogglesRemainIndependent() {
+        MemoryPrefs remote = new MemoryPrefs();
+        MemoryPrefs local = new MemoryPrefs();
+        HostSettings settings = new HostSettings(remote, local);
+        AtomicInteger voipDisabled = new AtomicInteger();
+        settings.onVoipDisabled(voipDisabled::incrementAndGet);
+
+        assertFalse(settings.isNotifPictureEnabled());
+        assertFalse(settings.isVoipCallEnabled());
+        assertTrue(settings.setLocalNotifPictureFallback(true));
+        assertTrue(settings.setLocalVoipCallFallback(true));
+        assertTrue(settings.isNotifPictureEnabled());
+        assertTrue(settings.isVoipCallEnabled());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_VOIP_CALL_ENABLED, false).commit();
+        assertTrue(settings.isNotifPictureEnabled());
+        assertFalse(settings.isVoipCallEnabled());
+        assertEquals(1, voipDisabled.get());
+    }
 }

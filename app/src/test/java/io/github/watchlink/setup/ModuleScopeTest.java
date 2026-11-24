@@ -12,8 +12,9 @@ public class ModuleScopeTest {
     private static ModuleScope.View state(boolean framework, boolean clockGrant, boolean healthGrant,
                                           boolean clockHook, boolean healthHook) {
         return state(framework, 102, clockGrant, healthGrant, false, clockHook, healthHook, false,
-                new ModuleScope.TargetRuntime("UP_TO_DATE", 92),
-                new ModuleScope.TargetRuntime("UP_TO_DATE", 92),
+                new ModuleScope.TargetRuntime("UP_TO_DATE", 93),
+                new ModuleScope.TargetRuntime("UP_TO_DATE", 93),
+                new ModuleScope.TargetRuntime("UP_TO_DATE", 93),
                 ModuleScope.TargetRuntime.ABSENT);
     }
 
@@ -22,11 +23,22 @@ public class ModuleScopeTest {
                                           boolean calendarHook,
                                           ModuleScope.TargetRuntime clockRt, ModuleScope.TargetRuntime healthRt,
                                           ModuleScope.TargetRuntime calendarRt) {
+        return state(framework, api, clockGrant, healthGrant, calendarGrant, clockHook, healthHook, calendarHook,
+                clockRt, healthRt,
+                api >= 102 ? ModuleScope.TargetRuntime.ABSENT : ModuleScope.TargetRuntime.UNSUPPORTED,
+                calendarRt);
+    }
+
+    private static ModuleScope.View state(boolean framework, int api, boolean clockGrant, boolean healthGrant,
+                                          boolean calendarGrant, boolean clockHook, boolean healthHook,
+                                          boolean calendarHook,
+                                          ModuleScope.TargetRuntime clockRt, ModuleScope.TargetRuntime healthRt,
+                                          ModuleScope.TargetRuntime daemonRt, ModuleScope.TargetRuntime calendarRt) {
         return new ModuleScope.View(framework, "LSPosed", "2.2.1", api,
                 clockGrant, healthGrant, calendarGrant,
                 clockHook, healthHook, calendarHook,
-                clockRt, healthRt, calendarRt,
-                false, false, "IDLE", true, true, false);
+                clockRt, healthRt, daemonRt, calendarRt,
+                false, false, "IDLE", true, true, false, false, false);
     }
 
     @Test public void grantedScopesAloneDoNotConfirmThatReminderCodeIsRunning() {
@@ -80,6 +92,14 @@ public class ModuleScopeTest {
         assertTrue(stale.supportsApi102());
         assertTrue(stale.hasStaleTarget());
         assertTrue(stale.canHotReloadAny());
+
+        var staleDaemon = state(true, 102, true, true, false, true, true, false,
+                new ModuleScope.TargetRuntime("UP_TO_DATE", 93),
+                new ModuleScope.TargetRuntime("UP_TO_DATE", 93),
+                new ModuleScope.TargetRuntime("STALE", 92),
+                ModuleScope.TargetRuntime.ABSENT);
+        assertTrue(staleDaemon.hasStaleTarget());
+        assertTrue(staleDaemon.canHotReloadAny());
 
         var api101 = state(true, 101, true, true, false, true, true, false,
                 ModuleScope.TargetRuntime.UNSUPPORTED, ModuleScope.TargetRuntime.UNSUPPORTED,

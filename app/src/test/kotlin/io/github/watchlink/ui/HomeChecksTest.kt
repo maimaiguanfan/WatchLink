@@ -18,15 +18,16 @@ class HomeChecksTest {
         clockActive: Boolean = true,
         healthActive: Boolean = true,
         calendarActive: Boolean = false,
-        clockRuntime: ModuleScope.TargetRuntime = ModuleScope.TargetRuntime("UP_TO_DATE", 92),
-        healthRuntime: ModuleScope.TargetRuntime = ModuleScope.TargetRuntime("UP_TO_DATE", 92),
+        clockRuntime: ModuleScope.TargetRuntime = ModuleScope.TargetRuntime("UP_TO_DATE", 93),
+        healthRuntime: ModuleScope.TargetRuntime = ModuleScope.TargetRuntime("UP_TO_DATE", 93),
+        healthDaemonRuntime: ModuleScope.TargetRuntime = ModuleScope.TargetRuntime("UP_TO_DATE", 93),
         calendarRuntime: ModuleScope.TargetRuntime = ModuleScope.TargetRuntime.ABSENT,
     ) = ModuleScope.View(
         framework, "LSPosed", "2.2.1", apiVersion,
         clockGranted, healthGranted, calendarGranted,
         clockActive, healthActive, calendarActive,
-        clockRuntime, healthRuntime, calendarRuntime,
-        false, false, "IDLE", true, true, false,
+        clockRuntime, healthRuntime, healthDaemonRuntime, calendarRuntime,
+        false, false, "IDLE", true, true, false, false, false,
     )
 
     private fun clockReply(localClockControl: Boolean = true) =

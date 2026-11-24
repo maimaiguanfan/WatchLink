@@ -32,6 +32,7 @@ import io.github.watchlink.alarm.probe.TargetProfile
 import io.github.watchlink.setup.ModuleScope
 import io.github.watchlink.validation.CalendarHostControl
 import io.github.watchlink.validation.ClockHostControl
+import io.github.watchlink.validation.HealthDaemonControl
 import io.github.watchlink.validation.HealthHostControl
 import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -44,10 +45,13 @@ internal data class WatchLinkUiState(
     val clockHost: ClockHostControl.Reply? = null,
     val calendarHost: CalendarHostControl.Reply? = null,
     val healthHost: HealthHostControl.Reply? = null,
+    val healthDaemon: HealthDaemonControl.Reply? = null,
     val checks: HomeChecks? = null,
     val scope: ModuleScope.View? = null,
     val saving: Boolean = false,
     val calendarSaving: Boolean = false,
+    val pictureSaving: Boolean = false,
+    val voipSaving: Boolean = false,
     val reloading: Boolean = false,
     val testing: Boolean = false,
     val sharing: Boolean = false,
@@ -75,6 +79,26 @@ internal data class WatchLinkUiState(
         get() = !calendarSaving && (scope?.remotePrefsSupported() == true
                 || calendarHost?.reachable() == true
                 || healthHost?.reachable() == true)
+
+    val effectivePictureEnabled: Boolean
+        get() = scope?.remoteNotifPictureEnabled()
+            ?: healthDaemon?.takeIf { it.reachable() }?.pictureEnabled()
+            ?: false
+
+    val canTogglePicture: Boolean
+        get() = !pictureSaving && (scope?.remotePrefsSupported() == true
+                || healthDaemon?.reachable() == true)
+
+    val effectiveVoipEnabled: Boolean
+        get() = scope?.remoteVoipCallEnabled()
+            ?: healthDaemon?.takeIf { it.reachable() }?.voipEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.voipEnabled()
+            ?: false
+
+    val canToggleVoip: Boolean
+        get() = !voipSaving && (scope?.remotePrefsSupported() == true
+                || healthDaemon?.reachable() == true
+                || healthHost?.reachable() == true)
 }
 
 private enum class Page(val title: String) {
@@ -88,6 +112,8 @@ internal fun WatchLinkApp(
     state: WatchLinkUiState,
     onEnable: (Boolean) -> Unit,
     onCalendarEnable: (Boolean) -> Unit,
+    onPictureEnable: (Boolean) -> Unit,
+    onVoipEnable: (Boolean) -> Unit,
     onDismissMessage: () -> Unit,
     onClock: () -> Unit,
     onCalendar: () -> Unit,
@@ -135,6 +161,8 @@ internal fun WatchLinkApp(
                             state = state,
                             onEnable = onEnable,
                             onCalendarEnable = onCalendarEnable,
+                            onPictureEnable = onPictureEnable,
+                            onVoipEnable = onVoipEnable,
                             onClock = onClock,
                             onCalendar = onCalendar,
                             onHealth = onHealth,
@@ -166,6 +194,8 @@ private fun LazyListScope.homePage(
     state: WatchLinkUiState,
     onEnable: (Boolean) -> Unit,
     onCalendarEnable: (Boolean) -> Unit,
+    onPictureEnable: (Boolean) -> Unit,
+    onVoipEnable: (Boolean) -> Unit,
     onClock: () -> Unit,
     onCalendar: () -> Unit,
     onHealth: () -> Unit,
@@ -241,6 +271,14 @@ private fun LazyListScope.homePage(
             onRefresh = onRefresh,
         )
     }
+    item("notif-suite-title") { SectionTitle("通知增强（华为运动健康）") }
+    item("notif-suite") {
+        NotificationSuiteCard(
+            state = state,
+            onPictureEnable = onPictureEnable,
+            onVoipEnable = onVoipEnable,
+        )
+    }
     recentRing(state)
     recentCalendarRing(state)
 
@@ -259,6 +297,7 @@ private fun StatusCard(state: WatchLinkUiState, issues: List<SetupIssue>) {
     val checks = state.checks
     val level = setupLevel(checks, issues, state.scope)
     val enabled = state.effectiveEnabled || state.effectiveCalendarEnabled
+            || state.effectivePictureEnabled || state.effectiveVoipEnabled
     var expanded by rememberSaveable { mutableStateOf(false) }
 
     val (background, ink) = when (level) {
@@ -423,6 +462,75 @@ private fun CalendarReminderCard(
     }
 }
 
+@Composable
+private fun NotificationSuiteCard(
+    state: WatchLinkUiState,
+    onPictureEnable: (Boolean) -> Unit,
+    onVoipEnable: (Boolean) -> Unit,
+) {
+    val daemon = state.healthDaemon
+    val picEnabled = state.effectivePictureEnabled
+    val voipEnabled = state.effectiveVoipEnabled
+
+    val picSummary = when {
+        state.pictureSaving -> "正在保存通知图片开关…"
+        !state.canTogglePicture -> "请先启用模块框架，或打开华为运动健康。"
+        !picEnabled -> "解锁华为手机专属限制，支持将常见应用大图通知与聊天图片同步到手表预览"
+        daemon == null || !daemon.reachable() ->
+            "已开启 · 等待运动健康通知服务上线（需在系统设置授予运动健康通知访问权限）"
+        !daemon.pictureHookReady() ->
+            "已开启 · 当前运动健康版本图片符号未匹配，已安全降级"
+        !daemon.pictureSupported() ->
+            "已开启 · 当前已连接手表未声明通知图片能力（bit 256）"
+        else -> {
+            val widthNote = if (daemon.pictureWidth() > 0) "（手表协商宽度 ${daemon.pictureWidth()}px）" else ""
+            "已开启$widthNote · 解锁通知图片，支持 BigPictureStyle 与聊天图片推送到手表"
+        }
+    }
+
+    val voipSummary = when {
+        state.voipSaving -> "正在保存 VoIP 来电开关…"
+        !state.canToggleVoip -> "请先启用模块框架，或打开华为运动健康。"
+        !voipEnabled -> "解锁非华为机型限制并适配 Android 17，支持第三方 VoIP 来电手表振铃与直接拒接"
+        daemon == null || !daemon.reachable() ->
+            "已开启 · 等待运动健康通知服务上线（无需额外作用域）"
+        !daemon.voipHookReady() ->
+            "已开启 · 当前运动健康版本 VoIP 符号未匹配，已安全降级"
+        !daemon.voipSupported() ->
+            "已开启 · 当前已连接手表未声明 VoIP 通话能力（bit 185）"
+        else ->
+            "已开启 · 支持 Telegram/WhatsApp/QQ/飞书/企微/钉钉等来电振铃与表端拒接（微信沿用原生通道）"
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        BasicComponent(
+            title = "通知图片推送",
+            summary = picSummary,
+            onClick = if (state.canTogglePicture) { { onPictureEnable(!picEnabled) } } else null,
+            endActions = {
+                Switch(
+                    checked = picEnabled,
+                    onCheckedChange = { onPictureEnable(it) },
+                    enabled = state.canTogglePicture,
+                )
+            }
+        )
+        HorizontalDivider()
+        BasicComponent(
+            title = "VoIP 来电振铃与表端拒接",
+            summary = voipSummary,
+            onClick = if (state.canToggleVoip) { { onVoipEnable(!voipEnabled) } } else null,
+            endActions = {
+                Switch(
+                    checked = voipEnabled,
+                    onCheckedChange = { onVoipEnable(it) },
+                    enabled = state.canToggleVoip,
+                )
+            }
+        )
+    }
+}
+
 private fun LazyListScope.recentRing(state: WatchLinkUiState) {
     val host = state.clockHost
     item("last-title") { SectionTitle("最近一次闹钟同步") }
@@ -514,6 +622,7 @@ private fun LazyListScope.diagnosticsPage(
     onShare: () -> Unit,
 ) {
     val health = state.healthHost
+    val daemon = state.healthDaemon
     val clock = state.clockHost
     val calendar = state.calendarHost
     val scope = state.scope
@@ -552,6 +661,8 @@ private fun LazyListScope.diagnosticsPage(
             HorizontalDivider()
             BasicComponent(title = "运动健康进程（:PhoneService）", summary = targetRuntimeText(scope, TargetProfile.HEALTH))
             HorizontalDivider()
+            BasicComponent(title = "运动健康通知进程（:DaemonService）", summary = daemonRuntimeText(scope, daemon))
+            HorizontalDivider()
             BasicComponent(
                 title = "热重载运行中的宿主",
                 summary = when {
@@ -587,8 +698,18 @@ private fun LazyListScope.diagnosticsPage(
             )
             HorizontalDivider()
             BasicComponent(
-                title = "运动健康动态符号解析",
+                title = "运动健康动态符号解析（:PhoneService）",
                 summary = healthResilienceText(health)
+            )
+            HorizontalDivider()
+            BasicComponent(
+                title = "运动健康通知增强适配（:DaemonService）",
+                summary = healthDaemonResilienceText(daemon)
+            )
+            HorizontalDivider()
+            BasicComponent(
+                title = "手表通知增强能力遥测",
+                summary = watchNotifyCapabilityText(daemon)
             )
             HorizontalDivider()
             BasicComponent(
@@ -826,7 +947,71 @@ private fun healthResilienceText(health: HealthHostControl.Reply?): String {
     val mode = if (health.serviceWitness() && health.sdkObserver()) "原生服务 + SDK 完整观测"
     else if (health.serviceWitness()) "原生服务在线（SDK 降级）"
     else "未就绪"
-    return "$source · $mode"
+    val voip = if (health.voipAllowlistReady()) " · VoIP 白名单已就绪" else ""
+    return "$source · $mode$voip"
+}
+
+private fun daemonRuntimeText(scope: ModuleScope.View?, daemon: HealthDaemonControl.Reply?): String {
+    val witness = if (daemon?.reachable() == true) "宿主已应答" else "宿主未应答"
+    if (scope == null || !scope.supportsApi102() || scope.healthDaemonRuntime().state() == "UNSUPPORTED") {
+        return "$witness（当前框架未提供 API 102 进程状态）"
+    }
+    val runtime = scope.healthDaemonRuntime()
+    val codeNote = if (runtime.loadedVersionCode() > 0) " · code ${runtime.loadedVersionCode()}" else ""
+    val stateLabel = when (runtime.state()) {
+        "UP_TO_DATE" -> "运行最新版本"
+        "STALE" -> "运行旧版本，建议热重载"
+        "RELOADING" -> "正在热重载"
+        "FAILED" -> "上次加载失败，建议热重载或重启"
+        "ABSENT" -> "进程未运行"
+        else -> runtime.state()
+    }
+    return "$stateLabel$codeNote · $witness"
+}
+
+private fun healthDaemonResilienceText(daemon: HealthDaemonControl.Reply?): String {
+    if (daemon == null || !daemon.reachable()) return "待运动健康通知服务上线后读取"
+    val source = when (daemon.symbolSource()) {
+        "CACHE" -> "本地缓存命中（零扫描启动）"
+        "DEX_SCAN" -> "DEX 结构自动解析（已写入缓存）"
+        "DEGRADED" -> "部分符号未匹配（已安全降级）"
+        else -> "状态未知"
+    }
+    val pic = if (daemon.pictureHookReady()) "图片通道就绪" else "图片未就绪"
+    val voip = if (daemon.voipHookReady()) "VoIP 通道就绪" else "VoIP 未就绪"
+    return "$source · $pic · $voip"
+}
+
+private fun watchNotifyCapabilityText(daemon: HealthDaemonControl.Reply?): String {
+    if (daemon == null || !daemon.reachable()) return "待运动健康通知服务上线后读取"
+    val picCap = if (daemon.pictureSupported()) {
+        buildString {
+            append("支持")
+            if (daemon.pictureWidth() > 0) append("（宽度 ").append(daemon.pictureWidth()).append("px")
+            if (daemon.pictureNumber() > 0) {
+                append(if (daemon.pictureWidth() > 0) "，缓存 " else "（缓存 ")
+                append(daemon.pictureNumber()).append(" 张")
+            }
+            if (daemon.pictureWidth() > 0 || daemon.pictureNumber() > 0) append("）")
+        }
+    } else "未声明"
+    val voipCap = if (daemon.voipSupported()) "支持（bit 185）" else "未声明"
+    val lastPic = when (daemon.lastPictureResult()) {
+        "ENCODED_MESSAGING" -> " · 最近图片：聊天图片已编码"
+        "ENCODED_BIG_PICTURE" -> " · 最近图片：大图通知已编码"
+        "SKIPPED_UNSUPPORTED" -> " · 最近图片：手表未声明支持"
+        "FAILED" -> " · 最近图片：编码失败"
+        else -> ""
+    }
+    val lastVoip = when (daemon.lastVoipResult()) {
+        "DETECTED_CALL_STYLE" -> " · 最近 VoIP：CallStyle 来电已推送"
+        "DETECTED_CATEGORY_CALL" -> " · 最近 VoIP：来电通知已推送"
+        "ONGOING_SUPPRESSED" -> " · 最近 VoIP：已抑制通话中重复弹窗"
+        "REJECTED_BY_WATCH" -> " · 最近 VoIP：已通过手表拒接"
+        "REJECT_FAILED" -> " · 最近 VoIP：表端拒接未命中有效通话"
+        else -> ""
+    }
+    return "通知图片：$picCap · VoIP 来电：$voipCap$lastPic$lastVoip"
 }
 
 private fun remotePrefsDetail(state: WatchLinkUiState): String {
@@ -844,7 +1029,10 @@ private fun remotePrefsDetail(state: WatchLinkUiState): String {
     val calendarPart = if (state.calendarHost?.reachable() == true) {
         " · 日历：" + if (state.calendarHost.remotePrefs()) "已读取" else "本地回退"
     } else ""
-    return "设置页：$uiSupport · 时钟：$clockSupport$calendarPart · 运动健康：$healthSupport"
+    val daemonPart = if (state.healthDaemon?.reachable() == true) {
+        " · 通知服务：" + if (state.healthDaemon.remotePrefs()) "已读取" else "本地回退"
+    } else ""
+    return "设置页：$uiSupport · 时钟：$clockSupport$calendarPart · 运动健康：$healthSupport$daemonPart"
 }
 
 private fun dispatchModeText(mode: String?): String = when (mode) {

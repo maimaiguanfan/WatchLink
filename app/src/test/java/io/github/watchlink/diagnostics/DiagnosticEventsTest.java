@@ -28,6 +28,14 @@ public final class DiagnosticEventsTest {
                 "HOT_RELOAD_RESULT result=SUCCEEDED detail=private"));
         assertEquals("HEALTH_DISPATCH_BG_RESTRICTED type=BackgroundServiceStartNotAllowedException",
                 DiagnosticEvents.event("HEALTH_DISPATCH_BG_RESTRICTED type=BackgroundServiceStartNotAllowedException"));
+        assertEquals("HEALTH_NOTIF_PIC_ENCODED pic_source=BIG_PICTURE result=VERIFIED",
+                DiagnosticEvents.event("HEALTH_NOTIF_PIC_ENCODED pic_source=BIG_PICTURE uri=content://secret result=VERIFIED"));
+        assertEquals("HEALTH_VOIP_CALL_DETECTED voip_source=CALL_STYLE",
+                DiagnosticEvents.event("HEALTH_VOIP_CALL_DETECTED voip_source=CALL_STYLE caller=Alice pkg=com.tencent.mobileqq"));
+        assertEquals("HEALTH_VOIP_REJECT_SENT result=VERIFIED",
+                DiagnosticEvents.event("HEALTH_VOIP_REJECT_SENT result=VERIFIED key=0|secret"));
+        assertEquals("HEALTH_DAEMON_READY pic_hook=true voip_hook=true remote_prefs=true",
+                DiagnosticEvents.event("HEALTH_DAEMON_READY pic_hook=true voip_hook=true remote_prefs=true"));
         assertNull(DiagnosticEvents.event("UNKNOWN_EVENT private=anything"));
         assertNull(DiagnosticEvents.event("DAILY_HEALTH_OUTBOUND\nDAILY_HEALTH_DISMISS"));
     }
