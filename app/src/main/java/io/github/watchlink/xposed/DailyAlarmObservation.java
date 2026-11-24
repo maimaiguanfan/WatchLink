@@ -1,5 +1,6 @@
 package io.github.watchlink.xposed;
 
+import io.github.watchlink.alarm.probe.TargetProfile;
 import io.github.watchlink.validation.DailyAlarmWire;
 import io.github.watchlink.validation.HuaweiReminderService;
 import io.github.watchlink.validation.PhoneRingWire;
@@ -7,18 +8,19 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Health-side single active reminder state machine.
+ * Health-side single active reminder state machine supporting both Clock and Calendar sources.
  * Correlates both the unobfuscated ExternalPhoneService Intent path and optional SDK wire observation,
- * guaranteeing at-most-once SNOOZE/DISMISS delivery and reporting whether both sources agreed.
+ * guaranteeing at-most-once SNOOZE/DISMISS delivery routed strictly back to the originating host.
  */
 final class DailyAlarmObservation {
     static final long WINDOW = DailyAlarmWire.MAX_WINDOW;
     private static final long CLOSE_WAIT = 5_000;
     private static final int MAX_RECENT = 128;
 
-    record Evidence(String run, int reminder, String kind, long wall, long elapsed, String actionSource) {
-        Evidence(String run, int reminder, String kind, long wall, long elapsed) {
-            this(run, reminder, kind, wall, elapsed, "");
+    record Evidence(TargetProfile source, String run, int reminder, String kind,
+                    long wall, long elapsed, String actionSource) {
+        Evidence(TargetProfile source, String run, int reminder, String kind, long wall, long elapsed) {
+            this(source, run, reminder, kind, wall, elapsed, "");
         }
 
         @Override public String toString() { return kind; }
@@ -31,6 +33,7 @@ final class DailyAlarmObservation {
     private Session current;
 
     private static final class Session {
+        final TargetProfile source;
         final String run;
         final int reminder;
         final long wall, elapsed;
@@ -42,8 +45,9 @@ final class DailyAlarmObservation {
         String answeredAction;
         boolean sdkAnswered, intentAnswered;
 
-        Session(String run, int reminder, String device, String openIdentifier,
+        Session(TargetProfile source, String run, int reminder, String device, String openIdentifier,
                 long wall, long elapsed, boolean sdkAvailable) {
+            this.source = source;
             this.run = run;
             this.reminder = reminder;
             this.openIdentifier = openIdentifier;
@@ -59,8 +63,8 @@ final class DailyAlarmObservation {
             return serviceReceived || directDispatched;
         }
 
-        boolean matches(String run, int reminder) {
-            return this.reminder == reminder && this.run.equals(run);
+        boolean matches(TargetProfile source, String run, int reminder) {
+            return this.source == source && this.reminder == reminder && this.run.equals(run);
         }
     }
 
@@ -74,7 +78,13 @@ final class DailyAlarmObservation {
 
     synchronized String arm(String run, int reminder, long at, long start, String device,
                             String identifier, long wall, long elapsed, boolean sdkAvailable) {
-        if (reminder <= 0 || !validOpenIdentifier(run, reminder, identifier)
+        return arm(TargetProfile.CLOCK, run, reminder, at, start, device, identifier, wall, elapsed, sdkAvailable);
+    }
+
+    synchronized String arm(TargetProfile source, String run, int reminder, long at, long start, String device,
+                            String identifier, long wall, long elapsed, boolean sdkAvailable) {
+        if (source == null || !source.isAlertSource() || reminder <= 0
+                || !validOpenIdentifier(run, reminder, identifier)
                 || at <= 0 || start < 0 || wall < at || wall - at >= PhoneRingWire.MAX_AGE
                 || elapsed < start || elapsed - start >= PhoneRingWire.MAX_AGE) {
             return "UNAVAILABLE";
@@ -90,7 +100,7 @@ final class DailyAlarmObservation {
                 || (current != null && !current.ending && !current.closed)) {
             return "UNAVAILABLE";
         }
-        current = new Session(run, reminder, device, identifier, at, start, sdkAvailable);
+        current = new Session(source, run, reminder, device, identifier, at, start, sdkAvailable);
         return "READY";
     }
 
@@ -103,28 +113,38 @@ final class DailyAlarmObservation {
     }
 
     synchronized void markDirectDispatched(String run, int reminder) {
-        if (current != null && current.matches(run, reminder) && !current.ending && !current.closed) {
+        if (current != null && current.reminder == reminder && current.run.equals(run)
+                && !current.ending && !current.closed) {
             current.directDispatched = true;
         }
     }
 
     synchronized void abort(String run, int reminder) {
-        if (current != null && current.matches(run, reminder)) {
+        if (current != null && current.reminder == reminder && current.run.equals(run)) {
             current = null;
         }
     }
 
     synchronized boolean shouldClose(String run, int reminder, long wall, long elapsed) {
-        if (!active(wall, elapsed) || !current.matches(run, reminder)) return false;
+        if (!active(wall, elapsed) || current.reminder != reminder || !current.run.equals(run)) return false;
+        return !current.closed;
+    }
+
+    synchronized boolean shouldClose(TargetProfile source, String run, int reminder, long wall, long elapsed) {
+        if (!active(wall, elapsed) || !current.matches(source, run, reminder)) return false;
         return !current.closed;
     }
 
     synchronized void end(String run, int reminder, long wall, long elapsed) {
+        end(current == null ? TargetProfile.CLOCK : current.source, run, reminder, wall, elapsed);
+    }
+
+    synchronized void end(TargetProfile source, String run, int reminder, long wall, long elapsed) {
         recent.values().removeIf(item -> item.expires <= elapsed);
         if (!recent.containsKey(run) && recent.size() < MAX_RECENT) {
             recent.put(run, new Seen(reminder, elapsed + WINDOW));
         }
-        if (!active(wall, elapsed) || !current.matches(run, reminder)) return;
+        if (!active(wall, elapsed) || !current.matches(source, run, reminder)) return;
         current.ending = true;
         current.end = Math.min(current.end, elapsed + CLOSE_WAIT);
     }
@@ -136,7 +156,7 @@ final class DailyAlarmObservation {
             return null;
         }
         current.serviceReceived = true;
-        return new Evidence(current.run, reminder, "SERVICE_RECEIVED", wall, elapsed);
+        return new Evidence(current.source, current.run, reminder, "SERVICE_RECEIVED", wall, elapsed);
     }
 
     /** Called from ExternalPhoneService.onStartCommand when action == "alarm_clock_msg_from_device". */
@@ -150,7 +170,8 @@ final class DailyAlarmObservation {
         if (current.answeredAction != null) {
             if (!current.intentAnswered && current.sdkAnswered && action.equals(current.answeredAction)) {
                 current.intentAnswered = true;
-                return new Evidence(current.run, reminder, "ACTION_DUAL_CONFIRMED", wall, elapsed, "SDK_AND_INTENT");
+                return new Evidence(current.source, current.run, reminder, "ACTION_DUAL_CONFIRMED",
+                        wall, elapsed, "SDK_AND_INTENT");
             }
             return null;
         }
@@ -158,7 +179,7 @@ final class DailyAlarmObservation {
         if (current.sdkAvailable && !current.outbound) return null;
         current.answeredAction = action;
         current.intentAnswered = true;
-        return new Evidence(current.run, reminder, action, wall, elapsed, "INTENT_ONLY");
+        return new Evidence(current.source, current.run, reminder, action, wall, elapsed, "INTENT_ONLY");
     }
 
     /** Called from optional SDK hooks (zcj.sendCommand outbound / DevicesManagementService$8 inbound). */
@@ -168,26 +189,27 @@ final class DailyAlarmObservation {
         if (closeKind != null) {
             current.closed = true;
             current.end = Math.min(current.end, elapsed + CLOSE_WAIT);
-            return new Evidence(current.run, current.reminder, closeKind, wall, elapsed);
+            return new Evidence(current.source, current.run, current.reminder, closeKind, wall, elapsed);
         }
         if (current.ending || current.closed) return null;
         String kind = current.open.observe(received, device, frame);
         if (kind == null) return null;
         if ("OUTBOUND".equals(kind)) {
             current.outbound = true;
-            return new Evidence(current.run, current.reminder, kind, wall, elapsed);
+            return new Evidence(current.source, current.run, current.reminder, kind, wall, elapsed);
         }
         if ("SNOOZE".equals(kind) || "DISMISS".equals(kind)) {
             if (current.answeredAction != null) {
                 if (!current.sdkAnswered && current.intentAnswered && kind.equals(current.answeredAction)) {
                     current.sdkAnswered = true;
-                    return new Evidence(current.run, current.reminder, "ACTION_DUAL_CONFIRMED", wall, elapsed, "SDK_AND_INTENT");
+                    return new Evidence(current.source, current.run, current.reminder, "ACTION_DUAL_CONFIRMED",
+                            wall, elapsed, "SDK_AND_INTENT");
                 }
                 return null;
             }
             current.answeredAction = kind;
             current.sdkAnswered = true;
-            return new Evidence(current.run, current.reminder, kind, wall, elapsed, "SDK_ONLY");
+            return new Evidence(current.source, current.run, current.reminder, kind, wall, elapsed, "SDK_ONLY");
         }
         return null;
     }

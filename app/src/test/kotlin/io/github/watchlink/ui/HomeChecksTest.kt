@@ -1,6 +1,7 @@
 package io.github.watchlink.ui
 
 import io.github.watchlink.setup.ModuleScope
+import io.github.watchlink.validation.CalendarHostControl
 import io.github.watchlink.validation.ClockHostControl
 import io.github.watchlink.validation.HealthHostControl
 import io.github.watchlink.validation.HuaweiReminderService
@@ -13,15 +14,19 @@ class HomeChecksTest {
         apiVersion: Int = 102,
         clockGranted: Boolean = true,
         healthGranted: Boolean = true,
+        calendarGranted: Boolean = false,
         clockActive: Boolean = true,
         healthActive: Boolean = true,
-        clockRuntime: ModuleScope.TargetRuntime = ModuleScope.TargetRuntime("UP_TO_DATE", 91),
-        healthRuntime: ModuleScope.TargetRuntime = ModuleScope.TargetRuntime("UP_TO_DATE", 91),
+        calendarActive: Boolean = false,
+        clockRuntime: ModuleScope.TargetRuntime = ModuleScope.TargetRuntime("UP_TO_DATE", 92),
+        healthRuntime: ModuleScope.TargetRuntime = ModuleScope.TargetRuntime("UP_TO_DATE", 92),
+        calendarRuntime: ModuleScope.TargetRuntime = ModuleScope.TargetRuntime.ABSENT,
     ) = ModuleScope.View(
         framework, "LSPosed", "2.2.1", apiVersion,
-        clockGranted, healthGranted, clockActive, healthActive,
-        clockRuntime, healthRuntime,
-        false, false, "IDLE", true, true,
+        clockGranted, healthGranted, calendarGranted,
+        clockActive, healthActive, calendarActive,
+        clockRuntime, healthRuntime, calendarRuntime,
+        false, false, "IDLE", true, true, false,
     )
 
     private fun clockReply(localClockControl: Boolean = true) =
@@ -32,7 +37,7 @@ class HomeChecksTest {
         sdkObserver: Boolean = true,
         symbolSource: String = "CACHE",
     ) = HealthHostControl.Reply(
-        true, true, true, true, sdkObserver, symbolSource,
+        true, true, false, true, true, sdkObserver, symbolSource,
         watchState, "START_SERVICE", "SDK_AND_INTENT",
         "IDLE", "NONE", "NONE",
     )
@@ -45,9 +50,12 @@ class HomeChecksTest {
         health = HuaweiReminderService.HealthEndpoint(true, true, false),
         clockHost = clockReply(),
         healthHost = healthReply(),
+        calendarVersion = VERIFIED_CALENDAR,
+        calendarTrusted = true,
+        calendarHost = CalendarHostControl.unavailable(),
     )
 
-    @Test fun healthyDualHostSetupIsReadyEvenAcrossNewerAdaptedHealthVersions() {
+    @Test fun healthyDualHostSetupIsReadyEvenWithoutOptionalCalendarScope() {
         assertEquals(emptyList<SetupIssue>(), ready.issues(active))
         assertEquals(SetupLevel.READY, setupLevel(ready, emptyList(), active))
 
@@ -68,6 +76,13 @@ class HomeChecksTest {
         val issues = ready.issues(staleScope)
         assertEquals(listOf(SetupIssue.HOST_STALE), issues)
         assertEquals(SetupLevel.ATTENTION, setupLevel(ready, issues, staleScope))
+
+        val staleCalendar = scopeView(
+            calendarGranted = true,
+            calendarActive = false,
+            calendarRuntime = ModuleScope.TargetRuntime("STALE", 90),
+        )
+        assertEquals(listOf(SetupIssue.HOST_STALE), ready.issues(staleCalendar))
     }
 
     @Test fun missingLspScopeRaisesMissingScopeLevel() {

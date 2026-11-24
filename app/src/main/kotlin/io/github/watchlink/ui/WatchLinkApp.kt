@@ -28,7 +28,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.watchlink.BuildConfig
+import io.github.watchlink.alarm.probe.TargetProfile
 import io.github.watchlink.setup.ModuleScope
+import io.github.watchlink.validation.CalendarHostControl
 import io.github.watchlink.validation.ClockHostControl
 import io.github.watchlink.validation.HealthHostControl
 import top.yukonga.miuix.kmp.basic.*
@@ -40,10 +42,12 @@ import java.util.Date
 
 internal data class WatchLinkUiState(
     val clockHost: ClockHostControl.Reply? = null,
+    val calendarHost: CalendarHostControl.Reply? = null,
     val healthHost: HealthHostControl.Reply? = null,
     val checks: HomeChecks? = null,
     val scope: ModuleScope.View? = null,
     val saving: Boolean = false,
+    val calendarSaving: Boolean = false,
     val reloading: Boolean = false,
     val testing: Boolean = false,
     val sharing: Boolean = false,
@@ -60,6 +64,17 @@ internal data class WatchLinkUiState(
         get() = !saving && (scope?.remotePrefsSupported() == true
                 || clockHost?.reachable() == true
                 || healthHost?.reachable() == true)
+
+    val effectiveCalendarEnabled: Boolean
+        get() = scope?.remoteCalendarEnabled()
+            ?: calendarHost?.takeIf { it.reachable() }?.enabled()
+            ?: healthHost?.takeIf { it.reachable() }?.calendarEnabled()
+            ?: false
+
+    val canToggleCalendar: Boolean
+        get() = !calendarSaving && (scope?.remotePrefsSupported() == true
+                || calendarHost?.reachable() == true
+                || healthHost?.reachable() == true)
 }
 
 private enum class Page(val title: String) {
@@ -72,10 +87,13 @@ private enum class Page(val title: String) {
 internal fun WatchLinkApp(
     state: WatchLinkUiState,
     onEnable: (Boolean) -> Unit,
+    onCalendarEnable: (Boolean) -> Unit,
     onDismissMessage: () -> Unit,
     onClock: () -> Unit,
+    onCalendar: () -> Unit,
     onHealth: () -> Unit,
     onRequestScope: () -> Unit,
+    onRequestCalendarScope: () -> Unit,
     onHotReload: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onHealthDownload: () -> Unit,
@@ -116,9 +134,12 @@ internal fun WatchLinkApp(
                         Page.HOME -> homePage(
                             state = state,
                             onEnable = onEnable,
+                            onCalendarEnable = onCalendarEnable,
                             onClock = onClock,
+                            onCalendar = onCalendar,
                             onHealth = onHealth,
                             onRequestScope = onRequestScope,
+                            onRequestCalendarScope = onRequestCalendarScope,
                             onHotReload = onHotReload,
                             onRefresh = onRefresh,
                             onHealthDownload = onHealthDownload,
@@ -144,9 +165,12 @@ internal fun WatchLinkApp(
 private fun LazyListScope.homePage(
     state: WatchLinkUiState,
     onEnable: (Boolean) -> Unit,
+    onCalendarEnable: (Boolean) -> Unit,
     onClock: () -> Unit,
+    onCalendar: () -> Unit,
     onHealth: () -> Unit,
     onRequestScope: () -> Unit,
+    onRequestCalendarScope: () -> Unit,
     onHotReload: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onHealthDownload: () -> Unit,
@@ -173,7 +197,7 @@ private fun LazyListScope.homePage(
                     when (issue) {
                         SetupIssue.HOST_STALE -> BasicComponent(
                             title = "热重载宿主以应用新版本",
-                            summary = "更新模块后时钟或运动健康仍在运行旧版本，点击即可热重载生效，无需重启手机。",
+                            summary = "更新模块后有宿主仍在运行旧版本，点击即可热重载生效，无需重启手机。",
                             endActions = {
                                 TextButton(
                                     if (state.reloading) "重载中…" else "热重载",
@@ -208,7 +232,17 @@ private fun LazyListScope.homePage(
     }
 
     item("auto") { AutoReminderCard(state, onEnable) }
+    item("calendar") {
+        CalendarReminderCard(
+            state = state,
+            onEnable = onCalendarEnable,
+            onRequestCalendarScope = onRequestCalendarScope,
+            onOpenCalendar = onCalendar,
+            onRefresh = onRefresh,
+        )
+    }
     recentRing(state)
+    recentCalendarRing(state)
 
     item("more-title") { SectionTitle("更多功能") }
     item("navigation") {
@@ -224,7 +258,7 @@ private fun LazyListScope.homePage(
 private fun StatusCard(state: WatchLinkUiState, issues: List<SetupIssue>) {
     val checks = state.checks
     val level = setupLevel(checks, issues, state.scope)
-    val enabled = state.effectiveEnabled
+    val enabled = state.effectiveEnabled || state.effectiveCalendarEnabled
     var expanded by rememberSaveable { mutableStateOf(false) }
 
     val (background, ink) = when (level) {
@@ -243,7 +277,7 @@ private fun StatusCard(state: WatchLinkUiState, issues: List<SetupIssue>) {
         SetupLevel.READY -> if (enabled)
             "手机响铃时将自动同步到手表，重启后无需打开本应用"
         else
-            "模块与手表连接正常，开启下方开关即可自动同步闹钟"
+            "模块与手表连接正常，开启下方开关即可自动同步提醒"
         SetupLevel.ATTENTION -> "请按下方「待处理事项」完成调整，点此可展开状态概况"
         SetupLevel.MISSING_SCOPE -> "请在 LSPosed 中启用 WatchLink，并勾选系统时钟与华为运动健康"
         SetupLevel.CHECKING -> if (state.readError) "点击下方「重新检查」重试" else "正在核对模块作用域、宿主与手表状态"
@@ -284,8 +318,9 @@ private fun StatusCard(state: WatchLinkUiState, issues: List<SetupIssue>) {
             }
             if (expanded && checks != null) {
                 Spacer(Modifier.height(16.dp))
-                CheckLine("系统时钟", hostStatusSimple(state.scope, true), ink)
-                CheckLine("华为运动健康", hostStatusSimple(state.scope, false), ink)
+                CheckLine("系统时钟", hostStatusSimple(state.scope, TargetProfile.CLOCK), ink)
+                CheckLine("系统日历（可选）", calendarStatusSimple(state.scope, checks), ink)
+                CheckLine("华为运动健康", hostStatusSimple(state.scope, TargetProfile.HEALTH), ink)
                 CheckLine("手表连接", watchStateSimple(state.healthHost), ink)
                 CheckLine("重启免启动", remotePrefsSimple(state), ink)
                 CheckLine("表端反控手机", when {
@@ -293,7 +328,12 @@ private fun StatusCard(state: WatchLinkUiState, issues: List<SetupIssue>) {
                     state.clockHost.localClockControl() -> "已就绪"
                     else -> "暂不可用（仅单向提醒）"
                 }, ink)
-                CheckLine("应用版本", "时钟 ${checks.clockVersion ?: "未知"} · 健康 ${checks.healthVersion ?: "未知"}", ink)
+                val versions = buildString {
+                    append("时钟 ").append(checks.clockVersion ?: "未知")
+                    if (checks.calendarVersion != null) append(" · 日历 ").append(checks.calendarVersion)
+                    append(" · 健康 ").append(checks.healthVersion ?: "未知")
+                }
+                CheckLine("应用版本", versions, ink)
             }
         }
     }
@@ -322,6 +362,67 @@ private fun AutoReminderCard(state: WatchLinkUiState, onEnable: (Boolean) -> Uni
     }
 }
 
+@Composable
+private fun CalendarReminderCard(
+    state: WatchLinkUiState,
+    onEnable: (Boolean) -> Unit,
+    onRequestCalendarScope: () -> Unit,
+    onOpenCalendar: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val enabled = state.effectiveCalendarEnabled
+    val scope = state.scope
+    val checks = state.checks
+    val calendarHost = state.calendarHost
+    val trusted = checks == null || checks.calendarTrusted
+    val needsScope = enabled && trusted && scope?.frameworkConnected() == true && !scope.calendarGranted()
+    val needsLaunch = enabled && trusted && !needsScope && scope?.calendarReady() != true && calendarHost?.reachable() != true
+
+    val summary = when {
+        !trusted -> "未检测到官方签名的 ColorOS 系统日历。"
+        state.calendarSaving -> "正在保存开关状态…"
+        !state.canToggleCalendar -> "请先启用模块框架，或打开系统日历 / 华为运动健康。"
+        needsScope -> "开关已开启 · 请授权「系统日历」作用域后即可同步日历强提醒"
+        needsLaunch -> "日历作用域已勾选 · 请打开或重启系统日历以加载模块"
+        enabled && calendarHost?.reachable() == true && !calendarHost.localCalendarControl() ->
+            "已开启 · 可推送强提醒到手表，但当前日历版本暂不支持表端反控"
+        enabled -> "已开启 · 日历强提醒响铃时自动同步到手表，支持表端停止或延后 5 分钟"
+        else -> "可选 · 同步 ColorOS 日历「强提醒」闹钟到手表，支持表端关闭与稍后提醒"
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        BasicComponent(
+            title = "同步日历强提醒到手表",
+            summary = summary,
+            onClick = if (trusted && state.canToggleCalendar) { { onEnable(!enabled) } } else null,
+            endActions = {
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = { onEnable(it) },
+                    enabled = trusted && state.canToggleCalendar
+                )
+            }
+        )
+        if (needsScope) {
+            HorizontalDivider()
+            if (scope.requestPending()) {
+                BasicComponent(title = "等待 LSPosed 授权", summary = "请在 LSPosed 弹出的提示中同意「系统日历」。")
+            } else {
+                Menu(
+                    "申请系统日历作用域",
+                    "仅额外勾选「系统日历」，不影响现有闹钟同步配置。",
+                    onRequestCalendarScope
+                )
+            }
+        } else if (needsLaunch) {
+            HorizontalDivider()
+            Menu("打开系统日历", "启动或切回日历以加载模块，完成后可点此返回刷新。", onOpenCalendar)
+            HorizontalDivider()
+            Menu("刷新日历加载状态", "若已重启系统日历或完成热重载，点击确认生效。", onRefresh)
+        }
+    }
+}
+
 private fun LazyListScope.recentRing(state: WatchLinkUiState) {
     val host = state.clockHost
     item("last-title") { SectionTitle("最近一次闹钟同步") }
@@ -338,33 +439,70 @@ private fun LazyListScope.recentRing(state: WatchLinkUiState) {
                     summary = "下一次手机真实响铃后，这里会显示同步与表端操作结果。"
                 )
             } else {
-                val stamp = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) }
-                val action = when (host.action()) {
-                    "SNOOZE" -> "延后"
-                    "DISMISS" -> "停止"
-                    else -> ""
-                }
-                BasicComponent(
-                    title = stamp.format(Date(host.lastRingAt())),
-                    summary = buildList {
-                        add(deliverySummarySimple(host.delivery()))
-                        if (action.isNotEmpty()) {
-                            add(when (host.actionResult()) {
-                                "VERIFIED" -> "手表点击「$action」，手机闹钟已确认同步$action。"
-                                "REJECTED" -> "收到手表「$action」，但手机当前未执行该操作。"
-                                else -> "收到手表「$action」，手机执行状态待核对。"
-                            })
-                        }
-                        when (host.close()) {
-                            "OUTBOUND" -> add("手机响铃结束后，手表提醒已自动关闭。")
-                            "SENT" -> add("已通知手表关闭本次提醒。")
-                            "UNCERTAIN" -> add("手表提醒关闭结果待核对。")
-                        }
-                    }.joinToString("\n")
+                RingHistoryItem(
+                    at = host.lastRingAt(),
+                    delivery = host.delivery(),
+                    action = host.action(),
+                    actionResult = host.actionResult(),
+                    close = host.close(),
+                    subject = "手机闹钟",
                 )
             }
         }
     }
+}
+
+private fun LazyListScope.recentCalendarRing(state: WatchLinkUiState) {
+    val host = state.calendarHost ?: return
+    if (!host.reachable() || host.lastRingAt() <= 0) return
+    item("last-cal-title") { SectionTitle("最近一次日历强提醒同步") }
+    item("last-cal") {
+        Card(Modifier.fillMaxWidth()) {
+            RingHistoryItem(
+                at = host.lastRingAt(),
+                delivery = host.delivery(),
+                action = host.action(),
+                actionResult = host.actionResult(),
+                close = host.close(),
+                subject = "日历强提醒",
+            )
+        }
+    }
+}
+
+@Composable
+private fun RingHistoryItem(
+    at: Long,
+    delivery: String,
+    action: String,
+    actionResult: String,
+    close: String,
+    subject: String,
+) {
+    val stamp = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) }
+    val actionLabel = when (action) {
+        "SNOOZE" -> "延后"
+        "DISMISS" -> "停止"
+        else -> ""
+    }
+    BasicComponent(
+        title = stamp.format(Date(at)),
+        summary = buildList {
+            add(deliverySummarySimple(delivery, subject))
+            if (actionLabel.isNotEmpty()) {
+                add(when (actionResult) {
+                    "VERIFIED" -> "手表点击「$actionLabel」，${subject}已确认同步$actionLabel。"
+                    "REJECTED" -> "收到手表「$actionLabel」，但手机当前未执行该操作。"
+                    else -> "收到手表「$actionLabel」，手机执行状态待核对。"
+                })
+            }
+            when (close) {
+                "OUTBOUND" -> add("手机响铃结束后，手表提醒已自动关闭。")
+                "SENT" -> add("已通知手表关闭本次提醒。")
+                "UNCERTAIN" -> add("手表提醒关闭结果待核对。")
+            }
+        }.joinToString("\n")
+    )
 }
 
 private fun LazyListScope.diagnosticsPage(
@@ -377,6 +515,7 @@ private fun LazyListScope.diagnosticsPage(
 ) {
     val health = state.healthHost
     val clock = state.clockHost
+    val calendar = state.calendarHost
     val scope = state.scope
     val testState = health?.testState() ?: "IDLE"
     val testRunning = testState in setOf("SENDING", "SENT", "SENT_DIRECT", "SERVICE_RECEIVED", "OUTBOUND")
@@ -407,17 +546,19 @@ private fun LazyListScope.diagnosticsPage(
         Card(Modifier.fillMaxWidth()) {
             BasicComponent(title = "框架环境", summary = frameworkSummaryText(scope))
             HorizontalDivider()
-            BasicComponent(title = "系统时钟进程", summary = targetRuntimeText(scope, true))
+            BasicComponent(title = "系统时钟进程", summary = targetRuntimeText(scope, TargetProfile.CLOCK))
             HorizontalDivider()
-            BasicComponent(title = "运动健康进程（:PhoneService）", summary = targetRuntimeText(scope, false))
+            BasicComponent(title = "系统日历进程（可选）", summary = targetRuntimeText(scope, TargetProfile.CALENDAR))
+            HorizontalDivider()
+            BasicComponent(title = "运动健康进程（:PhoneService）", summary = targetRuntimeText(scope, TargetProfile.HEALTH))
             HorizontalDivider()
             BasicComponent(
                 title = "热重载运行中的宿主",
                 summary = when {
-                    scope?.supportsApi102() != true -> "需要 LSPosed API 102 框架支持；当前请手动重启时钟与运动健康。"
+                    scope?.supportsApi102() != true -> "需要 LSPosed API 102 框架支持；当前请手动重启目标宿主。"
                     !scope.canHotReloadAny() -> "当前没有可热重载的运行中宿主进程。"
-                    scope.hasStaleTarget() -> "检测到旧版本宿主，点击即可热重载生效（闹钟响铃中会自动保护延迟）。"
-                    else -> "当前宿主均为最新版本，也可手动触发重新加载（闹钟响铃中会自动保护延迟）。"
+                    scope.hasStaleTarget() -> "检测到旧版本宿主，点击即可热重载生效（响铃中会自动保护延迟）。"
+                    else -> "当前宿主均为最新版本，也可手动触发重新加载（响铃中会自动保护延迟）。"
                 },
                 endActions = {
                     TextButton(
@@ -438,6 +579,11 @@ private fun LazyListScope.diagnosticsPage(
             BasicComponent(
                 title = "时钟动态符号解析",
                 summary = clockResilienceText(clock)
+            )
+            HorizontalDivider()
+            BasicComponent(
+                title = "日历动态符号解析（可选）",
+                summary = calendarResilienceText(calendar)
             )
             HorizontalDivider()
             BasicComponent(
@@ -466,9 +612,9 @@ private fun LazyListScope.diagnosticsPage(
     item("share-card") {
         Card(Modifier.fillMaxWidth()) {
             if (state.sharing) {
-                BasicComponent(title = "正在打包脱敏日志…", summary = "正在收集 WatchLink、系统时钟和运动健康的允许列表事件。")
+                BasicComponent(title = "正在打包脱敏日志…", summary = "正在收集 WatchLink、系统时钟、系统日历和运动健康的允许列表事件。")
             } else {
-                Menu("导出并分享诊断日志", "生成三端脱敏运行记录（ZIP），不含个人闹钟内容与设备号。", onShare)
+                Menu("导出并分享诊断日志", "生成脱敏运行记录（ZIP），不含个人日程/闹钟内容与设备号。", onShare)
             }
         }
     }
@@ -485,7 +631,7 @@ private fun ScopeActions(
     val guidance = when {
         scope?.requestPending() == true -> "请在 LSPosed 弹出的授权提示中同意系统时钟和华为运动健康。"
         scope?.requestResult() == "DENIED" -> "上次申请未通过，可点此重试，或直接在 LSPosed 中勾选这两个应用。"
-        scope?.frameworkConnected() != true -> "请打开 LSPosed 管理器，启用 WatchLink 并仅勾选「时钟」和「华为运动健康」。"
+        scope?.frameworkConnected() != true -> "请打开 LSPosed 管理器，启用 WatchLink 并勾选「时钟」和「华为运动健康」（如需日历强提醒可额外勾选「日历」）。"
         scope.configured() -> "作用域已勾选。请打开或重启下方尚未生效的应用，再返回刷新。"
         else -> "点击通过 LSPosed 自动申请系统时钟和华为运动健康的作用域。"
     }
@@ -511,18 +657,18 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
     item("steps-card") {
         Card(Modifier.fillMaxWidth()) {
             BasicComponent(
-                title = "1. 在 LSPosed 勾选两个应用",
-                summary = "启用 WatchLink 模块，仅勾选「系统时钟」和「华为运动健康」。无需安装 Magisk 模块，也无需勾选 SystemUI。"
+                title = "1. 在 LSPosed 勾选目标宿主",
+                summary = "启用 WatchLink 模块，核心勾选「系统时钟」和「华为运动健康」；如需同步日历强提醒闹钟，再勾选「系统日历」。无需 Magisk 模块，也无需勾选 SystemUI。"
             )
             HorizontalDivider()
             BasicComponent(
                 title = "2. 开启同步开关即可退出",
-                summary = "重启一次时钟与运动健康（或使用 API 102 热重载），打开首页「同步手机闹钟到手表」后，即可关闭 WatchLink，日常无需后台保活。"
+                summary = "重启一次已勾选宿主（或使用 API 102 热重载），打开首页对应的同步开关后，即可关闭 WatchLink，日常无需后台保活。"
             )
             HorizontalDivider()
             BasicComponent(
                 title = "3. 零进程与防升级失效原理",
-                summary = "开关通过 LSPosed RemotePreferences 持久化，手机重启后时钟与运动健康直接协同推送原生手表闹钟，全程不唤醒 WatchLink。模块内置 DEX 结构解析与按版本缓存机制，即使时钟或运动健康后续更新变更混淆类名，也能自动重新定位适配。"
+                summary = "开关通过 LSPosed RemotePreferences 持久化，手机重启后时钟、日历与运动健康直接协同推送原生手表提醒，全程不唤醒 WatchLink。模块内置 DEX 结构解析与按版本缓存机制，即使宿主更新变更混淆类名，也能自动重新定位适配。"
             )
         }
     }
@@ -534,7 +680,7 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
                 summary = "WatchLink ${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})\n" +
                     "包名：${BuildConfig.APPLICATION_ID}\n" +
                     "框架标准：LSPosed API 102（兼容 API 101）\n" +
-                    "已验证基线：一加时钟 $VERIFIED_CLOCK · 华为运动健康 $VERIFIED_HEALTH"
+                    "已验证基线：一加时钟 $VERIFIED_CLOCK · 一加日历 $VERIFIED_CALENDAR · 华为运动健康 $VERIFIED_HEALTH"
             )
             HorizontalDivider()
             Menu("作者的酷安主页", "查看更新日志、适配说明与问题反馈", onCoolapk)
@@ -550,11 +696,23 @@ private fun CheckLine(label: String, value: String, ink: Color) {
     }
 }
 
-private fun hostStatusSimple(scope: ModuleScope.View?, clock: Boolean): String {
+private fun hostStatusSimple(scope: ModuleScope.View?, target: TargetProfile): String {
     if (scope == null) return "检查中"
-    val active = if (clock) scope.clockActive() else scope.healthActive()
-    val granted = if (clock) scope.clockGranted() else scope.healthGranted()
-    val runtime = if (clock) scope.clockRuntime() else scope.healthRuntime()
+    val active = when (target) {
+        TargetProfile.CLOCK -> scope.clockActive()
+        TargetProfile.CALENDAR -> scope.calendarActive()
+        TargetProfile.HEALTH -> scope.healthActive()
+    }
+    val granted = when (target) {
+        TargetProfile.CLOCK -> scope.clockGranted()
+        TargetProfile.CALENDAR -> scope.calendarGranted()
+        TargetProfile.HEALTH -> scope.healthGranted()
+    }
+    val runtime = when (target) {
+        TargetProfile.CLOCK -> scope.clockRuntime()
+        TargetProfile.CALENDAR -> scope.calendarRuntime()
+        TargetProfile.HEALTH -> scope.healthRuntime()
+    }
     return when {
         scope.frameworkConnected() && !granted -> "未勾选"
         scope.supportsApi102() && runtime.isStale() -> "待热重载（旧版本）"
@@ -564,6 +722,13 @@ private fun hostStatusSimple(scope: ModuleScope.View?, clock: Boolean): String {
         granted -> "已勾选，待重启加载"
         else -> "未确认"
     }
+}
+
+private fun calendarStatusSimple(scope: ModuleScope.View?, checks: HomeChecks): String {
+    if (!checks.calendarTrusted) return "未安装或签名不匹配"
+    if (scope == null) return "检查中"
+    if (scope.frameworkConnected() && !scope.calendarGranted()) return "未启用（可选）"
+    return hostStatusSimple(scope, TargetProfile.CALENDAR)
 }
 
 private fun watchStateSimple(health: HealthHostControl.Reply?): String = when {
@@ -596,10 +761,21 @@ private fun frameworkSummaryText(scope: ModuleScope.View?): String {
     return "$name$ver · $apiLabel"
 }
 
-private fun targetRuntimeText(scope: ModuleScope.View?, clock: Boolean): String {
+private fun targetRuntimeText(scope: ModuleScope.View?, target: TargetProfile): String {
     if (scope == null) return "等待检查"
-    val active = if (clock) scope.clockActive() else scope.healthActive()
-    val runtime = if (clock) scope.clockRuntime() else scope.healthRuntime()
+    val active = when (target) {
+        TargetProfile.CLOCK -> scope.clockActive()
+        TargetProfile.CALENDAR -> scope.calendarActive()
+        TargetProfile.HEALTH -> scope.healthActive()
+    }
+    val runtime = when (target) {
+        TargetProfile.CLOCK -> scope.clockRuntime()
+        TargetProfile.CALENDAR -> scope.calendarRuntime()
+        TargetProfile.HEALTH -> scope.healthRuntime()
+    }
+    if (target == TargetProfile.CALENDAR && scope.frameworkConnected() && !scope.calendarGranted()) {
+        return "未勾选作用域（可选）"
+    }
     val witness = if (active) "宿主已应答" else "宿主未应答"
     if (!scope.supportsApi102() || runtime.state() == "UNSUPPORTED") {
         return "$witness（当前框架未提供 API 102 进程状态）"
@@ -624,6 +800,17 @@ private fun clockResilienceText(clock: ClockHostControl.Reply?): String {
         else -> "状态未知"
     }
     val contract = if (clock.localClockControl()) "反控合约已核验" else "反控合约未匹配（已保护禁用）"
+    return "$source · $contract"
+}
+
+private fun calendarResilienceText(calendar: CalendarHostControl.Reply?): String {
+    if (calendar == null || !calendar.reachable()) return "未启用或待系统日历上线后读取"
+    val source = when (calendar.symbolSource()) {
+        "CACHE" -> "本地缓存命中（零扫描启动）"
+        "DEX_SCAN" -> "DEX 结构自动解析（已写入缓存）"
+        else -> "状态未知"
+    }
+    val contract = if (calendar.localCalendarControl()) "反控合约已核验" else "反控合约未匹配（仅单向提醒）"
     return "$source · $contract"
 }
 
@@ -654,7 +841,10 @@ private fun remotePrefsDetail(state: WatchLinkUiState): String {
         state.healthHost.remotePrefs() -> "已读取"
         else -> "本地回退"
     }
-    return "设置页：$uiSupport · 时钟：$clockSupport · 运动健康：$healthSupport"
+    val calendarPart = if (state.calendarHost?.reachable() == true) {
+        " · 日历：" + if (state.calendarHost.remotePrefs()) "已读取" else "本地回退"
+    } else ""
+    return "设置页：$uiSupport · 时钟：$clockSupport$calendarPart · 运动健康：$healthSupport"
 }
 
 private fun dispatchModeText(mode: String?): String = when (mode) {
@@ -690,11 +880,11 @@ private fun testStateSummary(state: String, mode: String, actionSource: String):
     else -> "测试未完成，请确认手表连接后重试。"
 }
 
-private fun deliverySummarySimple(status: String): String = when (status) {
-    "SENDING" -> "正在推送手机响铃到手表…"
+private fun deliverySummarySimple(status: String, subject: String): String = when (status) {
+    "SENDING" -> "正在推送${subject}响铃到手表…"
     "SENT", "SENT_DIRECT", "SERVICE_RECEIVED" -> "已发往华为运动健康推送至手表。"
-    "OUTBOUND" -> "已成功推送原生闹钟提醒到手表。"
-    "ENDED_BEFORE_OPEN" -> "提醒送达手表前，手机闹钟已结束。"
+    "OUTBOUND" -> "已成功推送原生提醒到手表。"
+    "ENDED_BEFORE_OPEN" -> "提醒送达手表前，${subject}已结束。"
     "DISABLED" -> "当时同步开关处于关闭状态，未推送。"
     "WATCH_UNAVAILABLE" -> "响铃时手表未连接或不支持协同提醒。"
     "HEALTH_UNANSWERED" -> "华为运动健康未应答，请确保其后台正常运行。"
@@ -703,7 +893,7 @@ private fun deliverySummarySimple(status: String): String = when (status) {
     "DENIED" -> "系统拒绝了本次推送请求。"
     "BUSY" -> "已有另一轮提醒正在进行，本次已跳过。"
     "FAILED", "UNAVAILABLE" -> "本次未能推送到手表，可在「测试与诊断」导出日志排查。"
-    else -> "已检测到手机闹钟响铃。"
+    else -> "已检测到${subject}响铃。"
 }
 
 @Composable

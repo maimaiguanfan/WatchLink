@@ -22,6 +22,7 @@ public final class HuaweiReminderService {
     public static final String DEVICE_ACTION = "alarm_clock_msg_from_device";
     public static final String PERMISSION = "com.huawei.health.permission.AUTH_STATE_REQ";
     public static final String ALARM_TITLE = "手机闹钟";
+    public static final String CALENDAR_TITLE = "日程提醒";
     public static final String TEST_TITLE = "WatchLink 测试";
     public static final int SNOOZE_MINUTES = 5;
 

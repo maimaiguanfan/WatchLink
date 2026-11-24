@@ -1,11 +1,13 @@
 package io.github.watchlink.ui
 
 import io.github.watchlink.setup.ModuleScope
+import io.github.watchlink.validation.CalendarHostControl
 import io.github.watchlink.validation.ClockHostControl
 import io.github.watchlink.validation.HealthHostControl
 import io.github.watchlink.validation.HuaweiReminderService
 
 internal const val VERIFIED_CLOCK = "17.6.100"
+internal const val VERIFIED_CALENDAR = "17.6.30"
 internal const val VERIFIED_HEALTH = "17.0.10.330"
 
 internal enum class SetupIssue {
@@ -30,6 +32,9 @@ internal data class HomeChecks(
     val health: HuaweiReminderService.HealthEndpoint,
     val clockHost: ClockHostControl.Reply? = null,
     val healthHost: HealthHostControl.Reply? = null,
+    val calendarVersion: String? = null,
+    val calendarTrusted: Boolean = false,
+    val calendarHost: CalendarHostControl.Reply? = null,
 ) {
     fun issues(scope: ModuleScope.View?): List<SetupIssue> = buildList {
         val stale = scope?.hasStaleTarget() == true

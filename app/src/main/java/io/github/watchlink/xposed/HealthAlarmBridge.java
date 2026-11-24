@@ -6,7 +6,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import androidx.annotation.RequiresApi;
@@ -27,8 +26,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Health :PhoneService bridge.
- * Receives authenticated Clock rings and dispatches Huawei's ExternalPhoneService directly under Health's own UID
- * (zero AUTH_STATE_REQ on external apps, zero Magisk, zero WatchLink process after boot).
+ * Receives authenticated Clock and Calendar strong-reminder rings and dispatches Huawei's
+ * ExternalPhoneService directly under Health's own UID (zero AUTH_STATE_REQ on external apps,
+ * zero Magisk, zero WatchLink process after boot).
  */
 @RequiresApi(34)
 final class HealthAlarmBridge extends BroadcastReceiver {
@@ -54,6 +54,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     private volatile boolean sdkObserverReady;
     private volatile String symbolSource = "DEGRADED";
 
+    private volatile TargetProfile activeDailySource;
     private volatile String activeDailyRun;
     private volatile int activeDailyReminder;
     private volatile String activeDailyDevice;
@@ -119,7 +120,8 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         ProbeLog.info((sdkObserverReady ? "HEALTH_SDK_OBSERVER_READY" : "HEALTH_SDK_OBSERVER_DEGRADED")
                 + " sdk_observer=" + sdkObserverReady);
 
-        settings.onDisabled(() -> worker.execute(this::cancelActiveDailyOnDisable));
+        settings.onDisabled(() -> worker.execute(() -> cancelActiveDailyFor(TargetProfile.CLOCK)));
+        settings.onCalendarDisabled(() -> worker.execute(() -> cancelActiveDailyFor(TargetProfile.CALENDAR)));
 
         IntentFilter filter = new IntentFilter(DailyAlarmWire.OPEN);
         filter.addAction(DailyAlarmWire.END);
@@ -128,10 +130,16 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         controlReceiver = HealthHostControl.register(app, ownerUid, worker, this::handleControl);
         installed = true;
 
-        try {
-            DailyAlarmWire.send(app, DailyAlarmWire.route(DailyAlarmWire.HEALTH_READY, TargetProfile.CLOCK.packageName));
-        } catch (RuntimeException unavailable) {
-            ProbeLog.failure("DAILY_HEALTH_REPORT_UNAVAILABLE", unavailable);
+        notifyAlertSourcesReady();
+    }
+
+    private void notifyAlertSourcesReady() {
+        for (TargetProfile target : new TargetProfile[]{TargetProfile.CLOCK, TargetProfile.CALENDAR}) {
+            try {
+                DailyAlarmWire.send(app, DailyAlarmWire.route(DailyAlarmWire.HEALTH_READY, target.packageName));
+            } catch (RuntimeException unavailable) {
+                ProbeLog.failure("DAILY_HEALTH_REPORT_UNAVAILABLE", unavailable);
+            }
         }
     }
 
@@ -200,6 +208,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     void close() {
         installed = false;
         settings.onDisabled(null);
+        settings.onCalendarDisabled(null);
         daily.stop();
         if (registered) {
             try { app.unregisterReceiver(this); } catch (RuntimeException ignored) {}
@@ -218,7 +227,8 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         if (!DailyAlarmWire.OPEN.equals(action) && !DailyAlarmWire.END.equals(action)) return;
         int uid = getSentFromUid();
         String pkg = getSentFromPackage();
-        if (uid < 0 || !TargetProfile.CLOCK.packageName.equals(pkg) || intent.getComponent() != null
+        TargetProfile senderProfile = TargetProfile.fromPackage(pkg);
+        if (uid < 0 || senderProfile == null || !senderProfile.isAlertSource() || intent.getComponent() != null
                 || !TargetProfile.HEALTH.packageName.equals(intent.getPackage())
                 || (intent.getFlags() & Intent.FLAG_RECEIVER_REGISTERED_ONLY) == 0) {
             return;
@@ -227,8 +237,8 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         try {
             worker.execute(() -> {
                 try {
-                    if (installed && SenderVerifier.verifyReminderSender(app, TargetProfile.CLOCK, uid, pkg)) {
-                        handleDailyClockMessage(intent);
+                    if (installed && SenderVerifier.verifyReminderSender(app, senderProfile, uid, pkg)) {
+                        handleDailyMessage(senderProfile, intent);
                     }
                 } catch (RuntimeException | LinkageError error) {
                     ProbeLog.failure("DAILY_HEALTH_CONTROL_UNAVAILABLE", error);
@@ -241,7 +251,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         }
     }
 
-    private void handleDailyClockMessage(Intent intent) {
+    private void handleDailyMessage(TargetProfile source, Intent intent) {
         String run = intent.getStringExtra("run");
         int reminder = intent.getIntExtra("reminder", 0);
         long at = intent.getLongExtra("at", 0), start = intent.getLongExtra("elapsed", -1);
@@ -250,27 +260,30 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         long wall = System.currentTimeMillis(), elapsed = SystemClock.elapsedRealtime();
         if (DailyAlarmWire.END.equals(intent.getAction())) {
             boolean closeWatch = intent.getBooleanExtra("closeWatch", true);
-            boolean shouldClose = closeWatch && daily.shouldClose(run, reminder, wall, elapsed);
-            daily.end(run, reminder, wall, elapsed);
+            boolean shouldClose = closeWatch && daily.shouldClose(source, run, reminder, wall, elapsed);
+            daily.end(source, run, reminder, wall, elapsed);
             cancelDailyTimeout(run);
-            if (shouldClose && run.equals(activeDailyRun) && reminder == activeDailyReminder) {
+            if (shouldClose && source == activeDailySource && run.equals(activeDailyRun) && reminder == activeDailyReminder) {
                 sender.close(run, reminder, activeDailyDevice);
             }
-            if (run.equals(activeDailyRun)) clearActiveDailyMeta();
+            if (source == activeDailySource && run.equals(activeDailyRun)) clearActiveDailyMeta();
             return;
         }
 
         if (!DailyAlarmWire.inWindow(at, start, PhoneRingWire.MAX_AGE, wall, elapsed)) return;
-        if (!settings.isEnabled()) {
-            dailyReport(new DailyAlarmObservation.Evidence(run, reminder, "DISABLED", wall, elapsed), "");
+        if (!settings.isEnabledFor(source)) {
+            dailyReport(new DailyAlarmObservation.Evidence(source, run, reminder, "DISABLED", wall, elapsed), "");
             return;
         }
 
-        // A real phone alarm always preempts a standalone manual test reminder.
+        // A real phone alarm or calendar strong reminder always preempts a standalone manual test reminder.
         if (activeTest != null) cancelTestLocked(true);
 
         String title = DailyReminderTitle.forWatch(intent.getStringExtra("title"));
-        if (title == null) title = HuaweiReminderService.ALARM_TITLE;
+        if (title == null) {
+            title = source == TargetProfile.CALENDAR
+                    ? HuaweiReminderService.CALENDAR_TITLE : HuaweiReminderService.ALARM_TITLE;
+        }
         int snoozeMinutes = intent.getIntExtra("snoozeMinutes", 0);
         if (snoozeMinutes != 0 && !PhoneRingWire.validSnooze(snoozeMinutes)) snoozeMinutes = 0;
         String identifier = intent.getStringExtra("openIdentifier");
@@ -279,20 +292,21 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         if (sdkObserverReady && readiness != null) {
             WatchCheck check = checkWatch();
             if (!check.canSend()) {
-                dailyReport(new DailyAlarmObservation.Evidence(run, reminder, "WATCH_UNAVAILABLE", wall, elapsed), "");
+                dailyReport(new DailyAlarmObservation.Evidence(source, run, reminder, "WATCH_UNAVAILABLE", wall, elapsed), "");
                 return;
             }
             deviceMac = check.rawDevice();
         }
 
-        String armed = daily.arm(run, reminder, at, start, deviceMac, identifier, wall, elapsed,
+        String armed = daily.arm(source, run, reminder, at, start, deviceMac, identifier, wall, elapsed,
                 sdkObserverReady && deviceMac != null);
         if (armed == null) return;
         if (!"READY".equals(armed)) {
-            dailyReport(new DailyAlarmObservation.Evidence(run, reminder, "BUSY", wall, elapsed), "");
+            dailyReport(new DailyAlarmObservation.Evidence(source, run, reminder, "BUSY", wall, elapsed), "");
             return;
         }
 
+        activeDailySource = source;
         activeDailyRun = run;
         activeDailyReminder = reminder;
         activeDailyDevice = deviceMac;
@@ -305,21 +319,22 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         if (!dispatch.accepted()) {
             daily.abort(run, reminder);
             clearActiveDailyMeta();
-            dailyReport(new DailyAlarmObservation.Evidence(run, reminder, dispatch.error(), wall, elapsed), "");
+            dailyReport(new DailyAlarmObservation.Evidence(source, run, reminder, dispatch.error(), wall, elapsed), "");
             return;
         }
 
-        scheduleDailyTimeout(run, reminder, deviceMac);
+        scheduleDailyTimeout(source, run, reminder, deviceMac);
         String sentKind = dispatch.isDirect() ? "SENT_DIRECT" : "SENT";
-        dailyReport(new DailyAlarmObservation.Evidence(run, reminder, sentKind, wall, elapsed), dispatch.mode());
+        dailyReport(new DailyAlarmObservation.Evidence(source, run, reminder, sentKind, wall, elapsed), dispatch.mode());
     }
 
-    private void scheduleDailyTimeout(String run, int reminder, String deviceMac) {
+    private void scheduleDailyTimeout(TargetProfile source, String run, int reminder, String deviceMac) {
         if (dailySafetyClose != null) dailySafetyClose.cancel(false);
         dailySafetyClose = worker.schedule(() -> {
             long nowWall = System.currentTimeMillis(), nowElapsed = SystemClock.elapsedRealtime();
-            if (run.equals(activeDailyRun) && daily.shouldClose(run, reminder, nowWall, nowElapsed)) {
-                daily.end(run, reminder, nowWall, nowElapsed);
+            if (source == activeDailySource && run.equals(activeDailyRun)
+                    && daily.shouldClose(source, run, reminder, nowWall, nowElapsed)) {
+                daily.end(source, run, reminder, nowWall, nowElapsed);
                 sender.close(run, reminder, deviceMac);
                 clearActiveDailyMeta();
             }
@@ -333,20 +348,22 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         }
     }
 
-    private void cancelActiveDailyOnDisable() {
+    private void cancelActiveDailyFor(TargetProfile source) {
+        if (source == null || source != activeDailySource) return;
         String run = activeDailyRun;
         int reminder = activeDailyReminder;
         String deviceMac = activeDailyDevice;
         if (run == null || reminder <= 0) return;
         long wall = System.currentTimeMillis(), elapsed = SystemClock.elapsedRealtime();
-        boolean shouldClose = daily.shouldClose(run, reminder, wall, elapsed);
-        daily.end(run, reminder, wall, elapsed);
+        boolean shouldClose = daily.shouldClose(source, run, reminder, wall, elapsed);
+        daily.end(source, run, reminder, wall, elapsed);
         cancelDailyTimeout(run);
         if (shouldClose) sender.close(run, reminder, deviceMac);
         clearActiveDailyMeta();
     }
 
     private void clearActiveDailyMeta() {
+        activeDailySource = null;
         activeDailyRun = null;
         activeDailyReminder = 0;
         activeDailyDevice = null;
@@ -474,8 +491,8 @@ final class HealthAlarmBridge extends BroadcastReceiver {
 
     private void dailyReport(DailyAlarmObservation.Evidence evidence, String dispatchMode) {
         try {
-            if (!installed) return;
-            Intent status = DailyAlarmWire.route(DailyAlarmWire.STATUS, TargetProfile.CLOCK.packageName)
+            if (!installed || evidence.source() == null) return;
+            Intent status = DailyAlarmWire.route(DailyAlarmWire.STATUS, evidence.source().packageName)
                     .putExtra("run", evidence.run())
                     .putExtra("reminder", evidence.reminder())
                     .putExtra("kind", evidence.kind())
@@ -487,7 +504,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
             }
             DailyAlarmWire.send(app, status);
             if (!"ACTION_DUAL_CONFIRMED".equals(evidence.kind())) {
-                ProbeLog.info("DAILY_HEALTH_" + evidence.kind());
+                ProbeLog.info("DAILY_HEALTH_" + evidence.kind() + " source=" + evidence.source());
             }
         } catch (RuntimeException error) {
             ProbeLog.failure("DAILY_HEALTH_REPORT_UNAVAILABLE", error);
@@ -514,7 +531,12 @@ final class HealthAlarmBridge extends BroadcastReceiver {
             case HealthHostControl.ENABLE -> settings.setLocalFallback(true);
             case HealthHostControl.DISABLE -> {
                 settings.setLocalFallback(false);
-                cancelActiveDailyOnDisable();
+                cancelActiveDailyFor(TargetProfile.CLOCK);
+            }
+            case HealthHostControl.ENABLE_CALENDAR -> settings.setLocalCalendarFallback(true);
+            case HealthHostControl.DISABLE_CALENDAR -> {
+                settings.setLocalCalendarFallback(false);
+                cancelActiveDailyFor(TargetProfile.CALENDAR);
             }
             case HealthHostControl.TEST -> startManualTestLocked();
             case HealthHostControl.CANCEL_TEST -> cancelTestLocked(true);
@@ -524,6 +546,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         return new HealthHostControl.Reply(
                 true,
                 settings.isEnabled(),
+                settings.isCalendarEnabled(),
                 settings.remoteAvailable(),
                 serviceWitnessReady,
                 sdkObserverReady,

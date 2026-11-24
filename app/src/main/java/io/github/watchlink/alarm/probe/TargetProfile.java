@@ -5,11 +5,14 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
-/** Trusted host package identities and process names for live alarm reminders. */
+/** Trusted host package identities and process names for live alarm and calendar reminders. */
 public enum TargetProfile {
     CLOCK("com.coloros.alarmclock",
             certificates("159e6f37c336f2f41272542dbc1dc85721dd567ed4ac68ac13f2e43003ce0dce",
                     "64aafaf1d5bc9155a9e417a849e4f8eda1d0d1341667c28ed7c443c76f820b9a")),
+    CALENDAR("com.coloros.calendar",
+            certificates("4e61b5b0c669ff77214bbc321c85f54e4d86d60c446f14ac4f126d4e66f71cd7",
+                    "7e18a2f30df7f24934d856fca0ba721bc94c728898f30cccbbab398606c921ac")),
     HEALTH("com.huawei.health",
             certificates("b92825c2bd5d6d6d1e7f39eecd17843b7d9016f611136b75441bc6f4d3f00f05"));
 
@@ -36,8 +39,12 @@ public enum TargetProfile {
         return null;
     }
 
-    /** Clock runs in its main process; Huawei Health handles watch alarms in :PhoneService. */
+    public boolean isAlertSource() {
+        return this == CLOCK || this == CALENDAR;
+    }
+
+    /** Clock and Calendar run in their main processes; Huawei Health handles watch alarms in :PhoneService. */
     public boolean isReminderProcess(String processName) {
-        return (this == CLOCK ? packageName : packageName + ":PhoneService").equals(processName);
+        return (this == HEALTH ? packageName + ":PhoneService" : packageName).equals(processName);
     }
 }

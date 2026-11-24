@@ -83,7 +83,32 @@ public class HostSettingsTest {
         HostSettings settings = new HostSettings(null, local);
         assertFalse(settings.remoteAvailable());
         assertFalse(settings.isEnabled());
+        assertFalse(settings.isCalendarEnabled());
         assertTrue(settings.setLocalFallback(true));
         assertTrue(settings.isEnabled());
+        assertFalse(settings.isCalendarEnabled());
+        assertTrue(settings.setLocalCalendarFallback(true));
+        assertTrue(settings.isCalendarEnabled());
+    }
+
+    @Test public void calendarToggleRemainsIndependentAndNotifiesWhenDisabled() {
+        MemoryPrefs remote = new MemoryPrefs();
+        MemoryPrefs local = new MemoryPrefs();
+        HostSettings settings = new HostSettings(remote, local);
+        AtomicInteger clockDisabled = new AtomicInteger();
+        AtomicInteger calDisabled = new AtomicInteger();
+        settings.onDisabled(clockDisabled::incrementAndGet);
+        settings.onCalendarDisabled(calDisabled::incrementAndGet);
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_ENABLED, true).commit();
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, true).commit();
+        assertTrue(settings.isEnabled());
+        assertTrue(settings.isCalendarEnabled());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, false).commit();
+        assertTrue(settings.isEnabled());
+        assertFalse(settings.isCalendarEnabled());
+        assertEquals(0, clockDisabled.get());
+        assertEquals(1, calDisabled.get());
     }
 }

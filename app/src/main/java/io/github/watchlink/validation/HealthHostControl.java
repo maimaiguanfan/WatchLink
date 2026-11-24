@@ -26,6 +26,7 @@ import java.util.function.Consumer;
 /** On-demand settings UI query, fallback toggle sync, and standalone watch test on Health :PhoneService. */
 public final class HealthHostControl {
     public static final String QUERY = "QUERY", ENABLE = "ENABLE", DISABLE = "DISABLE",
+            ENABLE_CALENDAR = "ENABLE_CALENDAR", DISABLE_CALENDAR = "DISABLE_CALENDAR",
             TEST = "TEST", CANCEL_TEST = "CANCEL_TEST";
     private static final String ACTION = BuildConfig.APPLICATION_ID + ".cooperative.HEALTH_CONTROL_V1";
     private static final int ACK = 1;
@@ -44,12 +45,21 @@ public final class HealthHostControl {
             "SNOOZE", "DISMISS", "CLOSED", "WATCH_UNAVAILABLE", "BUSY",
             "BACKGROUND_RESTRICTED", "DENIED", "FAILED");
 
-    public record Reply(boolean reachable, boolean enabled, boolean remotePrefs,
+    public record Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
                         boolean serviceWitness, boolean sdkObserver, String symbolSource,
                         String watchState, String lastDispatchMode, String lastActionSource,
                         String testState, String testDispatchMode, String testActionSource) {
+        public Reply(boolean reachable, boolean enabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource) {
+            this(reachable, enabled, false, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource);
+        }
+
         public Reply {
             enabled = reachable && enabled;
+            calendarEnabled = reachable && calendarEnabled;
             remotePrefs = reachable && remotePrefs;
             serviceWitness = reachable && serviceWitness;
             sdkObserver = reachable && sdkObserver;
@@ -71,11 +81,12 @@ public final class HealthHostControl {
 
     private static boolean validCommand(String value) {
         return QUERY.equals(value) || ENABLE.equals(value) || DISABLE.equals(value)
+                || ENABLE_CALENDAR.equals(value) || DISABLE_CALENDAR.equals(value)
                 || TEST.equals(value) || CANCEL_TEST.equals(value);
     }
 
     public static Reply unavailable() {
-        return new Reply(false, false, false, false, false, "UNKNOWN",
+        return new Reply(false, false, false, false, false, false, "UNKNOWN",
                 "UNKNOWN", "NONE", "NONE", "IDLE", "NONE", "NONE");
     }
 
@@ -103,6 +114,7 @@ public final class HealthHostControl {
                             Bundle details = new Bundle();
                             details.putString("request", id);
                             details.putBoolean("enabled", reply.enabled());
+                            details.putBoolean("calendarEnabled", reply.calendarEnabled());
                             details.putBoolean("remotePrefs", reply.remotePrefs());
                             details.putBoolean("serviceWitness", reply.serviceWitness());
                             details.putBoolean("sdkObserver", reply.sdkObserver());
@@ -161,6 +173,7 @@ public final class HealthHostControl {
                                     && data.containsKey("enabled")) {
                                 callback.accept(new Reply(true,
                                         data.getBoolean("enabled"),
+                                        data.getBoolean("calendarEnabled", false),
                                         data.getBoolean("remotePrefs"),
                                         data.getBoolean("serviceWitness"),
                                         data.getBoolean("sdkObserver"),

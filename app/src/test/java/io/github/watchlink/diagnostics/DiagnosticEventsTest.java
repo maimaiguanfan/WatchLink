@@ -18,6 +18,10 @@ public final class DiagnosticEventsTest {
                 "HEALTH_TEST_STATUS result=SNOOZE action_source=SDK_AND_INTENT secret=abc"));
         assertEquals("CLOCK_SYMBOLS_RESOLVED source=CLOCK resolver=DEX_SCAN", DiagnosticEvents.event(
                 "CLOCK_SYMBOLS_RESOLVED source=CLOCK resolver=DEX_SCAN class=secret"));
+        assertEquals("CALENDAR_SYMBOLS_RESOLVED source=CALENDAR resolver=CACHE", DiagnosticEvents.event(
+                "CALENDAR_SYMBOLS_RESOLVED source=CALENDAR resolver=CACHE title=meeting"));
+        assertEquals("CALENDAR_LIVE_ACTION operation=SNOOZE ui_mode=LOCK_SCREEN result=APPLIED", DiagnosticEvents.event(
+                "CALENDAR_LIVE_ACTION operation=SNOOZE ui_mode=LOCK_SCREEN result=APPLIED title=private"));
         assertEquals("MODULE_HOT_RELOADED source=HEALTH api=102", DiagnosticEvents.event(
                 "MODULE_HOT_RELOADED source=HEALTH api=102 path=/data/app/x"));
         assertEquals("HOT_RELOAD_RESULT result=SUCCEEDED", DiagnosticEvents.event(

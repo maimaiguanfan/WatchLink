@@ -22,6 +22,7 @@ import io.github.watchlink.setup.ModuleScope
 import io.github.watchlink.ui.HomeChecks
 import io.github.watchlink.ui.WatchLinkApp
 import io.github.watchlink.ui.WatchLinkUiState
+import io.github.watchlink.validation.CalendarHostControl
 import io.github.watchlink.validation.ClockHostControl
 import io.github.watchlink.validation.HealthHostControl
 import io.github.watchlink.validation.HuaweiReminderService
@@ -46,10 +47,13 @@ class MainActivity : ComponentActivity() {
             WatchLinkApp(
                 state = ui,
                 onEnable = ::setEnabled,
+                onCalendarEnable = ::setCalendarEnabled,
                 onDismissMessage = { ui = ui.copy(message = null) },
                 onClock = { open(Intent(AlarmClock.ACTION_SHOW_ALARMS).setPackage(TargetProfile.CLOCK.packageName)) },
+                onCalendar = { open(packageManager.getLaunchIntentForPackage(TargetProfile.CALENDAR.packageName)) },
                 onHealth = { open(packageManager.getLaunchIntentForPackage(TargetProfile.HEALTH.packageName)) },
                 onRequestScope = ::requestScope,
+                onRequestCalendarScope = ::requestCalendarScope,
                 onHotReload = ::triggerHotReload,
                 onRefresh = { lifecycleScope.launch { refreshAll(forceScope = true) } },
                 onHealthDownload = { open(Intent(Intent.ACTION_VIEW, "https://consumer.huawei.com/cn/support/content/zh-cn15981770/".toUri())) },
@@ -84,6 +88,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private suspend fun calendarCommand(action: String): CalendarHostControl.Reply =
+        suspendCancellableCoroutine { continuation ->
+            CalendarHostControl.send(applicationContext, action) { reply ->
+                if (continuation.isActive) continuation.resume(reply)
+            }
+        }
+
     private suspend fun healthCommand(action: String): HealthHostControl.Reply =
         suspendCancellableCoroutine { continuation ->
             HealthHostControl.send(applicationContext, action) { reply ->
@@ -98,6 +109,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private suspend fun writeRemoteCalendarEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteCalendarEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
     private suspend fun hotReloadTargets(onlyStale: Boolean): String =
         suspendCancellableCoroutine { continuation ->
             ModuleScope.hotReloadTargets(applicationContext, onlyStale) { outcome ->
@@ -106,29 +124,28 @@ class MainActivity : ComponentActivity() {
         }
 
     private suspend fun queryHosts() {
-        if (ui.saving) return
+        if (ui.saving || ui.calendarSaving) return
         val revision = ++switchRevision
-        val (clockReply, healthReply) = coroutineScope {
+        val (clockReply, calendarReply, healthReply) = coroutineScope {
             val clockJob = async { clockCommand(ClockHostControl.QUERY) }
+            val calendarJob = async { calendarCommand(CalendarHostControl.QUERY) }
             val healthJob = async { healthCommand(HealthHostControl.QUERY) }
-            clockJob.await() to healthJob.await()
+            Triple(clockJob.await(), calendarJob.await(), healthJob.await())
         }
         if (revision == switchRevision) {
-            ui = ui.copy(clockHost = clockReply, healthHost = healthReply)
+            ui = ui.copy(clockHost = clockReply, calendarHost = calendarReply, healthHost = healthReply)
         }
     }
 
     private suspend fun readChecks() {
         val currentClock = ui.clockHost
+        val currentCalendar = ui.calendarHost
         val currentHealth = ui.healthHost
         val checks = withContext(Dispatchers.IO) {
             runCatching {
-                val clockVersion = try {
-                    packageManager.getPackageInfo(TargetProfile.CLOCK.packageName, 0).versionName
-                } catch (_: PackageManager.NameNotFoundException) { null }
-                val healthVersion = try {
-                    packageManager.getPackageInfo(TargetProfile.HEALTH.packageName, 0).versionName
-                } catch (_: PackageManager.NameNotFoundException) { null }
+                val clockVersion = readVersion(TargetProfile.CLOCK.packageName)
+                val calendarVersion = readVersion(TargetProfile.CALENDAR.packageName)
+                val healthVersion = readVersion(TargetProfile.HEALTH.packageName)
                 HomeChecks(
                     clockVersion = clockVersion,
                     clockTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.CLOCK),
@@ -136,10 +153,19 @@ class MainActivity : ComponentActivity() {
                     health = HuaweiReminderService.inspectHealthEndpoint(applicationContext),
                     clockHost = currentClock,
                     healthHost = currentHealth,
+                    calendarVersion = calendarVersion,
+                    calendarTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.CALENDAR),
+                    calendarHost = currentCalendar,
                 )
             }.getOrNull()
         }
         ui = ui.copy(checks = checks, readError = checks == null)
+    }
+
+    private fun readVersion(pkg: String): String? = try {
+        packageManager.getPackageInfo(pkg, 0).versionName
+    } catch (_: PackageManager.NameNotFoundException) {
+        null
     }
 
     private suspend fun refreshScope(force: Boolean) {
@@ -160,6 +186,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestCalendarScope() {
+        lifecycleScope.launch {
+            val scope = withContext(Dispatchers.IO) {
+                ModuleScope.requestCalendar(applicationContext)
+                ModuleScope.inspect()
+            }
+            ui = ui.copy(scope = scope)
+        }
+    }
+
     private fun triggerHotReload(onlyStale: Boolean) {
         if (ui.reloading) return
         ui = ui.copy(reloading = true, message = null)
@@ -172,7 +208,7 @@ class MainActivity : ComponentActivity() {
                 message = when (outcome) {
                     "SUCCEEDED" -> "宿主已完成热重载，新版本模块已生效。"
                     "IN_PROGRESS" -> "宿主正在热重载，请稍后刷新查看结果。"
-                    "UNSUPPORTED" -> "当前框架不支持热重载，请手动重启系统时钟与华为运动健康。"
+                    "UNSUPPORTED" -> "当前框架不支持热重载，请手动重启目标宿主应用。"
                     "NO_TARGETS" -> "当前没有需要热重载的运行中宿主。"
                     "PROCESS_DIED" -> "宿主进程已重启，请稍后刷新确认生效状态。"
                     else -> "热重载未完成（可能正在响铃保护或被框架拒绝），可稍后重试或手动重启宿主。"
@@ -206,6 +242,41 @@ class MainActivity : ComponentActivity() {
                 message = when {
                     !saved -> "未能保存开关状态。请确认 LSPosed 已启用，或先打开系统时钟和运动健康后再试。"
                     !remoteOk && (!clockReply.reachable() || !healthReply.reachable()) ->
+                        "已保存到当前在线宿主；离线宿主打开后请重新核对。"
+                    else -> null
+                },
+            )
+            readChecks()
+        }
+    }
+
+    private fun setCalendarEnabled(enable: Boolean) {
+        if (ui.calendarSaving) return
+        ++switchRevision
+        ui = ui.copy(calendarSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteCalendarEnabled(enable)
+            val calAction = if (enable) CalendarHostControl.ENABLE else CalendarHostControl.DISABLE
+            val healthAction = if (enable) HealthHostControl.ENABLE_CALENDAR else HealthHostControl.DISABLE_CALENDAR
+            val (calendarReply, healthReply) = coroutineScope {
+                val calJob = async { calendarCommand(calAction) }
+                val healthJob = async { healthCommand(healthAction) }
+                calJob.await() to healthJob.await()
+            }
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val anyHostSaved = (calendarReply.reachable() && calendarReply.enabled() == enable)
+                    || (healthReply.reachable() && healthReply.calendarEnabled() == enable)
+            val saved = remoteOk || anyHostSaved
+            ui = ui.copy(
+                scope = scopeNow,
+                calendarHost = calendarReply,
+                healthHost = healthReply,
+                calendarSaving = false,
+                message = when {
+                    !saved -> "未能保存日历强提醒开关状态。请确认 LSPosed 已启用，或先打开系统日历与运动健康后再试。"
+                    enable && scopeNow.frameworkConnected() && !scopeNow.calendarGranted() ->
+                        "已开启日历强提醒开关，请点击下方「申请系统日历作用域」完成授权。"
+                    !remoteOk && (!calendarReply.reachable() || !healthReply.reachable()) ->
                         "已保存到当前在线宿主；离线宿主打开后请重新核对。"
                     else -> null
                 },

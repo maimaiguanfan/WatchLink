@@ -7,7 +7,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import io.github.libxposed.service.HookedTarget;
-import io.github.libxposed.service.HotReloadResult;
 import io.github.libxposed.service.XposedService;
 import io.github.libxposed.service.XposedServiceHelper;
 import io.github.watchlink.alarm.probe.ProbeLog;
@@ -29,6 +28,8 @@ import java.util.function.Consumer;
 public final class ModuleScope {
     public static final List<String> REQUIRED_PACKAGES = List.of(
             TargetProfile.CLOCK.packageName, TargetProfile.HEALTH.packageName);
+    public static final List<String> OPTIONAL_PACKAGES = List.of(
+            TargetProfile.CALENDAR.packageName);
 
     public record TargetRuntime(String state, long loadedVersionCode) {
         public static final TargetRuntime UNSUPPORTED = new TargetRuntime("UNSUPPORTED", 0);
@@ -51,16 +52,20 @@ public final class ModuleScope {
                        String frameworkName,
                        String frameworkVersion,
                        int frameworkApiVersion,
-                       boolean clockGranted, boolean healthGranted,
-                       boolean clockActive, boolean healthActive,
-                       TargetRuntime clockRuntime, TargetRuntime healthRuntime,
+                       boolean clockGranted, boolean healthGranted, boolean calendarGranted,
+                       boolean clockActive, boolean healthActive, boolean calendarActive,
+                       TargetRuntime clockRuntime, TargetRuntime healthRuntime, TargetRuntime calendarRuntime,
                        boolean checking,
                        boolean requestPending, String requestResult,
-                       boolean remotePrefsSupported, Boolean remoteEnabled) {
+                       boolean remotePrefsSupported, Boolean remoteEnabled, Boolean remoteCalendarEnabled) {
         public boolean configured() { return frameworkConnected && clockGranted && healthGranted; }
 
         public boolean active() {
             return clockActive && healthActive && (!frameworkConnected || configured());
+        }
+
+        public boolean calendarReady() {
+            return calendarActive && (!frameworkConnected || calendarGranted);
         }
 
         public boolean supportsApi102() {
@@ -68,11 +73,13 @@ public final class ModuleScope {
         }
 
         public boolean hasStaleTarget() {
-            return supportsApi102() && (clockRuntime.isStale() || healthRuntime.isStale());
+            return supportsApi102() && (clockRuntime.isStale() || healthRuntime.isStale()
+                    || (calendarGranted && calendarRuntime.isStale()));
         }
 
         public boolean canHotReloadAny() {
-            return supportsApi102() && (clockRuntime.isRunning() || healthRuntime.isRunning());
+            return supportsApi102()
+                    && (clockRuntime.isRunning() || healthRuntime.isRunning() || calendarRuntime.isRunning());
         }
     }
 
@@ -80,7 +87,9 @@ public final class ModuleScope {
     private static final long REFRESH_INTERVAL_MS = 5_000;
     private static final long REQUEST_TIMEOUT_MS = 120_000;
     private static final long HOT_RELOAD_TIMEOUT_MS = 8_000;
-    private static final TargetProfile[] TARGETS = {TargetProfile.CLOCK, TargetProfile.HEALTH};
+    private static final TargetProfile[] TARGETS = {
+            TargetProfile.CLOCK, TargetProfile.CALENDAR, TargetProfile.HEALTH
+    };
     private static final ScheduledThreadPoolExecutor worker = new ScheduledThreadPoolExecutor(1, task -> {
         Thread thread = new Thread(task, "WatchLink-scope");
         thread.setDaemon(true);
@@ -93,9 +102,10 @@ public final class ModuleScope {
 
     private static volatile View snapshot = new View(
             false, "", "", 0,
-            false, false, false, false,
-            TargetRuntime.UNSUPPORTED, TargetRuntime.UNSUPPORTED,
-            false, false, "IDLE", false, null);
+            false, false, false,
+            false, false, false,
+            TargetRuntime.UNSUPPORTED, TargetRuntime.UNSUPPORTED, TargetRuntime.UNSUPPORTED,
+            false, false, "IDLE", false, null, null);
     private static boolean listening;
     private static XposedService framework;
     private static String frameworkName = "";
@@ -104,21 +114,28 @@ public final class ModuleScope {
     private static List<String> grants;
     private static boolean remotePrefsSupported;
     private static Boolean remoteEnabled;
+    private static Boolean remoteCalendarEnabled;
     private static TargetRuntime clockRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime healthRuntime = TargetRuntime.UNSUPPORTED;
+    private static TargetRuntime calendarRuntime = TargetRuntime.UNSUPPORTED;
     private static final Map<TargetProfile, HookedTarget> runningTargets = new HashMap<>();
     private static final Set<String> awaiting = new HashSet<>();
+    private static List<String> awaitingRequested = List.of();
     private static long requestId;
     private static boolean requestFailed;
     private static String result = "IDLE";
     private static long lastProbe = -REFRESH_INTERVAL_MS;
     private static Probe probe;
-    private static boolean clockActive, healthActive;
+    private static boolean clockActive, healthActive, calendarActive;
 
     public static View inspect() { return snapshot; }
 
     static List<String> missingFrom(List<String> granted) {
-        List<String> missing = new ArrayList<>(REQUIRED_PACKAGES);
+        return missingPackages(REQUIRED_PACKAGES, granted);
+    }
+
+    static List<String> missingPackages(List<String> wanted, List<String> granted) {
+        List<String> missing = new ArrayList<>(wanted);
         if (granted != null) missing.removeAll(granted);
         return missing;
     }
@@ -151,8 +168,17 @@ public final class ModuleScope {
         });
     }
 
-    /** Persists the user toggle to LSPosed RemotePreferences so hosts read it across reboots with zero owner process. */
+    /** Persists the Clock alarm toggle to LSPosed RemotePreferences so hosts read it across reboots with zero owner process. */
     public static void writeRemoteEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_ENABLED, enabled, callback);
+    }
+
+    /** Persists the Calendar strong-reminder toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteCalendarEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, enabled, callback);
+    }
+
+    private static void writeRemoteBoolean(String key, boolean enabled, Consumer<Boolean> callback) {
         worker.execute(() -> {
             listen();
             boolean written = false;
@@ -161,12 +187,13 @@ public final class ModuleScope {
                 try {
                     SharedPreferences prefs = service.getRemotePreferences(WatchLinkPrefs.GROUP);
                     written = prefs.edit()
-                            .putBoolean(WatchLinkPrefs.KEY_ENABLED, enabled)
+                            .putBoolean(key, enabled)
                             .putLong(WatchLinkPrefs.KEY_UPDATED_AT, System.currentTimeMillis())
                             .commit();
                     if (written) {
                         remotePrefsSupported = true;
-                        remoteEnabled = enabled;
+                        if (WatchLinkPrefs.KEY_ENABLED.equals(key)) remoteEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_CALENDAR_ENABLED.equals(key)) remoteCalendarEnabled = enabled;
                         ProbeLog.info("REMOTE_PREFS_SAVED");
                         publish();
                     }
@@ -180,8 +207,8 @@ public final class ModuleScope {
     }
 
     /**
-     * Triggers LSPosed API 102 controlled hot reload on running Clock / Health :PhoneService targets.
-     * Calls back once on the main thread with SUCCEEDED, DEFERRED, UNSUPPORTED, FAILED, or NO_TARGETS.
+     * Triggers LSPosed API 102 controlled hot reload on running Clock / Calendar / Health :PhoneService targets.
+     * Calls back once on the main thread with SUCCEEDED, IN_PROGRESS, UNSUPPORTED, FAILED, PROCESS_DIED, or NO_TARGETS.
      */
     public static void hotReloadTargets(Context owner, boolean onlyStale, Consumer<String> callback) {
         Context app = owner.getApplicationContext();
@@ -254,8 +281,17 @@ public final class ModuleScope {
         new Handler(Looper.getMainLooper()).post(() -> callback.accept(status));
     }
 
-    /** Prompts LSPosed only for missing Clock/Health scopes declared in scope.list. */
+    /** Prompts LSPosed only for missing core Clock/Health scopes declared in scope.list. */
     public static void request(Context owner) {
+        requestPackages(owner, REQUIRED_PACKAGES);
+    }
+
+    /** Prompts LSPosed for the optional ColorOS Calendar scope declared in scope.list. */
+    public static void requestCalendar(Context owner) {
+        requestPackages(owner, OPTIONAL_PACKAGES);
+    }
+
+    private static void requestPackages(Context owner, List<String> wanted) {
         refresh(owner, true);
         worker.execute(() -> {
             if (!awaiting.isEmpty()) return;
@@ -265,7 +301,7 @@ public final class ModuleScope {
                 publish();
                 return;
             }
-            List<String> missing = missingFrom(grants);
+            List<String> missing = missingPackages(wanted, grants);
             if (missing.isEmpty()) {
                 result = "ALREADY_GRANTED";
                 publish();
@@ -274,6 +310,7 @@ public final class ModuleScope {
             XposedService service = framework;
             long attempt = ++requestId;
             requestFailed = false;
+            awaitingRequested = List.copyOf(wanted);
             awaiting.addAll(missing);
             result = "PENDING";
             publish();
@@ -296,7 +333,8 @@ public final class ModuleScope {
                 if (service == framework && attempt == requestId && !awaiting.isEmpty()) {
                     readFrameworkState();
                     awaiting.clear();
-                    result = grants != null && missingFrom(grants).isEmpty() ? "GRANTED" : "UNAVAILABLE";
+                    result = grants != null && missingPackages(awaitingRequested, grants).isEmpty()
+                            ? "GRANTED" : "UNAVAILABLE";
                     publish();
                 }
             }, REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS);
@@ -308,7 +346,7 @@ public final class ModuleScope {
         requestFailed |= !approved;
         readFrameworkState();
         if (awaiting.isEmpty()) {
-            if (grants != null && missingFrom(grants).isEmpty()) result = "GRANTED";
+            if (grants != null && missingPackages(awaitingRequested, grants).isEmpty()) result = "GRANTED";
             else result = requestFailed ? "DENIED" : "UNAVAILABLE";
         }
         publish();
@@ -345,11 +383,14 @@ public final class ModuleScope {
         grants = null;
         remotePrefsSupported = false;
         remoteEnabled = null;
+        remoteCalendarEnabled = null;
         clockRuntime = TargetRuntime.UNSUPPORTED;
         healthRuntime = TargetRuntime.UNSUPPORTED;
+        calendarRuntime = TargetRuntime.UNSUPPORTED;
         runningTargets.clear();
         if (!awaiting.isEmpty()) result = "UNAVAILABLE";
         awaiting.clear();
+        awaitingRequested = List.of();
     }
 
     private static boolean supportsRemote(XposedService service) {
@@ -370,11 +411,13 @@ public final class ModuleScope {
         grants = null;
         remotePrefsSupported = false;
         remoteEnabled = null;
+        remoteCalendarEnabled = null;
         runningTargets.clear();
         XposedService service = framework;
         if (service == null) {
             clockRuntime = TargetRuntime.UNSUPPORTED;
             healthRuntime = TargetRuntime.UNSUPPORTED;
+            calendarRuntime = TargetRuntime.UNSUPPORTED;
             return;
         }
         try {
@@ -395,6 +438,8 @@ public final class ModuleScope {
                 remotePrefsSupported = true;
                 remoteEnabled = prefs.contains(WatchLinkPrefs.KEY_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_ENABLED, false) : null;
+                remoteCalendarEnabled = prefs.contains(WatchLinkPrefs.KEY_CALENDAR_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, false) : null;
             } catch (RuntimeException error) {
                 ProbeLog.failure("REMOTE_PREFS_READ_FAILED", error);
             }
@@ -404,6 +449,7 @@ public final class ModuleScope {
                 List<HookedTarget> targets = service.getRunningTargets();
                 clockRuntime = TargetRuntime.ABSENT;
                 healthRuntime = TargetRuntime.ABSENT;
+                calendarRuntime = TargetRuntime.ABSENT;
                 if (targets != null) {
                     for (HookedTarget target : targets) {
                         if (target == null || target.getProcessName() == null) continue;
@@ -415,22 +461,27 @@ public final class ModuleScope {
                         } else if (TargetProfile.HEALTH.isReminderProcess(proc)) {
                             runningTargets.put(TargetProfile.HEALTH, target);
                             healthRuntime = classifyState(state, target.getLoadedVersionCode());
+                        } else if (TargetProfile.CALENDAR.isReminderProcess(proc)) {
+                            runningTargets.put(TargetProfile.CALENDAR, target);
+                            calendarRuntime = classifyState(state, target.getLoadedVersionCode());
                         }
                     }
                 }
             } catch (RuntimeException error) {
                 clockRuntime = TargetRuntime.UNSUPPORTED;
                 healthRuntime = TargetRuntime.UNSUPPORTED;
+                calendarRuntime = TargetRuntime.UNSUPPORTED;
             }
         } else {
             clockRuntime = TargetRuntime.UNSUPPORTED;
             healthRuntime = TargetRuntime.UNSUPPORTED;
+            calendarRuntime = TargetRuntime.UNSUPPORTED;
         }
     }
 
     private static final class Probe {
         final long deadline;
-        Boolean clock, health;
+        Boolean clock, health, calendar;
         Probe(long deadline) { this.deadline = deadline; }
     }
 
@@ -447,8 +498,9 @@ public final class ModuleScope {
                 ScopeWitness.query(app, target, ready -> worker.execute(() -> {
                     if (probe != current || SystemClock.elapsedRealtime() >= current.deadline) return;
                     if (target == TargetProfile.CLOCK) current.clock = ready;
-                    else current.health = ready;
-                    if (current.clock != null && current.health != null) finish(current);
+                    else if (target == TargetProfile.HEALTH) current.health = ready;
+                    else if (target == TargetProfile.CALENDAR) current.calendar = ready;
+                    if (current.clock != null && current.health != null && current.calendar != null) finish(current);
                 }));
             } catch (RuntimeException unavailable) {
                 ProbeLog.failure("SCOPE_HOST_READ_FAILED", unavailable);
@@ -462,6 +514,7 @@ public final class ModuleScope {
         if (probe != current) return;
         clockActive = Boolean.TRUE.equals(current.clock);
         healthActive = Boolean.TRUE.equals(current.health);
+        calendarActive = Boolean.TRUE.equals(current.calendar);
         probe = null;
         publish();
     }
@@ -474,11 +527,12 @@ public final class ModuleScope {
                 frameworkApiVersion,
                 grants != null && grants.contains(TargetProfile.CLOCK.packageName),
                 grants != null && grants.contains(TargetProfile.HEALTH.packageName),
-                clockActive, healthActive,
-                clockRuntime, healthRuntime,
+                grants != null && grants.contains(TargetProfile.CALENDAR.packageName),
+                clockActive, healthActive, calendarActive,
+                clockRuntime, healthRuntime, calendarRuntime,
                 probe != null,
                 !awaiting.isEmpty(), result,
-                remotePrefsSupported, remoteEnabled);
+                remotePrefsSupported, remoteEnabled, remoteCalendarEnabled);
     }
 
     private ModuleScope() {}

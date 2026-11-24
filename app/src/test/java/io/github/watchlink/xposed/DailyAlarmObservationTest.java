@@ -1,5 +1,6 @@
 package io.github.watchlink.xposed;
 
+import io.github.watchlink.alarm.probe.TargetProfile;
 import io.github.watchlink.validation.HuaweiReminderService;
 import org.junit.Test;
 import static org.junit.Assert.*;
@@ -93,5 +94,28 @@ public class DailyAlarmObservationTest {
     @Test public void staleOrMissingWatchFailsClosedWhenSdkAvailable() {
         assertEquals("UNAVAILABLE", windows.arm("stale", 7, 1000, 500, "watch", id("stale", 7), 16000, 505, true));
         assertEquals("UNAVAILABLE", windows.arm("no-watch", 8, 990, 490, null, id("no-watch", 8), 1000, 500, true));
+    }
+
+    @Test public void calendarSourceRoutesRepliesBackToCalendarAndIsolatesCrossSourceEnd() {
+        DailyAlarmObservation session = new DailyAlarmObservation();
+        assertEquals("READY", session.arm(TargetProfile.CALENDAR, "cal-run", 7, 1000, 500,
+                "watch", id("cal-run", 7), 1001, 501, true));
+        DailyAlarmObservation.Evidence recv = session.serviceReceived(7, id("cal-run", 7), 1002, 502);
+        assertNotNull(recv);
+        assertEquals(TargetProfile.CALENDAR, recv.source());
+        assertEquals("OUTBOUND", session.observe(false, "watch", OPEN, 1003, 503).kind());
+
+        // A stray Clock END cannot terminate an active Calendar session.
+        assertFalse(session.shouldClose(TargetProfile.CLOCK, "cal-run", 7, 1004, 504));
+        session.end(TargetProfile.CLOCK, "cal-run", 7, 1004, 504);
+
+        DailyAlarmObservation.Evidence reply = session.observe(true, "watch", DISMISS, 1005, 505);
+        assertNotNull(reply);
+        assertEquals(TargetProfile.CALENDAR, reply.source());
+        assertEquals("DISMISS", reply.kind());
+
+        assertTrue(session.shouldClose(TargetProfile.CALENDAR, "cal-run", 7, 1006, 506));
+        session.end(TargetProfile.CALENDAR, "cal-run", 7, 1006, 506);
+        assertNull(session.serviceAction(7, 1, 1007, 507));
     }
 }

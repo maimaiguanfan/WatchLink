@@ -105,8 +105,9 @@ public final class DiagnosticShare {
                 .append("\n框架信息 ").append(frameworkSummary(scope))
                 .append("\nRemotePreferences ").append(scope.remotePrefsSupported() ? "框架支持" : "不可用")
                 .append("\n运动健康协同服务 ").append(health.ready() ? "可用" : health.stopped() ? "已停止" : "不可用")
-                .append("\n系统时钟作用域 ").append(scopeSummary(scope, true))
-                .append("\n运动健康作用域 ").append(scopeSummary(scope, false))
+                .append("\n系统时钟作用域 ").append(scopeSummary(scope, TargetProfile.CLOCK))
+                .append("\n系统日历作用域（可选） ").append(scopeSummary(scope, TargetProfile.CALENDAR))
+                .append("\n运动健康作用域 ").append(scopeSummary(scope, TargetProfile.HEALTH))
                 .append("\n每个来源最多包含最近 ").append(DiagnosticEvents.LIMIT)
                 .append(" 条闹钟联动事件，时间统一为 UTC。\n");
         String local;
@@ -117,8 +118,12 @@ public final class DiagnosticShare {
             String unavailable = Build.VERSION.SDK_INT < 34 ? "此 Android 版本不支持验证宿主来源"
                     : results.containsKey(target) ? "宿主已回复，记录读取失败"
                     : "未收到宿主回复，可在对应应用已运行且作用域生效后重新导出";
-            section(report, target == TargetProfile.CLOCK ? "系统时钟" : "华为运动健康（PhoneService）",
-                    version(app, target.packageName), results.get(target), unavailable);
+            String label = switch (target) {
+                case CLOCK -> "系统时钟";
+                case CALENDAR -> "系统日历";
+                case HEALTH -> "华为运动健康（PhoneService）";
+            };
+            section(report, label, version(app, target.packageName), results.get(target), unavailable);
         }
         return chooser(app, write(app.getCacheDir(), report.toString()));
     }
@@ -130,10 +135,22 @@ public final class DiagnosticShare {
         return name + ver + " (API " + scope.frameworkApiVersion() + ")";
     }
 
-    private static String scopeSummary(ModuleScope.View scope, boolean clock) {
-        boolean granted = clock ? scope.clockGranted() : scope.healthGranted();
-        boolean active = clock ? scope.clockActive() : scope.healthActive();
-        ModuleScope.TargetRuntime runtime = clock ? scope.clockRuntime() : scope.healthRuntime();
+    private static String scopeSummary(ModuleScope.View scope, TargetProfile target) {
+        boolean granted = switch (target) {
+            case CLOCK -> scope.clockGranted();
+            case CALENDAR -> scope.calendarGranted();
+            case HEALTH -> scope.healthGranted();
+        };
+        boolean active = switch (target) {
+            case CLOCK -> scope.clockActive();
+            case CALENDAR -> scope.calendarActive();
+            case HEALTH -> scope.healthActive();
+        };
+        ModuleScope.TargetRuntime runtime = switch (target) {
+            case CLOCK -> scope.clockRuntime();
+            case CALENDAR -> scope.calendarRuntime();
+            case HEALTH -> scope.healthRuntime();
+        };
         String grant = scope.frameworkConnected() ? (granted ? "已勾选" : "未勾选") : "未读到框架设置";
         String witness = active ? "已收到当前版本宿主应答" : "尚未收到当前版本宿主应答";
         if (scope.supportsApi102() && runtime != null && !"UNSUPPORTED".equals(runtime.state())) {

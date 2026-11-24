@@ -1,11 +1,11 @@
 package io.github.watchlink.xposed;
 
+import android.app.Application;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
-import android.os.Build;
 import android.os.UserManager;
 import androidx.annotation.RequiresApi;
 import io.github.libxposed.api.XposedInterface;
@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-/** Installs live cooperative alarm hooks atomically inside Clock main or Health :PhoneService, with clean API 102 teardown. */
+/** Installs live cooperative alarm/calendar hooks atomically inside Clock, Calendar, or Health :PhoneService. */
 @RequiresApi(34)
 final class AlarmObserverInstaller {
     private final XposedInterface module;
@@ -39,6 +39,7 @@ final class AlarmObserverInstaller {
     private AutoCloseable diagnosticHandle;
     private BroadcastReceiver scopeWitnessReceiver;
     private ClockNovemberLive clockLive;
+    private CalendarLiveBridge calendarLive;
     private HealthAlarmBridge healthBridge;
     private HostSettings hostSettings;
 
@@ -54,17 +55,20 @@ final class AlarmObserverInstaller {
     @RequiresApi(34)
     void installReminder(String[] sources, Context readyApplication, Consumer<Context> onContextReady) {
         if (closed.get()) return;
-        boolean clock = profile == TargetProfile.CLOCK;
         ClockSymbolResolver.Symbols preScannedClock = null;
+        CalendarSymbolResolver.Symbols preScannedCalendar = null;
         try {
             Context context = readyApplication;
             if (context == null) {
-                String appGetter = "k";
-                if (clock) {
+                String appGetter = profile == TargetProfile.CALENDAR ? "t" : "k";
+                if (profile == TargetProfile.CLOCK) {
                     preScannedClock = ClockSymbolResolver.scanApk(sources);
                     if (preScannedClock != null) appGetter = preScannedClock.applicationGetter();
+                } else if (profile == TargetProfile.CALENDAR) {
+                    preScannedCalendar = CalendarSymbolResolver.scanApk(sources);
+                    if (preScannedCalendar != null) appGetter = preScannedCalendar.applicationGetter();
                 }
-                context = legacyApplicationContext(clock, appGetter);
+                context = legacyApplicationContext(profile, appGetter);
             }
             if (closed.get()) return;
             if (context == null || !profile.packageName.equals(context.getPackageName())
@@ -77,16 +81,20 @@ final class AlarmObserverInstaller {
             if (closed.get()) return;
 
             diagnosticHandle = DiagnosticShare.installHost(hostContext, ownerUid);
+            String localSuffix = switch (profile) {
+                case CLOCK -> ".clock_settings_v1";
+                case CALENDAR -> ".calendar_settings_v1";
+                case HEALTH -> ".health_settings_v1";
+            };
             SharedPreferences local = hostContext.getSharedPreferences(
-                    BuildConfig.APPLICATION_ID + (clock ? ".clock_settings_v1" : ".health_settings_v1"),
-                    Context.MODE_PRIVATE);
+                    BuildConfig.APPLICATION_ID + localSuffix, Context.MODE_PRIVATE);
             HostSettings settings = new HostSettings(remotePrefs, local);
             hostSettings = settings;
             ProbeLog.info(settings.remoteAvailable() ? "REMOTE_PREFS_READY source=" + profile
                     : "REMOTE_PREFS_UNAVAILABLE source=" + profile);
 
-            boolean localClockControl = false;
-            if (clock) {
+            boolean localControl = false;
+            if (profile == TargetProfile.CLOCK) {
                 ApkSymbolCache symbolCache = new ApkSymbolCache(hostContext, "clock");
                 ClockSymbolResolver.Symbols symbols = preScannedClock != null
                         ? preScannedClock : ClockSymbolResolver.resolve(symbolCache, sources);
@@ -110,12 +118,29 @@ final class AlarmObserverInstaller {
                 live.install(this, occurrence, service, symbols);
                 active.set(true);
                 if (live.actions != null) {
-                    localClockControl = symbols.actionContractVerified() && live.actions.actionsResolved();
-                    if (!localClockControl) {
+                    localControl = symbols.actionContractVerified() && live.actions.actionsResolved();
+                    if (!localControl) {
                         ProbeLog.info("REMINDER_CLOCK_ACTIONS_UNAVAILABLE");
                     }
-                    live.actions.registerVerified(hostContext, settings, localClockControl, symbols.source());
+                    live.actions.registerVerified(hostContext, settings, localControl, symbols.source());
                 }
+            } else if (profile == TargetProfile.CALENDAR) {
+                ApkSymbolCache symbolCache = new ApkSymbolCache(hostContext, "calendar");
+                CalendarSymbolResolver.Symbols symbols = preScannedCalendar != null
+                        ? preScannedCalendar : CalendarSymbolResolver.resolve(symbolCache, sources);
+                if (symbols == null) {
+                    ProbeLog.info("CALENDAR_SYMBOLS_RESOLVED source=CALENDAR resolver=UNAVAILABLE");
+                    throw new NoSuchMethodException("Calendar symbols unavailable");
+                }
+                if (preScannedCalendar != null) {
+                    symbolCache.write(ApkSymbolCache.fingerprint(CalendarSymbolResolver.SCHEMA, sources), symbols.toMap());
+                }
+                ProbeLog.info("CALENDAR_SYMBOLS_RESOLVED source=CALENDAR resolver=" + symbols.source());
+
+                CalendarLiveBridge live = new CalendarLiveBridge(hostContext, this, symbols);
+                calendarLive = live;
+                live.install(this, settings);
+                localControl = live.actionsResolved();
             } else {
                 HealthAlarmBridge bridge = new HealthAlarmBridge(hostContext, ownerUid, settings, sources);
                 healthBridge = bridge;
@@ -126,8 +151,9 @@ final class AlarmObserverInstaller {
                 return;
             }
             active.set(true);
+            String controlKey = profile == TargetProfile.CALENDAR ? " local_calendar_control=" : " local_clock_control=";
             ProbeLog.info("REMINDER_ADAPTER_READY source=" + profile
-                    + " local_clock_control=" + localClockControl
+                    + controlKey + localControl
                     + " remote_prefs=" + settings.remoteAvailable());
             try {
                 scopeWitnessReceiver = ScopeWitness.register(hostContext, ownerUid);
@@ -142,6 +168,7 @@ final class AlarmObserverInstaller {
 
     synchronized boolean isBusy() {
         return (clockLive != null && clockLive.hasActiveRing())
+                || (calendarLive != null && calendarLive.hasActiveRing())
                 || (healthBridge != null && healthBridge.hasActiveSession());
     }
 
@@ -166,6 +193,10 @@ final class AlarmObserverInstaller {
             catch (RuntimeException failure) { ProbeLog.failure("CLOCK_ACTION_UNREGISTER_FAILED", failure); }
             clockLive = null;
         }
+        if (calendarLive != null) {
+            try { calendarLive.close(); } catch (RuntimeException ignored) {}
+            calendarLive = null;
+        }
         if (healthBridge != null) {
             try { healthBridge.close(); } catch (RuntimeException ignored) {}
             healthBridge = null;
@@ -177,12 +208,17 @@ final class AlarmObserverInstaller {
         rollbackHooks();
     }
 
-    private Context legacyApplicationContext(boolean clock, String clockAppGetter) throws ReflectiveOperationException {
+    private Context legacyApplicationContext(TargetProfile target, String appGetter)
+            throws ReflectiveOperationException {
         Method getter;
-        if (clock) {
+        if (target == TargetProfile.CLOCK) {
             Class<?> application = target(ClockSymbolResolver.APPLICATION);
             if (!Context.class.isAssignableFrom(application)) throw new NoSuchMethodException("Clock application");
-            getter = staticMethod(application, clockAppGetter, application);
+            getter = staticMethod(application, appGetter, application);
+        } else if (target == TargetProfile.CALENDAR) {
+            Class<?> application = target(CalendarSymbolResolver.APPLICATION);
+            if (!Context.class.isAssignableFrom(application)) throw new NoSuchMethodException("Calendar application");
+            getter = staticMethod(application, appGetter, Application.class);
         } else {
             getter = staticMethod(target("com.huawei.hwcommonmodel.application.BaseApplication"),
                     "getContext", Context.class);
@@ -200,7 +236,7 @@ final class AlarmObserverInstaller {
         return null;
     }
 
-    /** Clock can first start at LOCKED_BOOT_COMPLETED and keep that process after first unlock. */
+    /** Clock or Calendar can start at LOCKED_BOOT_COMPLETED and keep that process after first unlock. */
     private boolean waitForUnlock(Context app, String[] sources, Consumer<Context> onContextReady) {
         UserManager users = app.getSystemService(UserManager.class);
         if (users == null || users.isUserUnlocked()) return false;

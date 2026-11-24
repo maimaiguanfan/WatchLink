@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.maimaiguanfan.watchlink"
         minSdk = 26
         targetSdk = 37
-        versionCode = 91
-        versionName = "0.51.0"
+        versionCode = 92
+        versionName = "0.52.0"
     }
 
     compileOptions {
