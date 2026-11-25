@@ -18,6 +18,7 @@ final class HostSettings {
     private volatile Runnable disabledCallback;
     private volatile Runnable calendarDisabledCallback;
     private volatile Consumer<Boolean> wifiAutoSyncChangedCallback;
+    private volatile Consumer<Boolean> liveWindowChangedCallback;
 
     HostSettings(SharedPreferences remote, SharedPreferences local) {
         this.remote = remote;
@@ -35,6 +36,11 @@ final class HostSettings {
                     Consumer<Boolean> callback = wifiAutoSyncChangedCallback;
                     if (callback != null) {
                         callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = liveWindowChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED, false));
                     }
                 }
             };
@@ -60,6 +66,10 @@ final class HostSettings {
 
     boolean isWifiAutoSyncEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED);
+    }
+
+    boolean isLiveWindowEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED);
     }
 
     boolean isEnabledFor(TargetProfile source) {
@@ -91,6 +101,10 @@ final class HostSettings {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED, enabled).commit();
     }
 
+    boolean setLocalLiveWindowFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED, enabled).commit();
+    }
+
     void onDisabled(Runnable callback) {
         disabledCallback = callback;
     }
@@ -103,10 +117,15 @@ final class HostSettings {
         wifiAutoSyncChangedCallback = callback;
     }
 
+    void onLiveWindowChanged(Consumer<Boolean> callback) {
+        liveWindowChangedCallback = callback;
+    }
+
     void close() {
         disabledCallback = null;
         calendarDisabledCallback = null;
         wifiAutoSyncChangedCallback = null;
+        liveWindowChangedCallback = null;
         if (remote != null && remoteListener != null) {
             try { remote.unregisterOnSharedPreferenceChangeListener(remoteListener); }
             catch (RuntimeException ignored) { /* Closing. */ }

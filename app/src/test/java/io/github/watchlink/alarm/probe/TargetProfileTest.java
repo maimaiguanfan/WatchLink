@@ -12,7 +12,7 @@ public class TargetProfileTest {
     @Test public void authenticatesOnlyExactPackageUidAndOfficialSigner() {
         for (TargetProfile profile : TargetProfile.values()) {
             String cert = switch (profile) {
-                case CLOCK -> CLOCK_CERT;
+                case CLOCK, UMS -> CLOCK_CERT;
                 case CALENDAR -> CALENDAR_CERT;
                 case HEALTH -> HEALTH_CERT;
                 case WIRELESS_SETTINGS -> WIRELESS_CERT;
@@ -39,16 +39,23 @@ public class TargetProfileTest {
         TargetProfile calendar = TargetProfile.CALENDAR;
         TargetProfile health = TargetProfile.HEALTH;
         TargetProfile wireless = TargetProfile.WIRELESS_SETTINGS;
+        TargetProfile ums = TargetProfile.UMS;
         assertTrue(clock.isAlertSource());
         assertTrue(calendar.isAlertSource());
         assertFalse(health.isAlertSource());
         assertFalse(wireless.isAlertSource());
+        assertFalse(ums.isAlertSource());
         assertTrue(clock.isReminderProcess(clock.packageName));
         assertTrue(calendar.isReminderProcess(calendar.packageName));
         assertFalse(calendar.isReminderProcess(calendar.packageName + ":hlog"));
         assertTrue(wireless.isReminderProcess(wireless.packageName));
         assertFalse(wireless.isReminderProcess(wireless.packageName + ":tzupdate"));
+        assertTrue(ums.isReminderProcess(ums.packageName));
+        assertFalse(ums.isReminderProcess(ums.packageName + ":remote"));
         assertTrue(health.isReminderProcess(health.packageName + ":PhoneService"));
+        assertTrue(health.isHealthDaemonProcess(health.packageName + ":DaemonService"));
+        assertFalse(health.isHealthDaemonProcess(health.packageName + ":PhoneService"));
+        assertFalse(ums.isHealthDaemonProcess(ums.packageName + ":DaemonService"));
         assertFalse(health.isReminderProcess(health.packageName));
         assertFalse(clock.isReminderProcess(clock.packageName + ":PhoneService"));
         assertFalse(health.isReminderProcess(clock.packageName + ":PhoneService"));

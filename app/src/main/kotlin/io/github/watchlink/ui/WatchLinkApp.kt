@@ -69,11 +69,13 @@ internal data class WatchLinkUiState(
     val scope: ModuleScope.View? = null,
     val saving: Boolean = false,
     val calendarSaving: Boolean = false,
+    val liveWindowSaving: Boolean = false,
     val wifiAutoSaving: Boolean = false,
     val wifiSyncingCurrent: Boolean = false,
     val wifiBulk: WifiBulkUiState = WifiBulkUiState(),
     val reloading: Boolean = false,
     val testing: Boolean = false,
+    val liveTesting: Boolean = false,
     val sharing: Boolean = false,
     val readError: Boolean = false,
     val message: String? = null,
@@ -100,6 +102,15 @@ internal data class WatchLinkUiState(
                 || calendarHost?.reachable() == true
                 || healthHost?.reachable() == true)
 
+    val effectiveLiveWindowEnabled: Boolean
+        get() = scope?.remoteLiveWindowEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.liveWindowEnabled()
+            ?: false
+
+    val canToggleLiveWindow: Boolean
+        get() = !liveWindowSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
     val effectiveWifiAutoEnabled: Boolean
         get() = scope?.remoteWifiAutoSyncEnabled()
             ?: healthHost?.takeIf { it.reachable() }?.wifiAutoSyncEnabled()
@@ -122,6 +133,7 @@ internal fun WatchLinkApp(
     state: WatchLinkUiState,
     onEnable: (Boolean) -> Unit,
     onCalendarEnable: (Boolean) -> Unit,
+    onLiveWindowEnable: (Boolean) -> Unit,
     onWifiAutoEnable: (Boolean) -> Unit,
     onDismissMessage: () -> Unit,
     onClock: () -> Unit,
@@ -129,6 +141,7 @@ internal fun WatchLinkApp(
     onHealth: () -> Unit,
     onRequestScope: () -> Unit,
     onRequestCalendarScope: () -> Unit,
+    onRequestUmsScope: () -> Unit,
     onRequestWirelessScope: () -> Unit,
     onSyncCurrentWifi: () -> Unit,
     onLoadSavedWifi: () -> Unit,
@@ -144,6 +157,8 @@ internal fun WatchLinkApp(
     onCoolapk: () -> Unit,
     onStartTest: () -> Unit,
     onCancelTest: () -> Unit,
+    onStartLiveTest: () -> Unit,
+    onCancelLiveTest: () -> Unit,
     onShare: () -> Unit,
 ) {
     MiuixTheme(colors = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
@@ -182,12 +197,14 @@ internal fun WatchLinkApp(
                             state = state,
                             onEnable = onEnable,
                             onCalendarEnable = onCalendarEnable,
+                            onLiveWindowEnable = onLiveWindowEnable,
                             onWifiAutoEnable = onWifiAutoEnable,
                             onClock = onClock,
                             onCalendar = onCalendar,
                             onHealth = onHealth,
                             onRequestScope = onRequestScope,
                             onRequestCalendarScope = onRequestCalendarScope,
+                            onRequestUmsScope = onRequestUmsScope,
                             onRequestWirelessScope = onRequestWirelessScope,
                             onSyncCurrentWifi = onSyncCurrentWifi,
                             onOpenWifiBulk = { page = Page.WIFI_SYNC },
@@ -210,6 +227,8 @@ internal fun WatchLinkApp(
                             state = state,
                             onStartTest = onStartTest,
                             onCancelTest = onCancelTest,
+                            onStartLiveTest = onStartLiveTest,
+                            onCancelLiveTest = onCancelLiveTest,
                             onHotReload = onHotReload,
                             onRefresh = onRefresh,
                             onShare = onShare,
@@ -226,12 +245,14 @@ private fun LazyListScope.homePage(
     state: WatchLinkUiState,
     onEnable: (Boolean) -> Unit,
     onCalendarEnable: (Boolean) -> Unit,
+    onLiveWindowEnable: (Boolean) -> Unit,
     onWifiAutoEnable: (Boolean) -> Unit,
     onClock: () -> Unit,
     onCalendar: () -> Unit,
     onHealth: () -> Unit,
     onRequestScope: () -> Unit,
     onRequestCalendarScope: () -> Unit,
+    onRequestUmsScope: () -> Unit,
     onRequestWirelessScope: () -> Unit,
     onSyncCurrentWifi: () -> Unit,
     onOpenWifiBulk: () -> Unit,
@@ -305,6 +326,14 @@ private fun LazyListScope.homePage(
             onRefresh = onRefresh,
         )
     }
+    item("live-window") {
+        LiveWindowSyncCard(
+            state = state,
+            onEnable = onLiveWindowEnable,
+            onRequestUmsScope = onRequestUmsScope,
+            onOpenDiagnostics = onOpenDiagnostics,
+        )
+    }
     item("wifi") {
         WifiSyncCard(
             state = state,
@@ -331,7 +360,7 @@ private fun LazyListScope.homePage(
 private fun StatusCard(state: WatchLinkUiState, issues: List<SetupIssue>) {
     val checks = state.checks
     val level = setupLevel(checks, issues, state.scope)
-    val enabled = state.effectiveEnabled || state.effectiveCalendarEnabled
+    val enabled = state.effectiveEnabled || state.effectiveCalendarEnabled || state.effectiveLiveWindowEnabled
     var expanded by rememberSaveable { mutableStateOf(false) }
 
     val (background, ink) = when (level) {
@@ -393,9 +422,11 @@ private fun StatusCard(state: WatchLinkUiState, issues: List<SetupIssue>) {
                 Spacer(Modifier.height(16.dp))
                 CheckLine("系统时钟", hostStatusSimple(state.scope, TargetProfile.CLOCK), ink)
                 CheckLine("系统日历（可选）", calendarStatusSimple(state.scope, checks), ink)
+                CheckLine("智慧服务（可选）", umsStatusSimple(state.scope, checks), ink)
                 CheckLine("无线设置（可选）", wirelessStatusSimple(state.scope, checks), ink)
                 CheckLine("华为运动健康", hostStatusSimple(state.scope, TargetProfile.HEALTH), ink)
                 CheckLine("手表连接", watchStateSimple(state.healthHost), ink)
+                CheckLine("实况窗同步", liveSupportSimple(state.healthHost), ink)
                 CheckLine("Wi-Fi 同步", wifiSupportSimple(state.healthHost), ink)
                 CheckLine("重启免启动", remotePrefsSimple(state), ink)
                 CheckLine("表端反控手机", when {
@@ -494,6 +525,69 @@ private fun CalendarReminderCard(
             Menu("打开系统日历", "启动或切回日历以加载模块，完成后可点此返回刷新。", onOpenCalendar)
             HorizontalDivider()
             Menu("刷新日历加载状态", "若已重启系统日历或完成热重载，点击确认生效。", onRefresh)
+        }
+    }
+}
+
+@Composable
+private fun LiveWindowSyncCard(
+    state: WatchLinkUiState,
+    onEnable: (Boolean) -> Unit,
+    onRequestUmsScope: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+) {
+    val enabled = state.effectiveLiveWindowEnabled
+    val scope = state.scope
+    val checks = state.checks
+    val health = state.healthHost
+    val umsTrusted = checks == null || checks.umsTrusted
+    val needsUmsScope = enabled && umsTrusted && scope?.frameworkConnected() == true && !scope.umsGranted()
+
+    val summary = buildString {
+        when {
+            state.liveWindowSaving -> append("正在保存开关状态…")
+            !state.canToggleLiveWindow -> append("请先启用模块框架或打开华为运动健康。")
+            needsUmsScope -> append("已开启（Android 实况通知已就绪）· 授权「智慧服务」后可同步小程序取餐码、外卖等 ColorOS 流体云")
+            enabled -> append("已开启 · 同步小程序取餐码、外卖配送、打车等流体云与实况通知到手表弦月窗（已自动过滤时钟倒计时/秒表）")
+            else -> append("可选 · 将 ColorOS 流体云（取餐码、美团/饿了么外卖、打车）与 Android 实况通知同步至手表原生实况窗（不同步倒计时/秒表）")
+        }
+        if (health != null && health.reachable()) {
+            append("\n手表状态：").append(liveSupportSimple(health))
+            if (health.liveActiveCount() > 0) {
+                append(" · 当前活跃 ").append(health.liveActiveCount()).append(" 条")
+            }
+            val last = liveResultSimple(health.liveLastResult(), health.liveLastSource())
+            if (last.isNotEmpty()) append("\n最近一次：").append(last)
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        BasicComponent(
+            title = "同步流体云 / 实况通知到手表",
+            summary = summary,
+            onClick = if (state.canToggleLiveWindow) { { onEnable(!enabled) } } else null,
+            endActions = {
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = { onEnable(it) },
+                    enabled = state.canToggleLiveWindow
+                )
+            }
+        )
+        if (needsUmsScope) {
+            HorizontalDivider()
+            if (scope.requestPending()) {
+                BasicComponent(title = "等待 LSPosed 授权", summary = "请在 LSPosed 弹出的提示中同意「智慧服务」。")
+            } else {
+                Menu(
+                    "申请智慧服务作用域",
+                    "仅额外勾选「智慧服务（com.oplus.pantanal.ums）」，无需勾选 SystemUI。",
+                    onRequestUmsScope
+                )
+            }
+        } else if (enabled && health?.reachable() == true) {
+            HorizontalDivider()
+            Menu("测试手表实况窗显示", "前往「测试与诊断」发送一条模拟配送实况窗，验证弹窗与静默进度更新。", onOpenDiagnostics)
         }
     }
 }
@@ -794,6 +888,8 @@ private fun LazyListScope.diagnosticsPage(
     state: WatchLinkUiState,
     onStartTest: () -> Unit,
     onCancelTest: () -> Unit,
+    onStartLiveTest: () -> Unit,
+    onCancelLiveTest: () -> Unit,
     onHotReload: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onShare: () -> Unit,
@@ -804,6 +900,8 @@ private fun LazyListScope.diagnosticsPage(
     val scope = state.scope
     val testState = health?.testState() ?: "IDLE"
     val testRunning = testState in setOf("SENDING", "SENT", "SENT_DIRECT", "SERVICE_RECEIVED", "OUTBOUND")
+    val liveTestState = health?.liveTestState() ?: "IDLE"
+    val liveTestRunning = liveTestState in setOf("OPENED", "UPDATED")
 
     item("test-title") { SectionTitle("手表提醒测试（不影响真实闹钟）") }
     item("test-card") {
@@ -823,6 +921,22 @@ private fun LazyListScope.diagnosticsPage(
                     }
                 }
             )
+            HorizontalDivider()
+            BasicComponent(
+                title = "立即发送实况窗测试（流体云 / 弦月窗）",
+                summary = if (health?.reachable() != true) {
+                    "华为运动健康尚未应答，请先打开运动健康并确认手表已连接。"
+                } else {
+                    liveTestStateSummary(liveTestState, health.liveDispatchMode())
+                },
+                endActions = {
+                    if (liveTestRunning) {
+                        TextButton("结束实况", onCancelLiveTest, enabled = !state.liveTesting)
+                    } else {
+                        TextButton("发送实况", onStartLiveTest, enabled = !state.liveTesting && health?.reachable() == true)
+                    }
+                }
+            )
         }
     }
 
@@ -835,9 +949,13 @@ private fun LazyListScope.diagnosticsPage(
             HorizontalDivider()
             BasicComponent(title = "系统日历进程（可选）", summary = targetRuntimeText(scope, TargetProfile.CALENDAR))
             HorizontalDivider()
+            BasicComponent(title = "智慧服务进程（可选）", summary = targetRuntimeText(scope, TargetProfile.UMS))
+            HorizontalDivider()
             BasicComponent(title = "无线设置进程（可选）", summary = targetRuntimeText(scope, TargetProfile.WIRELESS_SETTINGS))
             HorizontalDivider()
             BasicComponent(title = "运动健康进程（:PhoneService）", summary = targetRuntimeText(scope, TargetProfile.HEALTH))
+            HorizontalDivider()
+            BasicComponent(title = "运动健康通知进程（:DaemonService）", summary = daemonRuntimeText(scope))
             HorizontalDivider()
             BasicComponent(
                 title = "热重载运行中的宿主",
@@ -891,6 +1009,11 @@ private fun LazyListScope.diagnosticsPage(
             BasicComponent(
                 title = "最近表端按键回程",
                 summary = actionSourceText(health?.lastActionSource() ?: clock?.actionSource())
+            )
+            HorizontalDivider()
+            BasicComponent(
+                title = "实况窗同步通道状态",
+                summary = liveDiagnosticsText(health)
             )
             HorizontalDivider()
             BasicComponent(
@@ -950,7 +1073,7 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
         Card(Modifier.fillMaxWidth()) {
             BasicComponent(
                 title = "1. 在 LSPosed 勾选目标宿主",
-                summary = "启用 WatchLink 模块，核心勾选「系统时钟」和「华为运动健康」；如需日历强提醒再勾选「系统日历」；如需连接新 Wi-Fi 免 Root 免定位自动同步，再勾选「无线设置」。无需 Magisk 模块，也无需勾选 SystemUI。"
+                summary = "启用 WatchLink 模块，核心勾选「系统时钟」和「华为运动健康」；如需日历强提醒再勾选「系统日历」；如需同步 ColorOS 流体云（取餐码/外卖/打车）再勾选「智慧服务」；如需新 Wi-Fi 自动同步再勾选「无线设置」。无需 Magisk 模块，也无需勾选 SystemUI。"
             )
             HorizontalDivider()
             BasicComponent(
@@ -972,7 +1095,7 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
                 summary = "WatchLink ${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})\n" +
                     "包名：${BuildConfig.APPLICATION_ID}\n" +
                     "框架标准：LSPosed API 102（兼容 API 101）\n" +
-                    "已验证基线：一加时钟 $VERIFIED_CLOCK · 一加日历 $VERIFIED_CALENDAR · 无线设置 $VERIFIED_WIRELESS · 华为运动健康 $VERIFIED_HEALTH"
+                    "已验证基线：一加时钟 $VERIFIED_CLOCK · 一加日历 $VERIFIED_CALENDAR · 智慧服务 $VERIFIED_UMS · 无线设置 $VERIFIED_WIRELESS · 华为运动健康 $VERIFIED_HEALTH"
             )
             HorizontalDivider()
             Menu("作者的酷安主页", "查看更新日志、适配说明与问题反馈", onCoolapk)
@@ -995,18 +1118,21 @@ private fun hostStatusSimple(scope: ModuleScope.View?, target: TargetProfile): S
         TargetProfile.CALENDAR -> scope.calendarActive()
         TargetProfile.HEALTH -> scope.healthActive()
         TargetProfile.WIRELESS_SETTINGS -> scope.wirelessActive()
+        TargetProfile.UMS -> scope.umsActive()
     }
     val granted = when (target) {
         TargetProfile.CLOCK -> scope.clockGranted()
         TargetProfile.CALENDAR -> scope.calendarGranted()
         TargetProfile.HEALTH -> scope.healthGranted()
         TargetProfile.WIRELESS_SETTINGS -> scope.wirelessGranted()
+        TargetProfile.UMS -> scope.umsGranted()
     }
     val runtime = when (target) {
         TargetProfile.CLOCK -> scope.clockRuntime()
         TargetProfile.CALENDAR -> scope.calendarRuntime()
         TargetProfile.HEALTH -> scope.healthRuntime()
         TargetProfile.WIRELESS_SETTINGS -> scope.wirelessRuntime()
+        TargetProfile.UMS -> scope.umsRuntime()
     }
     return when {
         scope.frameworkConnected() && !granted -> "未勾选"
@@ -1027,11 +1153,70 @@ private fun calendarStatusSimple(scope: ModuleScope.View?, checks: HomeChecks): 
     return hostStatusSimple(scope, TargetProfile.CALENDAR)
 }
 
+private fun umsStatusSimple(scope: ModuleScope.View?, checks: HomeChecks): String {
+    if (!checks.umsTrusted) return "未安装或签名不匹配"
+    if (scope == null) return "检查中"
+    if (scope.frameworkConnected() && !scope.umsGranted()) return "未启用（可选）"
+    return hostStatusSimple(scope, TargetProfile.UMS)
+}
+
 private fun wirelessStatusSimple(scope: ModuleScope.View?, checks: HomeChecks): String {
     if (!checks.wirelessTrusted) return "未安装或签名不匹配"
     if (scope == null) return "检查中"
     if (scope.frameworkConnected() && !scope.wirelessGranted()) return "未启用（可选）"
     return hostStatusSimple(scope, TargetProfile.WIRELESS_SETTINGS)
+}
+
+private fun liveSupportSimple(health: HealthHostControl.Reply?): String = when {
+    health == null || !health.reachable() -> "待运动健康上线"
+    else -> when (health.liveWatchSupport()) {
+        "SUPPORTED_LIVE_LEVEL" -> "已支持原生实况窗（bit 84 + 219）"
+        "SUPPORTED_BASIC" -> "已支持基础实况窗（bit 84）"
+        "UNSUPPORTED" -> "当前手表不支持实况窗"
+        "WATCH_DISCONNECTED" -> "未连接手表"
+        else -> "待确认"
+    }
+}
+
+private fun liveResultSimple(result: String?, source: String?): String {
+    val src = when (source) {
+        "UMS" -> "ColorOS 流体云"
+        "DAEMON" -> "Android 实况通知"
+        "TEST" -> "实况自测"
+        else -> ""
+    }
+    val msg = when (result) {
+        "OPENED" -> "已弹出手表实况窗"
+        "UPDATED" -> "已静默更新进度/状态"
+        "CLOSED" -> "已自动关闭实况窗"
+        "WATCH_DISCONNECTED" -> "未连接手表"
+        "UNSUPPORTED_WATCH" -> "手表不支持实况窗"
+        "DISABLED" -> "开关已关闭"
+        "BG_RESTRICTED" -> "后台受限且直发回退不可用"
+        "FAILED" -> "推送失败"
+        else -> ""
+    }
+    return if (msg.isEmpty()) "" else if (src.isEmpty()) msg else "$src · $msg"
+}
+
+private fun liveDiagnosticsText(health: HealthHostControl.Reply?): String {
+    if (health == null || !health.reachable()) return "待运动健康上线后读取"
+    val cap = liveSupportSimple(health)
+    val last = liveResultSimple(health.liveLastResult(), health.liveLastSource())
+    val mode = dispatchModeText(health.liveDispatchMode())
+    return buildString {
+        append(cap).append(" · 当前活跃 ").append(health.liveActiveCount()).append(" 条")
+        if (last.isNotEmpty()) append("\n最近结果：").append(last).append("（").append(mode).append("）")
+    }
+}
+
+private fun liveTestStateSummary(state: String, mode: String): String = when (state) {
+    "IDLE" -> "发送一条独立模拟配送实况窗（35% 弹窗 → 6 秒后静默更新至 80% → 14 秒后自动关闭）。"
+    "OPENED" -> "已弹出 35% 模拟配送实况窗（${dispatchModeText(mode)}），6 秒后将静默更新至 80%…"
+    "UPDATED" -> "已静默更新进度至 80%，数秒后将自动关闭…"
+    "CLOSED" -> "实况窗测试已完成并自动关闭（${dispatchModeText(mode)}）。"
+    "WATCH_UNAVAILABLE" -> "未检测到支持实况窗的已连接手表，请检查蓝牙连接。"
+    else -> "实况窗测试未成功，请确认手表连接或热重载宿主后重试。"
 }
 
 private fun wifiSupportSimple(health: HealthHostControl.Reply?): String = when {
@@ -1136,17 +1321,22 @@ private fun targetRuntimeText(scope: ModuleScope.View?, target: TargetProfile): 
         TargetProfile.CALENDAR -> scope.calendarActive()
         TargetProfile.HEALTH -> scope.healthActive()
         TargetProfile.WIRELESS_SETTINGS -> scope.wirelessActive()
+        TargetProfile.UMS -> scope.umsActive()
     }
     val runtime = when (target) {
         TargetProfile.CLOCK -> scope.clockRuntime()
         TargetProfile.CALENDAR -> scope.calendarRuntime()
         TargetProfile.HEALTH -> scope.healthRuntime()
         TargetProfile.WIRELESS_SETTINGS -> scope.wirelessRuntime()
+        TargetProfile.UMS -> scope.umsRuntime()
     }
     if (target == TargetProfile.CALENDAR && scope.frameworkConnected() && !scope.calendarGranted()) {
         return "未勾选作用域（可选）"
     }
     if (target == TargetProfile.WIRELESS_SETTINGS && scope.frameworkConnected() && !scope.wirelessGranted()) {
+        return "未勾选作用域（可选）"
+    }
+    if (target == TargetProfile.UMS && scope.frameworkConnected() && !scope.umsGranted()) {
         return "未勾选作用域（可选）"
     }
     val witness = if (active) "宿主已应答" else "宿主未应答"
@@ -1163,6 +1353,24 @@ private fun targetRuntimeText(scope: ModuleScope.View?, target: TargetProfile): 
         else -> runtime.state()
     }
     return "$stateLabel$codeNote · $witness"
+}
+
+private fun daemonRuntimeText(scope: ModuleScope.View?): String {
+    if (scope == null) return "等待检查"
+    if (!scope.supportsApi102() || scope.daemonRuntime().state() == "UNSUPPORTED") {
+        return "随运动健康通知监听服务按需加载"
+    }
+    val runtime = scope.daemonRuntime()
+    val codeNote = if (runtime.loadedVersionCode() > 0) " · code ${runtime.loadedVersionCode()}" else ""
+    val stateLabel = when (runtime.state()) {
+        "UP_TO_DATE" -> "运行最新版本"
+        "STALE" -> "运行旧版本，建议热重载"
+        "RELOADING" -> "正在热重载"
+        "FAILED" -> "上次加载失败，建议热重载或重启"
+        "ABSENT" -> "通知监听进程未运行"
+        else -> runtime.state()
+    }
+    return "$stateLabel$codeNote"
 }
 
 private fun clockResilienceText(clock: ClockHostControl.Reply?): String {

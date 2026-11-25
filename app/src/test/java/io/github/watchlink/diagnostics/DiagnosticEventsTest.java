@@ -28,6 +28,10 @@ public final class DiagnosticEventsTest {
                 "HOT_RELOAD_RESULT result=SUCCEEDED detail=private"));
         assertEquals("HEALTH_DISPATCH_BG_RESTRICTED type=BackgroundServiceStartNotAllowedException",
                 DiagnosticEvents.event("HEALTH_DISPATCH_BG_RESTRICTED type=BackgroundServiceStartNotAllowedException"));
+        assertEquals("HEALTH_LIVE_DISPATCH source=UMS live_op=CREATE live_event=PICK_UP mode=START_SERVICE",
+                DiagnosticEvents.event("HEALTH_LIVE_DISPATCH source=UMS live_op=CREATE live_event=PICK_UP mode=START_SERVICE code=A739"));
+        assertEquals("UMS_SYMBOLS_RESOLVED source=UMS resolver=DEX_SCAN",
+                DiagnosticEvents.event("UMS_SYMBOLS_RESOLVED source=UMS resolver=DEX_SCAN title=Cotti"));
         assertNull(DiagnosticEvents.event("UNKNOWN_EVENT private=anything"));
         assertNull(DiagnosticEvents.event("DAILY_HEALTH_OUTBOUND\nDAILY_HEALTH_DISMISS"));
     }

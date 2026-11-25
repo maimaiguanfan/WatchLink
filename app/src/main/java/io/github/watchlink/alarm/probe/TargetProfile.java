@@ -16,7 +16,9 @@ public enum TargetProfile {
     HEALTH("com.huawei.health",
             certificates("b92825c2bd5d6d6d1e7f39eecd17843b7d9016f611136b75441bc6f4d3f00f05")),
     WIRELESS_SETTINGS("com.oplus.wirelesssettings",
-            certificates("e49802409584ce53152a9000820a51e4fa8a723b7bcc263e335240acf100bf9e"));
+            certificates("e49802409584ce53152a9000820a51e4fa8a723b7bcc263e335240acf100bf9e")),
+    UMS("com.oplus.pantanal.ums",
+            certificates("159e6f37c336f2f41272542dbc1dc85721dd567ed4ac68ac13f2e43003ce0dce"));
 
     public final String packageName;
     private final Set<String> signerSha256;
@@ -45,8 +47,13 @@ public enum TargetProfile {
         return this == CLOCK || this == CALENDAR;
     }
 
-    /** Clock and Calendar run in their main processes; Huawei Health handles watch alarms in :PhoneService. */
+    /** Clock, Calendar, WirelessSettings, and UMS run in main processes; Health handles reminders in :PhoneService. */
     public boolean isReminderProcess(String processName) {
         return (this == HEALTH ? packageName + ":PhoneService" : packageName).equals(processName);
+    }
+
+    /** Huawei Health hosts NotificationPushListener in :DaemonService for Channel A promoted live notifications. */
+    public boolean isHealthDaemonProcess(String processName) {
+        return this == HEALTH && (packageName + ":DaemonService").equals(processName);
     }
 }

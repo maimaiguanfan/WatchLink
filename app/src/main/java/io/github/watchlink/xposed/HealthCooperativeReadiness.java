@@ -26,6 +26,14 @@ final class HealthCooperativeReadiness {
             return "WifiDeviceSnapshot(connected=" + connected + ", cap241=" + capability241 + ")";
         }
     }
+
+    record LiveDeviceSnapshot(boolean connected, Boolean bit84, Boolean bit219) {
+        static final LiveDeviceSnapshot DISCONNECTED = new LiveDeviceSnapshot(false, null, null);
+
+        @Override public String toString() {
+            return "LiveDeviceSnapshot(connected=" + connected + ", bit84=" + bit84 + ", bit219=" + bit219 + ")";
+        }
+    }
     private final Method manager, connected, identify, expand;
     private final Object mainDevices;
 
@@ -104,17 +112,25 @@ final class HealthCooperativeReadiness {
         }
     }
 
-    /** Returns raw ExpandCapability hex string for the primary connected wearable (or null if disconnected). */
-    String readRawExpandCapability() {
+    /** Returns the connected primary wearable snapshot for SmartEdge live-window support (ExpandCapability bit 84 / 219). */
+    LiveDeviceSnapshot readLiveSnapshot() {
         try {
             List<?> devices = connectedDevices(mainDevices);
-            if (devices == null || devices.isEmpty()) return null;
-            Object device = devices.get(0);
-            if (device == null) return null;
-            Object raw = expand.invoke(device);
-            return raw instanceof String s ? s : null;
+            if (devices == null || devices.isEmpty()) return LiveDeviceSnapshot.DISCONNECTED;
+            LiveDeviceSnapshot fallback = null;
+            for (Object device : devices) {
+                if (device == null) continue;
+                Object raw = expand.invoke(device);
+                String hex = raw instanceof String s ? s : null;
+                Boolean bit84 = capabilityBit(hex, 84);
+                Boolean bit219 = capabilityBit(hex, 219);
+                LiveDeviceSnapshot snap = new LiveDeviceSnapshot(true, bit84, bit219);
+                if (Boolean.TRUE.equals(bit84)) return snap;
+                if (fallback == null) fallback = snap;
+            }
+            return fallback != null ? fallback : LiveDeviceSnapshot.DISCONNECTED;
         } catch (Exception unavailable) {
-            return null;
+            return LiveDeviceSnapshot.DISCONNECTED;
         }
     }
 
@@ -157,10 +173,18 @@ final class HealthCooperativeReadiness {
     }
 
     static Boolean capability200(String expanded) {
-        if (expanded == null || expanded.isEmpty() || expanded.length() > 65_536) return null;
+        return capabilityBit(expanded, 200);
+    }
+
+    static Boolean capabilityBit(String expanded, int bitIndex) {
+        if (bitIndex < 0 || expanded == null || expanded.isEmpty() || expanded.length() > 65_536) return null;
         String hex = expanded.replace(" ", "");
         if (hex.isEmpty() || (hex.length() & 1) != 0 || !hex.matches("[a-fA-F0-9]+")) return null;
-        // Both native adapters check byte[index/8] & (1 << index%8), in input order.
-        return hex.length() >= 52 && (Character.digit(hex.charAt(51), 16) & 1) != 0;
+        // Huawei native adapters check byte[index/8] & (1 << index%8), in input byte order (verified against Lesi.e).
+        int charPos = (bitIndex / 8) * 2;
+        if (hex.length() < charPos + 2) return false;
+        int value = (Character.digit(hex.charAt(charPos), 16) << 4)
+                | Character.digit(hex.charAt(charPos + 1), 16);
+        return (value & (1 << (bitIndex % 8))) != 0;
     }
 }

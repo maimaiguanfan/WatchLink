@@ -133,4 +133,28 @@ public class HostSettingsTest {
         assertTrue(settings.isWifiAutoSyncEnabled());
         assertEquals(1, enabledEvents.get());
     }
+
+    @Test public void liveWindowToggleNotifiesChangesAndFallsBackLocally() {
+        MemoryPrefs remote = new MemoryPrefs();
+        MemoryPrefs local = new MemoryPrefs();
+        HostSettings settings = new HostSettings(remote, local);
+        AtomicInteger onCount = new AtomicInteger();
+        AtomicInteger offCount = new AtomicInteger();
+        settings.onLiveWindowChanged(on -> {
+            if (Boolean.TRUE.equals(on)) onCount.incrementAndGet();
+            else offCount.incrementAndGet();
+        });
+
+        assertFalse(settings.isLiveWindowEnabled());
+        assertTrue(settings.setLocalLiveWindowFallback(true));
+        assertTrue(settings.isLiveWindowEnabled());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED, false).commit();
+        assertFalse(settings.isLiveWindowEnabled());
+        assertEquals(1, offCount.get());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED, true).commit();
+        assertTrue(settings.isLiveWindowEnabled());
+        assertEquals(1, onCount.get());
+    }
 }

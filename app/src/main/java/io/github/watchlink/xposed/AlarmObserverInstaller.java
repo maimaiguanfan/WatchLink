@@ -42,6 +42,7 @@ final class AlarmObserverInstaller {
     private CalendarLiveBridge calendarLive;
     private HealthAlarmBridge healthBridge;
     private WirelessSettingsBridge wirelessBridge;
+    private UmsFluidBridge umsBridge;
     private HostSettings hostSettings;
 
     AlarmObserverInstaller(XposedInterface module, TargetProfile profile, ClassLoader loader,
@@ -94,6 +95,7 @@ final class AlarmObserverInstaller {
                 case CALENDAR -> ".calendar_settings_v1";
                 case HEALTH -> ".health_settings_v1";
                 case WIRELESS_SETTINGS -> ".wireless_settings_v1";
+                case UMS -> ".ums_settings_v1";
             };
             SharedPreferences local = hostContext.getSharedPreferences(
                     BuildConfig.APPLICATION_ID + localSuffix, Context.MODE_PRIVATE);
@@ -160,6 +162,10 @@ final class AlarmObserverInstaller {
                     throw new IllegalStateException("WIRELESS_SETTINGS_HOOK_UNAVAILABLE");
                 }
                 bridge.attachSettings(settings);
+            } else if (profile == TargetProfile.UMS) {
+                UmsFluidBridge bridge = new UmsFluidBridge(hostContext, settings, sources);
+                umsBridge = bridge;
+                bridge.install(this);
             } else {
                 HealthAlarmBridge bridge = new HealthAlarmBridge(hostContext, ownerUid, settings, sources);
                 healthBridge = bridge;
@@ -224,6 +230,10 @@ final class AlarmObserverInstaller {
             try { wirelessBridge.close(); } catch (RuntimeException ignored) {}
             wirelessBridge = null;
         }
+        if (umsBridge != null) {
+            try { umsBridge.close(); } catch (RuntimeException ignored) {}
+            umsBridge = null;
+        }
         if (hostSettings != null) {
             try { hostSettings.close(); } catch (RuntimeException ignored) {}
             hostSettings = null;
@@ -242,7 +252,7 @@ final class AlarmObserverInstaller {
             Class<?> application = target(CalendarSymbolResolver.APPLICATION);
             if (!Context.class.isAssignableFrom(application)) throw new NoSuchMethodException("Calendar application");
             getter = staticMethod(application, appGetter, Application.class);
-        } else if (target == TargetProfile.WIRELESS_SETTINGS) {
+        } else if (target == TargetProfile.WIRELESS_SETTINGS || target == TargetProfile.UMS) {
             return null;
         } else {
             getter = staticMethod(target("com.huawei.hwcommonmodel.application.BaseApplication"),

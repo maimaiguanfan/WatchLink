@@ -49,7 +49,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     private HealthExternalSender sender;
     private HealthCooperativeReadiness readiness;
     private HealthWifiBridge wifiBridge;
-    private SmartEdgeProbe smartEdgeProbe;
+    private HealthLiveWindowBridge liveBridge;
     private BroadcastReceiver controlReceiver;
     private boolean registered;
     private volatile boolean installed;
@@ -130,11 +130,9 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         wifi.install(installer, symbols);
         wifiBridge = wifi;
 
-        if (BuildConfig.DEBUG) {
-            SmartEdgeProbe probe = new SmartEdgeProbe(app, ownerUid, worker, readiness);
-            probe.install(installer);
-            smartEdgeProbe = probe;
-        }
+        HealthLiveWindowBridge live = new HealthLiveWindowBridge(app, settings, worker, readiness);
+        live.install(installer, symbols);
+        liveBridge = live;
 
         IntentFilter filter = new IntentFilter(DailyAlarmWire.OPEN);
         filter.addAction(DailyAlarmWire.END);
@@ -212,16 +210,17 @@ final class HealthAlarmBridge extends BroadcastReceiver {
 
     boolean hasActiveSession() {
         HealthWifiBridge wifi = wifiBridge;
-        return anySessionArmed() || (wifi != null && wifi.isBusy());
+        HealthLiveWindowBridge live = liveBridge;
+        return anySessionArmed()
+                || (wifi != null && wifi.isBusy())
+                || (live != null && live.isBusy());
     }
 
     private boolean anySessionArmed() {
         HealthWifiBridge wifi = wifiBridge;
-        SmartEdgeProbe probe = smartEdgeProbe;
         return daily.active(System.currentTimeMillis(), SystemClock.elapsedRealtime())
                 || activeTest != null
-                || (wifi != null && wifi.isAwaitingAck())
-                || (probe != null && probe.isObserving());
+                || (wifi != null && wifi.isAwaitingAck());
     }
 
     void close() {
@@ -229,9 +228,9 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         settings.onDisabled(null);
         settings.onCalendarDisabled(null);
         daily.stop();
-        if (smartEdgeProbe != null) {
-            try { smartEdgeProbe.close(); } catch (RuntimeException ignored) {}
-            smartEdgeProbe = null;
+        if (liveBridge != null) {
+            try { liveBridge.close(); } catch (RuntimeException ignored) {}
+            liveBridge = null;
         }
         if (wifiBridge != null) {
             try { wifiBridge.close(); } catch (RuntimeException ignored) {}
@@ -440,10 +439,6 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         if (wifi != null) {
             wifi.observeSdkFrame(received, frame);
         }
-        SmartEdgeProbe probe = smartEdgeProbe;
-        if (probe != null) {
-            probe.observeSdkFrame(received, frame);
-        }
         long wall = System.currentTimeMillis(), elapsed = SystemClock.elapsedRealtime();
         DailyAlarmObservation.Evidence evidence = daily.observe(received, device, frame, wall, elapsed);
         if (evidence != null) {
@@ -581,6 +576,20 @@ final class HealthAlarmBridge extends BroadcastReceiver {
             case HealthHostControl.SYNC_CURRENT_WIFI -> {
                 if (wifiBridge != null) wifiBridge.triggerCurrentWifiSync("MANUAL", true);
             }
+            case HealthHostControl.ENABLE_LIVE_WINDOW -> {
+                settings.setLocalLiveWindowFallback(true);
+                if (liveBridge != null) liveBridge.onSettingsFallbackChanged(true);
+            }
+            case HealthHostControl.DISABLE_LIVE_WINDOW -> {
+                settings.setLocalLiveWindowFallback(false);
+                if (liveBridge != null) liveBridge.onSettingsFallbackChanged(false);
+            }
+            case HealthHostControl.TEST_LIVE_WINDOW -> {
+                if (liveBridge != null) liveBridge.startLiveTest();
+            }
+            case HealthHostControl.CANCEL_LIVE_WINDOW -> {
+                if (liveBridge != null) liveBridge.cancelLiveTest();
+            }
             case HealthHostControl.TEST -> startManualTestLocked();
             case HealthHostControl.CANCEL_TEST -> cancelTestLocked(true);
             default -> {}
@@ -589,6 +598,9 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         HealthWifiBridge.StatusSnapshot wifi = wifiBridge != null
                 ? wifiBridge.statusSnapshot()
                 : new HealthWifiBridge.StatusSnapshot("UNKNOWN", false, 0, "NONE", "NONE", 0L);
+        HealthLiveWindowBridge.StatusSnapshot live = liveBridge != null
+                ? liveBridge.statusSnapshot()
+                : new HealthLiveWindowBridge.StatusSnapshot("UNKNOWN", 0, "NONE", "NONE", "NONE", "IDLE");
         return new HealthHostControl.Reply(
                 true,
                 settings.isEnabled(),
@@ -609,7 +621,14 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 wifi.syncedCount(),
                 wifi.lastResult(),
                 wifi.lastSource(),
-                wifi.lastAt());
+                wifi.lastAt(),
+                settings.isLiveWindowEnabled(),
+                live.watchSupport(),
+                live.activeCount(),
+                live.lastResult(),
+                live.lastSource(),
+                live.dispatchMode(),
+                live.testState());
     }
 
     private void startManualTestLocked() {

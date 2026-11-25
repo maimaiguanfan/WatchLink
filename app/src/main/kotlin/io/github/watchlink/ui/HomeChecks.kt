@@ -10,6 +10,7 @@ internal const val VERIFIED_CLOCK = "17.6.100"
 internal const val VERIFIED_CALENDAR = "17.6.30"
 internal const val VERIFIED_HEALTH = "17.0.10.330"
 internal const val VERIFIED_WIRELESS = "17.6.5"
+internal const val VERIFIED_UMS = "17.22.8"
 
 internal enum class SetupIssue {
     HOST_STALE,
@@ -38,6 +39,8 @@ internal data class HomeChecks(
     val calendarHost: CalendarHostControl.Reply? = null,
     val wirelessVersion: String? = null,
     val wirelessTrusted: Boolean = false,
+    val umsVersion: String? = null,
+    val umsTrusted: Boolean = false,
 ) {
     fun issues(scope: ModuleScope.View?): List<SetupIssue> = buildList {
         val stale = scope?.hasStaleTarget() == true

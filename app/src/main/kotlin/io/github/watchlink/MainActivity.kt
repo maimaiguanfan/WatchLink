@@ -30,8 +30,6 @@ import io.github.watchlink.validation.HealthHostControl
 import io.github.watchlink.validation.HuaweiReminderService
 import io.github.watchlink.wifi.RootWifiConfigReader
 import io.github.watchlink.wifi.WifiNetworkRecord
-import android.util.Log
-import io.github.watchlink.xposed.SmartEdgeProbe
 import io.github.watchlink.wifi.WifiSyncWire
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +55,7 @@ class MainActivity : ComponentActivity() {
                 state = ui,
                 onEnable = ::setEnabled,
                 onCalendarEnable = ::setCalendarEnabled,
+                onLiveWindowEnable = ::setLiveWindowEnabled,
                 onWifiAutoEnable = ::setWifiAutoEnabled,
                 onDismissMessage = { ui = ui.copy(message = null) },
                 onClock = { open(Intent(AlarmClock.ACTION_SHOW_ALARMS).setPackage(TargetProfile.CLOCK.packageName)) },
@@ -64,6 +63,7 @@ class MainActivity : ComponentActivity() {
                 onHealth = { open(packageManager.getLaunchIntentForPackage(TargetProfile.HEALTH.packageName)) },
                 onRequestScope = ::requestScope,
                 onRequestCalendarScope = ::requestCalendarScope,
+                onRequestUmsScope = ::requestUmsScope,
                 onRequestWirelessScope = ::requestWirelessScope,
                 onSyncCurrentWifi = ::syncCurrentWifi,
                 onLoadSavedWifi = ::loadSavedWifiViaRoot,
@@ -79,6 +79,8 @@ class MainActivity : ComponentActivity() {
                 onCoolapk = ::openCoolapk,
                 onStartTest = { runHealthTest(HealthHostControl.TEST) },
                 onCancelTest = { runHealthTest(HealthHostControl.CANCEL_TEST) },
+                onStartLiveTest = { runLiveTest(HealthHostControl.TEST_LIVE_WINDOW) },
+                onCancelLiveTest = { runLiveTest(HealthHostControl.CANCEL_LIVE_WINDOW) },
                 onShare = ::shareDiagnostics,
             )
         }
@@ -87,43 +89,10 @@ class MainActivity : ComponentActivity() {
                 refreshAll(forceScope = true)
                 while (true) {
                     val activeTest = ui.healthHost?.testState() in setOf("SENDING", "SENT", "SENT_DIRECT", "SERVICE_RECEIVED", "OUTBOUND")
+                            || ui.healthHost?.liveTestState() in setOf("OPENED", "UPDATED")
                     delay(if (activeTest) 1500L else 5000L)
                     refreshAll(forceScope = false)
                 }
-            }
-        }
-        handleDebugProbeIntent(intent)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        handleDebugProbeIntent(intent)
-    }
-
-    private fun handleDebugProbeIntent(incoming: Intent?) {
-        if (!BuildConfig.DEBUG) return
-        val action = incoming?.getStringExtra("smartedge_probe")?.trim().orEmpty()
-        if (action.isEmpty()) return
-        val pkgOverride = incoming?.getStringExtra("smartedge_pkg")
-        val eventOverride = incoming?.getStringExtra("smartedge_event")
-        val liveTypeOverride = incoming?.getIntExtra("smartedge_type", -1) ?: -1
-        val featMode = incoming?.getStringExtra("smartedge_feat")
-        lifecycleScope.launch {
-            if (action == "hot_reload") {
-                ModuleScope.refresh(applicationContext, true)
-                delay(1500L)
-                val outcome = hotReloadTargets(false)
-                Log.i("WatchLink", "SMARTEDGE_PROBE_HOT_RELOAD result=$outcome")
-            } else {
-                val reply = suspendCancellableCoroutine { cont ->
-                    SmartEdgeProbe.sendCommand(
-                        applicationContext, action, pkgOverride, eventOverride, liveTypeOverride, featMode
-                    ) { res ->
-                        if (cont.isActive) cont.resume(res)
-                    }
-                }
-                Log.i("WatchLink", "SMARTEDGE_PROBE_UI_REPLY action=$action reply=$reply")
             }
         }
     }
@@ -181,6 +150,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private suspend fun writeRemoteLiveWindowEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteLiveWindowEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
     private suspend fun syncOneWifi(record: WifiNetworkRecord, force: Boolean): WifiSyncWire.SyncResult =
         suspendCancellableCoroutine { continuation ->
             WifiSyncWire.sendSyncOne(applicationContext, record, force) { result ->
@@ -196,7 +172,7 @@ class MainActivity : ComponentActivity() {
         }
 
     private suspend fun queryHosts() {
-        if (ui.saving || ui.calendarSaving || ui.wifiAutoSaving) return
+        if (ui.saving || ui.calendarSaving || ui.wifiAutoSaving || ui.liveWindowSaving) return
         val revision = ++switchRevision
         val (clockReply, calendarReply, healthReply) = coroutineScope {
             val clockJob = async { clockCommand(ClockHostControl.QUERY) }
@@ -219,6 +195,7 @@ class MainActivity : ComponentActivity() {
                 val calendarVersion = readVersion(TargetProfile.CALENDAR.packageName)
                 val healthVersion = readVersion(TargetProfile.HEALTH.packageName)
                 val wirelessVersion = readVersion(TargetProfile.WIRELESS_SETTINGS.packageName)
+                val umsVersion = readVersion(TargetProfile.UMS.packageName)
                 HomeChecks(
                     clockVersion = clockVersion,
                     clockTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.CLOCK),
@@ -231,6 +208,8 @@ class MainActivity : ComponentActivity() {
                     calendarHost = currentCalendar,
                     wirelessVersion = wirelessVersion,
                     wirelessTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.WIRELESS_SETTINGS),
+                    umsVersion = umsVersion,
+                    umsTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.UMS),
                 )
             }.getOrNull()
         }
@@ -278,6 +257,55 @@ class MainActivity : ComponentActivity() {
                 ModuleScope.inspect()
             }
             ui = ui.copy(scope = scope)
+        }
+    }
+
+    private fun requestUmsScope() {
+        lifecycleScope.launch {
+            val scope = withContext(Dispatchers.IO) {
+                ModuleScope.requestUms(applicationContext)
+                ModuleScope.inspect()
+            }
+            ui = ui.copy(scope = scope)
+        }
+    }
+
+    private fun setLiveWindowEnabled(enable: Boolean) {
+        if (ui.liveWindowSaving) return
+        ++switchRevision
+        ui = ui.copy(liveWindowSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteLiveWindowEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_LIVE_WINDOW else HealthHostControl.DISABLE_LIVE_WINDOW
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.liveWindowEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                liveWindowSaving = false,
+                message = when {
+                    !saved -> "未能保存流体云 / 实况窗开关状态。请确认 LSPosed 已启用或运动健康在线后再试。"
+                    enable && scopeNow.frameworkConnected() && !scopeNow.umsGranted() ->
+                        "已开启实况窗同步（支持 Android 实况通知）。如需同步小程序取餐码、美团/饿了么等 ColorOS 流体云，请点击下方「申请智慧服务作用域」。"
+                    else -> null
+                },
+            )
+            readChecks()
+        }
+    }
+
+    private fun runLiveTest(command: String) {
+        if (ui.liveTesting) return
+        ui = ui.copy(liveTesting = true, message = null)
+        lifecycleScope.launch {
+            val reply = healthCommand(command)
+            ui = ui.copy(
+                healthHost = reply,
+                liveTesting = false,
+                message = if (!reply.reachable()) "运动健康 :PhoneService 未应答。请先打开华为运动健康并确认手表已连接。" else null,
+            )
+            readChecks()
         }
     }
 

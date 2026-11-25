@@ -70,4 +70,33 @@ public class HealthHostControlTest {
         assertEquals("NONE", poisoned.wifiLastSource());
         assertEquals(0L, poisoned.wifiLastAt());
     }
+
+    @Test public void sanitizesLiveWindowTelemetryAllowlists() {
+        var valid = new HealthHostControl.Reply(
+                true, true, false, true, true, true, "CACHE",
+                "READY_SUPPORTED_ON", "START_SERVICE", "SDK_AND_INTENT",
+                "IDLE", "NONE", "NONE",
+                false, "UNKNOWN", false, 0, "NONE", "NONE", 0L,
+                true, "SUPPORTED_LIVE_LEVEL", 2, "OPENED", "UMS", "START_SERVICE", "UPDATED");
+        assertTrue(valid.liveWindowEnabled());
+        assertEquals("SUPPORTED_LIVE_LEVEL", valid.liveWatchSupport());
+        assertEquals(2, valid.liveActiveCount());
+        assertEquals("OPENED", valid.liveLastResult());
+        assertEquals("UMS", valid.liveLastSource());
+        assertEquals("START_SERVICE", valid.liveDispatchMode());
+        assertEquals("UPDATED", valid.liveTestState());
+
+        var poisoned = new HealthHostControl.Reply(
+                true, true, false, true, true, true, "CACHE",
+                "READY_SUPPORTED_ON", "NONE", "NONE",
+                "IDLE", "NONE", "NONE",
+                false, "UNKNOWN", false, 0, "NONE", "NONE", 0L,
+                true, "PickupCodeA739", -4, "CottiCoffee", "evil", "raw", "leak");
+        assertEquals("UNKNOWN", poisoned.liveWatchSupport());
+        assertEquals(0, poisoned.liveActiveCount());
+        assertEquals("NONE", poisoned.liveLastResult());
+        assertEquals("NONE", poisoned.liveLastSource());
+        assertEquals("NONE", poisoned.liveDispatchMode());
+        assertEquals("IDLE", poisoned.liveTestState());
+    }
 }

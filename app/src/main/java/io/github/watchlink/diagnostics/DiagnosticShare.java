@@ -107,6 +107,7 @@ public final class DiagnosticShare {
                 .append("\n运动健康协同服务 ").append(health.ready() ? "可用" : health.stopped() ? "已停止" : "不可用")
                 .append("\n系统时钟作用域 ").append(scopeSummary(scope, TargetProfile.CLOCK))
                 .append("\n系统日历作用域（可选） ").append(scopeSummary(scope, TargetProfile.CALENDAR))
+                .append("\n智慧服务作用域（可选） ").append(scopeSummary(scope, TargetProfile.UMS))
                 .append("\n无线设置作用域（可选） ").append(scopeSummary(scope, TargetProfile.WIRELESS_SETTINGS))
                 .append("\n运动健康作用域 ").append(scopeSummary(scope, TargetProfile.HEALTH))
                 .append("\n每个来源最多包含最近 ").append(DiagnosticEvents.LIMIT)
@@ -124,6 +125,7 @@ public final class DiagnosticShare {
                 case CALENDAR -> "系统日历";
                 case HEALTH -> "华为运动健康（PhoneService）";
                 case WIRELESS_SETTINGS -> "无线设置（Wi-Fi 自动同步）";
+                case UMS -> "智慧服务（流体云实况窗）";
             };
             section(report, label, version(app, target.packageName), results.get(target), unavailable);
         }
@@ -143,18 +145,21 @@ public final class DiagnosticShare {
             case CALENDAR -> scope.calendarGranted();
             case HEALTH -> scope.healthGranted();
             case WIRELESS_SETTINGS -> scope.wirelessGranted();
+            case UMS -> scope.umsGranted();
         };
         boolean active = switch (target) {
             case CLOCK -> scope.clockActive();
             case CALENDAR -> scope.calendarActive();
             case HEALTH -> scope.healthActive();
             case WIRELESS_SETTINGS -> scope.wirelessActive();
+            case UMS -> scope.umsActive();
         };
         ModuleScope.TargetRuntime runtime = switch (target) {
             case CLOCK -> scope.clockRuntime();
             case CALENDAR -> scope.calendarRuntime();
             case HEALTH -> scope.healthRuntime();
             case WIRELESS_SETTINGS -> scope.wirelessRuntime();
+            case UMS -> scope.umsRuntime();
         };
         String grant = scope.frameworkConnected() ? (granted ? "已勾选" : "未勾选") : "未读到框架设置";
         String witness = active ? "已收到当前版本宿主应答" : "尚未收到当前版本宿主应答";
