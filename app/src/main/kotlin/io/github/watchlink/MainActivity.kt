@@ -30,6 +30,8 @@ import io.github.watchlink.validation.HealthHostControl
 import io.github.watchlink.validation.HuaweiReminderService
 import io.github.watchlink.wifi.RootWifiConfigReader
 import io.github.watchlink.wifi.WifiNetworkRecord
+import android.util.Log
+import io.github.watchlink.xposed.SmartEdgeProbe
 import io.github.watchlink.wifi.WifiSyncWire
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -88,6 +90,40 @@ class MainActivity : ComponentActivity() {
                     delay(if (activeTest) 1500L else 5000L)
                     refreshAll(forceScope = false)
                 }
+            }
+        }
+        handleDebugProbeIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDebugProbeIntent(intent)
+    }
+
+    private fun handleDebugProbeIntent(incoming: Intent?) {
+        if (!BuildConfig.DEBUG) return
+        val action = incoming?.getStringExtra("smartedge_probe")?.trim().orEmpty()
+        if (action.isEmpty()) return
+        val pkgOverride = incoming?.getStringExtra("smartedge_pkg")
+        val eventOverride = incoming?.getStringExtra("smartedge_event")
+        val liveTypeOverride = incoming?.getIntExtra("smartedge_type", -1) ?: -1
+        val featMode = incoming?.getStringExtra("smartedge_feat")
+        lifecycleScope.launch {
+            if (action == "hot_reload") {
+                ModuleScope.refresh(applicationContext, true)
+                delay(1500L)
+                val outcome = hotReloadTargets(false)
+                Log.i("WatchLink", "SMARTEDGE_PROBE_HOT_RELOAD result=$outcome")
+            } else {
+                val reply = suspendCancellableCoroutine { cont ->
+                    SmartEdgeProbe.sendCommand(
+                        applicationContext, action, pkgOverride, eventOverride, liveTypeOverride, featMode
+                    ) { res ->
+                        if (cont.isActive) cont.resume(res)
+                    }
+                }
+                Log.i("WatchLink", "SMARTEDGE_PROBE_UI_REPLY action=$action reply=$reply")
             }
         }
     }

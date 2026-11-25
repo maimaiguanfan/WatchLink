@@ -9,6 +9,7 @@ import android.content.pm.ServiceInfo;
 import android.os.Bundle;
 import android.os.SystemClock;
 import androidx.annotation.RequiresApi;
+import io.github.watchlink.BuildConfig;
 import io.github.watchlink.alarm.probe.ProbeLog;
 import io.github.watchlink.alarm.probe.SenderVerifier;
 import io.github.watchlink.alarm.probe.TargetProfile;
@@ -48,6 +49,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     private HealthExternalSender sender;
     private HealthCooperativeReadiness readiness;
     private HealthWifiBridge wifiBridge;
+    private SmartEdgeProbe smartEdgeProbe;
     private BroadcastReceiver controlReceiver;
     private boolean registered;
     private volatile boolean installed;
@@ -127,6 +129,12 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         HealthWifiBridge wifi = new HealthWifiBridge(app, ownerUid, settings, sender, readiness, sdkObserverReady);
         wifi.install(installer, symbols);
         wifiBridge = wifi;
+
+        if (BuildConfig.DEBUG) {
+            SmartEdgeProbe probe = new SmartEdgeProbe(app, ownerUid, worker, readiness);
+            probe.install(installer);
+            smartEdgeProbe = probe;
+        }
 
         IntentFilter filter = new IntentFilter(DailyAlarmWire.OPEN);
         filter.addAction(DailyAlarmWire.END);
@@ -209,9 +217,11 @@ final class HealthAlarmBridge extends BroadcastReceiver {
 
     private boolean anySessionArmed() {
         HealthWifiBridge wifi = wifiBridge;
+        SmartEdgeProbe probe = smartEdgeProbe;
         return daily.active(System.currentTimeMillis(), SystemClock.elapsedRealtime())
                 || activeTest != null
-                || (wifi != null && wifi.isAwaitingAck());
+                || (wifi != null && wifi.isAwaitingAck())
+                || (probe != null && probe.isObserving());
     }
 
     void close() {
@@ -219,6 +229,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         settings.onDisabled(null);
         settings.onCalendarDisabled(null);
         daily.stop();
+        if (smartEdgeProbe != null) {
+            try { smartEdgeProbe.close(); } catch (RuntimeException ignored) {}
+            smartEdgeProbe = null;
+        }
         if (wifiBridge != null) {
             try { wifiBridge.close(); } catch (RuntimeException ignored) {}
             wifiBridge = null;
@@ -425,6 +439,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         HealthWifiBridge wifi = wifiBridge;
         if (wifi != null) {
             wifi.observeSdkFrame(received, frame);
+        }
+        SmartEdgeProbe probe = smartEdgeProbe;
+        if (probe != null) {
+            probe.observeSdkFrame(received, frame);
         }
         long wall = System.currentTimeMillis(), elapsed = SystemClock.elapsedRealtime();
         DailyAlarmObservation.Evidence evidence = daily.observe(received, device, frame, wall, elapsed);

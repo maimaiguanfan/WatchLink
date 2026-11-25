@@ -104,6 +104,20 @@ final class HealthCooperativeReadiness {
         }
     }
 
+    /** Returns raw ExpandCapability hex string for the primary connected wearable (or null if disconnected). */
+    String readRawExpandCapability() {
+        try {
+            List<?> devices = connectedDevices(mainDevices);
+            if (devices == null || devices.isEmpty()) return null;
+            Object device = devices.get(0);
+            if (device == null) return null;
+            Object raw = expand.invoke(device);
+            return raw instanceof String s ? s : null;
+        } catch (Exception unavailable) {
+            return null;
+        }
+    }
+
     private Result read(Context context, String expectedDeviceToken, boolean requireSingle) {
         String matched = "";
         try {
