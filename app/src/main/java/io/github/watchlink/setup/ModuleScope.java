@@ -29,7 +29,7 @@ public final class ModuleScope {
     public static final List<String> REQUIRED_PACKAGES = List.of(
             TargetProfile.CLOCK.packageName, TargetProfile.HEALTH.packageName);
     public static final List<String> OPTIONAL_PACKAGES = List.of(
-            TargetProfile.CALENDAR.packageName);
+            TargetProfile.CALENDAR.packageName, TargetProfile.WIRELESS_SETTINGS.packageName);
 
     public record TargetRuntime(String state, long loadedVersionCode) {
         public static final TargetRuntime UNSUPPORTED = new TargetRuntime("UNSUPPORTED", 0);
@@ -52,12 +52,32 @@ public final class ModuleScope {
                        String frameworkName,
                        String frameworkVersion,
                        int frameworkApiVersion,
-                       boolean clockGranted, boolean healthGranted, boolean calendarGranted,
-                       boolean clockActive, boolean healthActive, boolean calendarActive,
-                       TargetRuntime clockRuntime, TargetRuntime healthRuntime, TargetRuntime calendarRuntime,
+                       boolean clockGranted, boolean healthGranted, boolean calendarGranted, boolean wirelessGranted,
+                       boolean clockActive, boolean healthActive, boolean calendarActive, boolean wirelessActive,
+                       TargetRuntime clockRuntime, TargetRuntime healthRuntime,
+                       TargetRuntime calendarRuntime, TargetRuntime wirelessRuntime,
                        boolean checking,
                        boolean requestPending, String requestResult,
-                       boolean remotePrefsSupported, Boolean remoteEnabled, Boolean remoteCalendarEnabled) {
+                       boolean remotePrefsSupported,
+                       Boolean remoteEnabled, Boolean remoteCalendarEnabled, Boolean remoteWifiAutoSyncEnabled) {
+        public View(boolean frameworkConnected,
+                    String frameworkName,
+                    String frameworkVersion,
+                    int frameworkApiVersion,
+                    boolean clockGranted, boolean healthGranted, boolean calendarGranted,
+                    boolean clockActive, boolean healthActive, boolean calendarActive,
+                    TargetRuntime clockRuntime, TargetRuntime healthRuntime, TargetRuntime calendarRuntime,
+                    boolean checking,
+                    boolean requestPending, String requestResult,
+                    boolean remotePrefsSupported, Boolean remoteEnabled, Boolean remoteCalendarEnabled) {
+            this(frameworkConnected, frameworkName, frameworkVersion, frameworkApiVersion,
+                    clockGranted, healthGranted, calendarGranted, false,
+                    clockActive, healthActive, calendarActive, false,
+                    clockRuntime, healthRuntime, calendarRuntime, TargetRuntime.ABSENT,
+                    checking, requestPending, requestResult, remotePrefsSupported,
+                    remoteEnabled, remoteCalendarEnabled, null);
+        }
+
         public boolean configured() { return frameworkConnected && clockGranted && healthGranted; }
 
         public boolean active() {
@@ -68,18 +88,24 @@ public final class ModuleScope {
             return calendarActive && (!frameworkConnected || calendarGranted);
         }
 
+        public boolean wirelessReady() {
+            return wirelessActive && (!frameworkConnected || wirelessGranted);
+        }
+
         public boolean supportsApi102() {
             return frameworkConnected && frameworkApiVersion >= XposedService.API_102;
         }
 
         public boolean hasStaleTarget() {
             return supportsApi102() && (clockRuntime.isStale() || healthRuntime.isStale()
-                    || (calendarGranted && calendarRuntime.isStale()));
+                    || (calendarGranted && calendarRuntime.isStale())
+                    || (wirelessGranted && wirelessRuntime.isStale()));
         }
 
         public boolean canHotReloadAny() {
             return supportsApi102()
-                    && (clockRuntime.isRunning() || healthRuntime.isRunning() || calendarRuntime.isRunning());
+                    && (clockRuntime.isRunning() || healthRuntime.isRunning()
+                    || calendarRuntime.isRunning() || wirelessRuntime.isRunning());
         }
     }
 
@@ -88,7 +114,7 @@ public final class ModuleScope {
     private static final long REQUEST_TIMEOUT_MS = 120_000;
     private static final long HOT_RELOAD_TIMEOUT_MS = 8_000;
     private static final TargetProfile[] TARGETS = {
-            TargetProfile.CLOCK, TargetProfile.CALENDAR, TargetProfile.HEALTH
+            TargetProfile.CLOCK, TargetProfile.CALENDAR, TargetProfile.HEALTH, TargetProfile.WIRELESS_SETTINGS
     };
     private static final ScheduledThreadPoolExecutor worker = new ScheduledThreadPoolExecutor(1, task -> {
         Thread thread = new Thread(task, "WatchLink-scope");
@@ -102,10 +128,11 @@ public final class ModuleScope {
 
     private static volatile View snapshot = new View(
             false, "", "", 0,
-            false, false, false,
-            false, false, false,
-            TargetRuntime.UNSUPPORTED, TargetRuntime.UNSUPPORTED, TargetRuntime.UNSUPPORTED,
-            false, false, "IDLE", false, null, null);
+            false, false, false, false,
+            false, false, false, false,
+            TargetRuntime.UNSUPPORTED, TargetRuntime.UNSUPPORTED,
+            TargetRuntime.UNSUPPORTED, TargetRuntime.UNSUPPORTED,
+            false, false, "IDLE", false, null, null, null);
     private static boolean listening;
     private static XposedService framework;
     private static String frameworkName = "";
@@ -115,9 +142,11 @@ public final class ModuleScope {
     private static boolean remotePrefsSupported;
     private static Boolean remoteEnabled;
     private static Boolean remoteCalendarEnabled;
+    private static Boolean remoteWifiAutoSyncEnabled;
     private static TargetRuntime clockRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime healthRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime calendarRuntime = TargetRuntime.UNSUPPORTED;
+    private static TargetRuntime wirelessRuntime = TargetRuntime.UNSUPPORTED;
     private static final Map<TargetProfile, HookedTarget> runningTargets = new HashMap<>();
     private static final Set<String> awaiting = new HashSet<>();
     private static List<String> awaitingRequested = List.of();
@@ -126,7 +155,7 @@ public final class ModuleScope {
     private static String result = "IDLE";
     private static long lastProbe = -REFRESH_INTERVAL_MS;
     private static Probe probe;
-    private static boolean clockActive, healthActive, calendarActive;
+    private static boolean clockActive, healthActive, calendarActive, wirelessActive;
 
     public static View inspect() { return snapshot; }
 
@@ -178,6 +207,11 @@ public final class ModuleScope {
         writeRemoteBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, enabled, callback);
     }
 
+    /** Persists the Route 1B automatic Wi-Fi sync toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteWifiAutoSyncEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED, enabled, callback);
+    }
+
     private static void writeRemoteBoolean(String key, boolean enabled, Consumer<Boolean> callback) {
         worker.execute(() -> {
             listen();
@@ -194,6 +228,7 @@ public final class ModuleScope {
                         remotePrefsSupported = true;
                         if (WatchLinkPrefs.KEY_ENABLED.equals(key)) remoteEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_CALENDAR_ENABLED.equals(key)) remoteCalendarEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED.equals(key)) remoteWifiAutoSyncEnabled = enabled;
                         ProbeLog.info("REMOTE_PREFS_SAVED");
                         publish();
                     }
@@ -288,7 +323,12 @@ public final class ModuleScope {
 
     /** Prompts LSPosed for the optional ColorOS Calendar scope declared in scope.list. */
     public static void requestCalendar(Context owner) {
-        requestPackages(owner, OPTIONAL_PACKAGES);
+        requestPackages(owner, List.of(TargetProfile.CALENDAR.packageName));
+    }
+
+    /** Prompts LSPosed for the optional ColorOS WirelessSettings scope for Route 1B Wi-Fi auto-sync. */
+    public static void requestWirelessSettings(Context owner) {
+        requestPackages(owner, List.of(TargetProfile.WIRELESS_SETTINGS.packageName));
     }
 
     private static void requestPackages(Context owner, List<String> wanted) {
@@ -384,9 +424,11 @@ public final class ModuleScope {
         remotePrefsSupported = false;
         remoteEnabled = null;
         remoteCalendarEnabled = null;
+        remoteWifiAutoSyncEnabled = null;
         clockRuntime = TargetRuntime.UNSUPPORTED;
         healthRuntime = TargetRuntime.UNSUPPORTED;
         calendarRuntime = TargetRuntime.UNSUPPORTED;
+        wirelessRuntime = TargetRuntime.UNSUPPORTED;
         runningTargets.clear();
         if (!awaiting.isEmpty()) result = "UNAVAILABLE";
         awaiting.clear();
@@ -412,12 +454,14 @@ public final class ModuleScope {
         remotePrefsSupported = false;
         remoteEnabled = null;
         remoteCalendarEnabled = null;
+        remoteWifiAutoSyncEnabled = null;
         runningTargets.clear();
         XposedService service = framework;
         if (service == null) {
             clockRuntime = TargetRuntime.UNSUPPORTED;
             healthRuntime = TargetRuntime.UNSUPPORTED;
             calendarRuntime = TargetRuntime.UNSUPPORTED;
+            wirelessRuntime = TargetRuntime.UNSUPPORTED;
             return;
         }
         try {
@@ -440,6 +484,8 @@ public final class ModuleScope {
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_ENABLED, false) : null;
                 remoteCalendarEnabled = prefs.contains(WatchLinkPrefs.KEY_CALENDAR_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, false) : null;
+                remoteWifiAutoSyncEnabled = prefs.contains(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED, false) : null;
             } catch (RuntimeException error) {
                 ProbeLog.failure("REMOTE_PREFS_READ_FAILED", error);
             }
@@ -450,6 +496,7 @@ public final class ModuleScope {
                 clockRuntime = TargetRuntime.ABSENT;
                 healthRuntime = TargetRuntime.ABSENT;
                 calendarRuntime = TargetRuntime.ABSENT;
+                wirelessRuntime = TargetRuntime.ABSENT;
                 if (targets != null) {
                     for (HookedTarget target : targets) {
                         if (target == null || target.getProcessName() == null) continue;
@@ -464,6 +511,9 @@ public final class ModuleScope {
                         } else if (TargetProfile.CALENDAR.isReminderProcess(proc)) {
                             runningTargets.put(TargetProfile.CALENDAR, target);
                             calendarRuntime = classifyState(state, target.getLoadedVersionCode());
+                        } else if (TargetProfile.WIRELESS_SETTINGS.isReminderProcess(proc)) {
+                            runningTargets.put(TargetProfile.WIRELESS_SETTINGS, target);
+                            wirelessRuntime = classifyState(state, target.getLoadedVersionCode());
                         }
                     }
                 }
@@ -471,17 +521,19 @@ public final class ModuleScope {
                 clockRuntime = TargetRuntime.UNSUPPORTED;
                 healthRuntime = TargetRuntime.UNSUPPORTED;
                 calendarRuntime = TargetRuntime.UNSUPPORTED;
+                wirelessRuntime = TargetRuntime.UNSUPPORTED;
             }
         } else {
             clockRuntime = TargetRuntime.UNSUPPORTED;
             healthRuntime = TargetRuntime.UNSUPPORTED;
             calendarRuntime = TargetRuntime.UNSUPPORTED;
+            wirelessRuntime = TargetRuntime.UNSUPPORTED;
         }
     }
 
     private static final class Probe {
         final long deadline;
-        Boolean clock, health, calendar;
+        Boolean clock, health, calendar, wireless;
         Probe(long deadline) { this.deadline = deadline; }
     }
 
@@ -500,7 +552,9 @@ public final class ModuleScope {
                     if (target == TargetProfile.CLOCK) current.clock = ready;
                     else if (target == TargetProfile.HEALTH) current.health = ready;
                     else if (target == TargetProfile.CALENDAR) current.calendar = ready;
-                    if (current.clock != null && current.health != null && current.calendar != null) finish(current);
+                    else if (target == TargetProfile.WIRELESS_SETTINGS) current.wireless = ready;
+                    if (current.clock != null && current.health != null
+                            && current.calendar != null && current.wireless != null) finish(current);
                 }));
             } catch (RuntimeException unavailable) {
                 ProbeLog.failure("SCOPE_HOST_READ_FAILED", unavailable);
@@ -515,6 +569,7 @@ public final class ModuleScope {
         clockActive = Boolean.TRUE.equals(current.clock);
         healthActive = Boolean.TRUE.equals(current.health);
         calendarActive = Boolean.TRUE.equals(current.calendar);
+        wirelessActive = Boolean.TRUE.equals(current.wireless);
         probe = null;
         publish();
     }
@@ -528,11 +583,12 @@ public final class ModuleScope {
                 grants != null && grants.contains(TargetProfile.CLOCK.packageName),
                 grants != null && grants.contains(TargetProfile.HEALTH.packageName),
                 grants != null && grants.contains(TargetProfile.CALENDAR.packageName),
-                clockActive, healthActive, calendarActive,
-                clockRuntime, healthRuntime, calendarRuntime,
+                grants != null && grants.contains(TargetProfile.WIRELESS_SETTINGS.packageName),
+                clockActive, healthActive, calendarActive, wirelessActive,
+                clockRuntime, healthRuntime, calendarRuntime, wirelessRuntime,
                 probe != null,
                 !awaiting.isEmpty(), result,
-                remotePrefsSupported, remoteEnabled, remoteCalendarEnabled);
+                remotePrefsSupported, remoteEnabled, remoteCalendarEnabled, remoteWifiAutoSyncEnabled);
     }
 
     private ModuleScope() {}

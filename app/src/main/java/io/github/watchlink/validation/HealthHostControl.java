@@ -27,6 +27,8 @@ import java.util.function.Consumer;
 public final class HealthHostControl {
     public static final String QUERY = "QUERY", ENABLE = "ENABLE", DISABLE = "DISABLE",
             ENABLE_CALENDAR = "ENABLE_CALENDAR", DISABLE_CALENDAR = "DISABLE_CALENDAR",
+            ENABLE_WIFI_AUTO = "ENABLE_WIFI_AUTO", DISABLE_WIFI_AUTO = "DISABLE_WIFI_AUTO",
+            SYNC_CURRENT_WIFI = "SYNC_CURRENT_WIFI",
             TEST = "TEST", CANCEL_TEST = "CANCEL_TEST";
     private static final String ACTION = BuildConfig.APPLICATION_ID + ".cooperative.HEALTH_CONTROL_V1";
     private static final int ACK = 1;
@@ -44,17 +46,37 @@ public final class HealthHostControl {
             "IDLE", "SENDING", "SENT", "SENT_DIRECT", "SERVICE_RECEIVED", "OUTBOUND",
             "SNOOZE", "DISMISS", "CLOSED", "WATCH_UNAVAILABLE", "BUSY",
             "BACKGROUND_RESTRICTED", "DENIED", "FAILED");
+    private static final Set<String> WIFI_WATCH_SUPPORTS = Set.of(
+            "SUPPORTED_NEW", "SUPPORTED_LEGACY", "SUPPORTED_UNKNOWN_CAP",
+            "UNSUPPORTED", "WATCH_DISCONNECTED", "UNKNOWN");
+    private static final Set<String> WIFI_RESULTS = Set.of(
+            "NONE", "SENDING", "ACK_OK", "SENT_NO_ACK_HOOK", "ACK_FAIL", "ACK_TIMEOUT", "SKIPPED_DUP",
+            "WATCH_DISCONNECTED", "UNSUPPORTED_WATCH", "UNSUPPORTED_NETWORK",
+            "WIRELESS_UNANSWERED", "NOT_CONNECTED", "DISABLED", "DIRECT_UNAVAILABLE", "FAILED");
+    private static final Set<String> WIFI_SOURCES = Set.of("NONE", "BULK_1A", "AUTO_1B");
 
     public record Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
                         boolean serviceWitness, boolean sdkObserver, String symbolSource,
                         String watchState, String lastDispatchMode, String lastActionSource,
-                        String testState, String testDispatchMode, String testActionSource) {
+                        String testState, String testDispatchMode, String testActionSource,
+                        boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                        int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt) {
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    false, "UNKNOWN", false, 0, "NONE", "NONE", 0L);
+        }
+
         public Reply(boolean reachable, boolean enabled, boolean remotePrefs,
                      boolean serviceWitness, boolean sdkObserver, String symbolSource,
                      String watchState, String lastDispatchMode, String lastActionSource,
                      String testState, String testDispatchMode, String testActionSource) {
             this(reachable, enabled, false, remotePrefs, serviceWitness, sdkObserver, symbolSource,
-                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource);
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    false, "UNKNOWN", false, 0, "NONE", "NONE", 0L);
         }
 
         public Reply {
@@ -70,6 +92,13 @@ public final class HealthHostControl {
             testState = pick(reachable, TEST_STATES, testState, "IDLE");
             testDispatchMode = pick(reachable, DISPATCH_MODES, testDispatchMode, "NONE");
             testActionSource = pick(reachable, ACTION_SOURCES, testActionSource, "NONE");
+            wifiAutoSyncEnabled = reachable && wifiAutoSyncEnabled;
+            wifiWatchSupport = pick(reachable, WIFI_WATCH_SUPPORTS, wifiWatchSupport, "UNKNOWN");
+            wifiAckReady = reachable && wifiAckReady;
+            wifiSyncedCount = reachable ? Math.max(0, wifiSyncedCount) : 0;
+            wifiLastResult = pick(reachable, WIFI_RESULTS, wifiLastResult, "NONE");
+            wifiLastSource = pick(reachable, WIFI_SOURCES, wifiLastSource, "NONE");
+            wifiLastAt = reachable ? Math.max(0L, wifiLastAt) : 0L;
         }
 
         private static String pick(boolean reachable, Set<String> allowed, String value, String fallback) {
@@ -82,12 +111,15 @@ public final class HealthHostControl {
     private static boolean validCommand(String value) {
         return QUERY.equals(value) || ENABLE.equals(value) || DISABLE.equals(value)
                 || ENABLE_CALENDAR.equals(value) || DISABLE_CALENDAR.equals(value)
+                || ENABLE_WIFI_AUTO.equals(value) || DISABLE_WIFI_AUTO.equals(value)
+                || SYNC_CURRENT_WIFI.equals(value)
                 || TEST.equals(value) || CANCEL_TEST.equals(value);
     }
 
     public static Reply unavailable() {
         return new Reply(false, false, false, false, false, false, "UNKNOWN",
-                "UNKNOWN", "NONE", "NONE", "IDLE", "NONE", "NONE");
+                "UNKNOWN", "NONE", "NONE", "IDLE", "NONE", "NONE",
+                false, "UNKNOWN", false, 0, "NONE", "NONE", 0L);
     }
 
     @RequiresApi(34)
@@ -125,6 +157,13 @@ public final class HealthHostControl {
                             details.putString("testState", reply.testState());
                             details.putString("testDispatchMode", reply.testDispatchMode());
                             details.putString("testActionSource", reply.testActionSource());
+                            details.putBoolean("wifiAutoSyncEnabled", reply.wifiAutoSyncEnabled());
+                            details.putString("wifiWatchSupport", reply.wifiWatchSupport());
+                            details.putBoolean("wifiAckReady", reply.wifiAckReady());
+                            details.putInt("wifiSyncedCount", reply.wifiSyncedCount());
+                            details.putString("wifiLastResult", reply.wifiLastResult());
+                            details.putString("wifiLastSource", reply.wifiLastSource());
+                            details.putLong("wifiLastAt", reply.wifiLastAt());
                             pending.setResult(ACK, null, details);
                         } catch (RuntimeException e) {
                             ProbeLog.failure("HEALTH_HOST_CONTROL_FAILED", e);
@@ -183,7 +222,14 @@ public final class HealthHostControl {
                                         data.getString("lastActionSource"),
                                         data.getString("testState"),
                                         data.getString("testDispatchMode"),
-                                        data.getString("testActionSource")));
+                                        data.getString("testActionSource"),
+                                        data.getBoolean("wifiAutoSyncEnabled", false),
+                                        data.getString("wifiWatchSupport"),
+                                        data.getBoolean("wifiAckReady", false),
+                                        data.getInt("wifiSyncedCount", 0),
+                                        data.getString("wifiLastResult"),
+                                        data.getString("wifiLastSource"),
+                                        data.getLong("wifiLastAt", 0L)));
                             } else callback.accept(unavailable());
                         }
                     }, main, 0, null, null);

@@ -14,7 +14,9 @@ public enum TargetProfile {
             certificates("4e61b5b0c669ff77214bbc321c85f54e4d86d60c446f14ac4f126d4e66f71cd7",
                     "7e18a2f30df7f24934d856fca0ba721bc94c728898f30cccbbab398606c921ac")),
     HEALTH("com.huawei.health",
-            certificates("b92825c2bd5d6d6d1e7f39eecd17843b7d9016f611136b75441bc6f4d3f00f05"));
+            certificates("b92825c2bd5d6d6d1e7f39eecd17843b7d9016f611136b75441bc6f4d3f00f05")),
+    WIRELESS_SETTINGS("com.oplus.wirelesssettings",
+            certificates("e49802409584ce53152a9000820a51e4fa8a723b7bcc263e335240acf100bf9e"));
 
     public final String packageName;
     private final Set<String> signerSha256;

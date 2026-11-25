@@ -47,6 +47,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
 
     private HealthExternalSender sender;
     private HealthCooperativeReadiness readiness;
+    private HealthWifiBridge wifiBridge;
     private BroadcastReceiver controlReceiver;
     private boolean registered;
     private volatile boolean installed;
@@ -123,6 +124,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         settings.onDisabled(() -> worker.execute(() -> cancelActiveDailyFor(TargetProfile.CLOCK)));
         settings.onCalendarDisabled(() -> worker.execute(() -> cancelActiveDailyFor(TargetProfile.CALENDAR)));
 
+        HealthWifiBridge wifi = new HealthWifiBridge(app, ownerUid, settings, sender, readiness, sdkObserverReady);
+        wifi.install(installer, symbols);
+        wifiBridge = wifi;
+
         IntentFilter filter = new IntentFilter(DailyAlarmWire.OPEN);
         filter.addAction(DailyAlarmWire.END);
         app.registerReceiver(this, filter, Context.RECEIVER_EXPORTED);
@@ -198,11 +203,15 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     }
 
     boolean hasActiveSession() {
-        return anySessionArmed();
+        HealthWifiBridge wifi = wifiBridge;
+        return anySessionArmed() || (wifi != null && wifi.isBusy());
     }
 
     private boolean anySessionArmed() {
-        return daily.active(System.currentTimeMillis(), SystemClock.elapsedRealtime()) || activeTest != null;
+        HealthWifiBridge wifi = wifiBridge;
+        return daily.active(System.currentTimeMillis(), SystemClock.elapsedRealtime())
+                || activeTest != null
+                || (wifi != null && wifi.isAwaitingAck());
     }
 
     void close() {
@@ -210,6 +219,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         settings.onDisabled(null);
         settings.onCalendarDisabled(null);
         daily.stop();
+        if (wifiBridge != null) {
+            try { wifiBridge.close(); } catch (RuntimeException ignored) {}
+            wifiBridge = null;
+        }
         if (registered) {
             try { app.unregisterReceiver(this); } catch (RuntimeException ignored) {}
             registered = false;
@@ -409,6 +422,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     }
 
     private synchronized void observeSdk(boolean received, String device, byte[] frame) {
+        HealthWifiBridge wifi = wifiBridge;
+        if (wifi != null) {
+            wifi.observeSdkFrame(received, frame);
+        }
         long wall = System.currentTimeMillis(), elapsed = SystemClock.elapsedRealtime();
         DailyAlarmObservation.Evidence evidence = daily.observe(received, device, frame, wall, elapsed);
         if (evidence != null) {
@@ -538,11 +555,22 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 settings.setLocalCalendarFallback(false);
                 cancelActiveDailyFor(TargetProfile.CALENDAR);
             }
+            case HealthHostControl.ENABLE_WIFI_AUTO -> {
+                settings.setLocalWifiAutoSyncFallback(true);
+                if (wifiBridge != null) wifiBridge.triggerCurrentWifiSync("SETTING_ENABLED", false);
+            }
+            case HealthHostControl.DISABLE_WIFI_AUTO -> settings.setLocalWifiAutoSyncFallback(false);
+            case HealthHostControl.SYNC_CURRENT_WIFI -> {
+                if (wifiBridge != null) wifiBridge.triggerCurrentWifiSync("MANUAL", true);
+            }
             case HealthHostControl.TEST -> startManualTestLocked();
             case HealthHostControl.CANCEL_TEST -> cancelTestLocked(true);
             default -> {}
         }
         WatchCheck watch = checkWatch();
+        HealthWifiBridge.StatusSnapshot wifi = wifiBridge != null
+                ? wifiBridge.statusSnapshot()
+                : new HealthWifiBridge.StatusSnapshot("UNKNOWN", false, 0, "NONE", "NONE", 0L);
         return new HealthHostControl.Reply(
                 true,
                 settings.isEnabled(),
@@ -556,7 +584,14 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 lastActionSource,
                 testState,
                 testDispatchMode,
-                testActionSource);
+                testActionSource,
+                settings.isWifiAutoSyncEnabled(),
+                wifi.watchSupport(),
+                wifi.ackReady(),
+                wifi.syncedCount(),
+                wifi.lastResult(),
+                wifi.lastSource(),
+                wifi.lastAt());
     }
 
     private void startManualTestLocked() {

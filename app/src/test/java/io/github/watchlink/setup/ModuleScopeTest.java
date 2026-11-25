@@ -95,17 +95,20 @@ public class ModuleScopeTest {
         assertEquals("UNSUPPORTED", ModuleScope.summarizeHotReload(Set.of("UNSUPPORTED", "SUCCEEDED")));
     }
 
-    @Test public void scopeListContainsClockCalendarAndHealthWithoutSystemUi() throws Exception {
+    @Test public void scopeListContainsClockCalendarHealthAndWirelessWithoutSystemUi() throws Exception {
         List<String> declared = Files.readAllLines(Path.of("src/main/resources/META-INF/xposed/scope.list"));
         String clock = TargetProfile.CLOCK.packageName;
         String calendar = TargetProfile.CALENDAR.packageName;
         String health = TargetProfile.HEALTH.packageName;
-        assertEquals(Set.of(clock, calendar, health), Set.copyOf(declared));
+        String wireless = TargetProfile.WIRELESS_SETTINGS.packageName;
+        assertEquals(Set.of(clock, calendar, health, wireless), Set.copyOf(declared));
         assertEquals(List.of(clock, health), ModuleScope.missingFrom(List.of()));
         assertEquals(List.of(clock), ModuleScope.missingFrom(List.of(health)));
         assertEquals(List.of(health), ModuleScope.missingFrom(List.of(clock)));
         assertTrue(ModuleScope.missingFrom(List.of(clock, health)).isEmpty());
-        assertEquals(List.of(calendar), ModuleScope.missingPackages(ModuleScope.OPTIONAL_PACKAGES, List.of(clock, health)));
-        assertTrue(ModuleScope.missingPackages(ModuleScope.OPTIONAL_PACKAGES, List.of(clock, health, calendar)).isEmpty());
+        assertEquals(List.of(calendar, wireless),
+                ModuleScope.missingPackages(ModuleScope.OPTIONAL_PACKAGES, List.of(clock, health)));
+        assertTrue(ModuleScope.missingPackages(ModuleScope.OPTIONAL_PACKAGES,
+                List.of(clock, health, calendar, wireless)).isEmpty());
     }
 }

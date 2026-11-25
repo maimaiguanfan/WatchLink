@@ -5,6 +5,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import androidx.annotation.RequiresApi;
 import io.github.watchlink.alarm.probe.DeviceToken;
+import io.github.watchlink.wifi.HuaweiWifiSyncCodec;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -16,6 +17,14 @@ final class HealthCooperativeReadiness {
     record Result(String kind, String matchingRawDevice) {
         // This short-lived device identifier only scopes the physical receiver. Never log it.
         @Override public String toString() { return kind; }
+    }
+
+    record WifiDeviceSnapshot(boolean connected, String rawDevice, String deviceToken, Boolean capability241) {
+        static final WifiDeviceSnapshot DISCONNECTED = new WifiDeviceSnapshot(false, "", "", null);
+
+        @Override public String toString() {
+            return "WifiDeviceSnapshot(connected=" + connected + ", cap241=" + capability241 + ")";
+        }
     }
     private final Method manager, connected, identify, expand;
     private final Object mainDevices;
@@ -70,6 +79,28 @@ final class HealthCooperativeReadiness {
             return onlyRouteMatches(key) ? DeviceToken.of(key) : null;
         } catch (Exception unavailable) {
             return null;
+        }
+    }
+
+    /** Returns the connected primary wearable snapshot for Wi-Fi sync (including ExpandCapability bit 241). */
+    WifiDeviceSnapshot readWifiSnapshot() {
+        try {
+            List<?> devices = connectedDevices(mainDevices);
+            if (devices == null || devices.isEmpty()) return WifiDeviceSnapshot.DISCONNECTED;
+            WifiDeviceSnapshot fallback = null;
+            for (Object device : devices) {
+                if (device == null) continue;
+                String key = (String) identify.invoke(device);
+                if (key == null || key.isEmpty()) continue;
+                String token = DeviceToken.of(key);
+                Boolean cap241 = HuaweiWifiSyncCodec.capability241((String) expand.invoke(device));
+                WifiDeviceSnapshot snapshot = new WifiDeviceSnapshot(true, key, token, cap241);
+                if (Boolean.TRUE.equals(cap241)) return snapshot;
+                if (fallback == null) fallback = snapshot;
+            }
+            return fallback != null ? fallback : WifiDeviceSnapshot.DISCONNECTED;
+        } catch (Exception unavailable) {
+            return WifiDeviceSnapshot.DISCONNECTED;
         }
     }
 

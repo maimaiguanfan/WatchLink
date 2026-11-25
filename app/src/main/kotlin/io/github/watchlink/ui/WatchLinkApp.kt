@@ -24,6 +24,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,12 +34,32 @@ import io.github.watchlink.setup.ModuleScope
 import io.github.watchlink.validation.CalendarHostControl
 import io.github.watchlink.validation.ClockHostControl
 import io.github.watchlink.validation.HealthHostControl
+import io.github.watchlink.wifi.WifiNetworkRecord
 import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
 import java.text.DateFormat
 import java.util.Date
+
+internal data class WifiBulkItem(
+    val key: String,
+    val record: WifiNetworkRecord,
+    val selected: Boolean,
+    val status: String = "IDLE",
+)
+
+internal data class WifiBulkUiState(
+    val loading: Boolean = false,
+    val loadError: String? = null,
+    val items: List<WifiBulkItem> = emptyList(),
+    val forceResend: Boolean = false,
+    val syncing: Boolean = false,
+    val completedCount: Int = 0,
+    val totalCount: Int = 0,
+    val successCount: Int = 0,
+    val summaryMessage: String? = null,
+)
 
 internal data class WatchLinkUiState(
     val clockHost: ClockHostControl.Reply? = null,
@@ -48,6 +69,9 @@ internal data class WatchLinkUiState(
     val scope: ModuleScope.View? = null,
     val saving: Boolean = false,
     val calendarSaving: Boolean = false,
+    val wifiAutoSaving: Boolean = false,
+    val wifiSyncingCurrent: Boolean = false,
+    val wifiBulk: WifiBulkUiState = WifiBulkUiState(),
     val reloading: Boolean = false,
     val testing: Boolean = false,
     val sharing: Boolean = false,
@@ -75,10 +99,20 @@ internal data class WatchLinkUiState(
         get() = !calendarSaving && (scope?.remotePrefsSupported() == true
                 || calendarHost?.reachable() == true
                 || healthHost?.reachable() == true)
+
+    val effectiveWifiAutoEnabled: Boolean
+        get() = scope?.remoteWifiAutoSyncEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.wifiAutoSyncEnabled()
+            ?: false
+
+    val canToggleWifiAuto: Boolean
+        get() = !wifiAutoSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
 }
 
 private enum class Page(val title: String) {
     HOME("WatchLink"),
+    WIFI_SYNC("批量同步 Wi-Fi"),
     DIAGNOSTICS("测试与诊断"),
     GUIDE("使用说明与关于"),
 }
@@ -88,12 +122,22 @@ internal fun WatchLinkApp(
     state: WatchLinkUiState,
     onEnable: (Boolean) -> Unit,
     onCalendarEnable: (Boolean) -> Unit,
+    onWifiAutoEnable: (Boolean) -> Unit,
     onDismissMessage: () -> Unit,
     onClock: () -> Unit,
     onCalendar: () -> Unit,
     onHealth: () -> Unit,
     onRequestScope: () -> Unit,
     onRequestCalendarScope: () -> Unit,
+    onRequestWirelessScope: () -> Unit,
+    onSyncCurrentWifi: () -> Unit,
+    onLoadSavedWifi: () -> Unit,
+    onToggleWifiSelection: (String) -> Unit,
+    onSelectWifiPreset: (String) -> Unit,
+    onToggleWifiForceResend: (Boolean) -> Unit,
+    onStartBulkWifiSync: () -> Unit,
+    onCancelBulkWifiSync: () -> Unit,
+    onClearBulkWifiMemory: () -> Unit,
     onHotReload: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onHealthDownload: () -> Unit,
@@ -107,7 +151,10 @@ internal fun WatchLinkApp(
         val homeScroll = rememberLazyListState()
         val scroll = if (page == Page.HOME) homeScroll else key(page) { rememberLazyListState() }
         val behavior = MiuixScrollBehavior()
-        val back = { page = Page.HOME }
+        val back = {
+            if (page == Page.WIFI_SYNC) onClearBulkWifiMemory()
+            page = Page.HOME
+        }
         BackHandler(enabled = page != Page.HOME, onBack = back)
         Scaffold(modifier = Modifier.fillMaxSize(), topBar = {
             if (page == Page.HOME) TopAppBar(title = page.title, scrollBehavior = behavior)
@@ -135,16 +182,29 @@ internal fun WatchLinkApp(
                             state = state,
                             onEnable = onEnable,
                             onCalendarEnable = onCalendarEnable,
+                            onWifiAutoEnable = onWifiAutoEnable,
                             onClock = onClock,
                             onCalendar = onCalendar,
                             onHealth = onHealth,
                             onRequestScope = onRequestScope,
                             onRequestCalendarScope = onRequestCalendarScope,
+                            onRequestWirelessScope = onRequestWirelessScope,
+                            onSyncCurrentWifi = onSyncCurrentWifi,
+                            onOpenWifiBulk = { page = Page.WIFI_SYNC },
                             onHotReload = onHotReload,
                             onRefresh = onRefresh,
                             onHealthDownload = onHealthDownload,
                             onOpenDiagnostics = { page = Page.DIAGNOSTICS },
                             onOpenGuide = { page = Page.GUIDE },
+                        )
+                        Page.WIFI_SYNC -> wifiBulkSyncPage(
+                            state = state,
+                            onLoadSavedWifi = onLoadSavedWifi,
+                            onToggleWifiSelection = onToggleWifiSelection,
+                            onSelectWifiPreset = onSelectWifiPreset,
+                            onToggleWifiForceResend = onToggleWifiForceResend,
+                            onStartBulkWifiSync = onStartBulkWifiSync,
+                            onCancelBulkWifiSync = onCancelBulkWifiSync,
                         )
                         Page.DIAGNOSTICS -> diagnosticsPage(
                             state = state,
@@ -166,11 +226,15 @@ private fun LazyListScope.homePage(
     state: WatchLinkUiState,
     onEnable: (Boolean) -> Unit,
     onCalendarEnable: (Boolean) -> Unit,
+    onWifiAutoEnable: (Boolean) -> Unit,
     onClock: () -> Unit,
     onCalendar: () -> Unit,
     onHealth: () -> Unit,
     onRequestScope: () -> Unit,
     onRequestCalendarScope: () -> Unit,
+    onRequestWirelessScope: () -> Unit,
+    onSyncCurrentWifi: () -> Unit,
+    onOpenWifiBulk: () -> Unit,
     onHotReload: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onHealthDownload: () -> Unit,
@@ -239,6 +303,15 @@ private fun LazyListScope.homePage(
             onRequestCalendarScope = onRequestCalendarScope,
             onOpenCalendar = onCalendar,
             onRefresh = onRefresh,
+        )
+    }
+    item("wifi") {
+        WifiSyncCard(
+            state = state,
+            onWifiAutoEnable = onWifiAutoEnable,
+            onRequestWirelessScope = onRequestWirelessScope,
+            onSyncCurrentWifi = onSyncCurrentWifi,
+            onOpenWifiBulk = onOpenWifiBulk,
         )
     }
     recentRing(state)
@@ -320,8 +393,10 @@ private fun StatusCard(state: WatchLinkUiState, issues: List<SetupIssue>) {
                 Spacer(Modifier.height(16.dp))
                 CheckLine("系统时钟", hostStatusSimple(state.scope, TargetProfile.CLOCK), ink)
                 CheckLine("系统日历（可选）", calendarStatusSimple(state.scope, checks), ink)
+                CheckLine("无线设置（可选）", wirelessStatusSimple(state.scope, checks), ink)
                 CheckLine("华为运动健康", hostStatusSimple(state.scope, TargetProfile.HEALTH), ink)
                 CheckLine("手表连接", watchStateSimple(state.healthHost), ink)
+                CheckLine("Wi-Fi 同步", wifiSupportSimple(state.healthHost), ink)
                 CheckLine("重启免启动", remotePrefsSimple(state), ink)
                 CheckLine("表端反控手机", when {
                     state.clockHost?.reachable() != true -> "待时钟上线"
@@ -419,6 +494,216 @@ private fun CalendarReminderCard(
             Menu("打开系统日历", "启动或切回日历以加载模块，完成后可点此返回刷新。", onOpenCalendar)
             HorizontalDivider()
             Menu("刷新日历加载状态", "若已重启系统日历或完成热重载，点击确认生效。", onRefresh)
+        }
+    }
+}
+
+@Composable
+private fun WifiSyncCard(
+    state: WatchLinkUiState,
+    onWifiAutoEnable: (Boolean) -> Unit,
+    onRequestWirelessScope: () -> Unit,
+    onSyncCurrentWifi: () -> Unit,
+    onOpenWifiBulk: () -> Unit,
+) {
+    val enabled = state.effectiveWifiAutoEnabled
+    val scope = state.scope
+    val checks = state.checks
+    val health = state.healthHost
+    val trusted = checks == null || checks.wirelessTrusted
+    val needsScope = enabled && trusted && scope?.frameworkConnected() == true && !scope.wirelessGranted()
+
+    val autoSummary = buildString {
+        when {
+            !trusted -> append("未检测到官方签名的 ColorOS 无线设置（com.oplus.wirelesssettings）。")
+            state.wifiAutoSaving -> append("正在保存开关状态…")
+            !state.canToggleWifiAuto -> append("请先启用模块框架或打开华为运动健康。")
+            needsScope -> append("开关已开启 · 请授权「无线设置」作用域后即可免 Root、免定位自动同步新 Wi-Fi")
+            enabled -> append("已开启 · 手机连接新 Wi-Fi 时自动同步到手表（无需 Root、无需开启定位、重启零进程）")
+            else -> append("可选 · 手机连接新 Wi-Fi 时自动同步到手表，免 Root、无需开启定位服务")
+        }
+        if (health != null && health.reachable()) {
+            append("\n手表状态：").append(wifiSupportSimple(health))
+            if (health.wifiSyncedCount() > 0) {
+                append(" · 已同步 ").append(health.wifiSyncedCount()).append(" 个网络")
+            }
+            val last = wifiResultSimple(health.wifiLastResult(), health.wifiLastSource())
+            if (last.isNotEmpty()) append("\n最近一次：").append(last)
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        BasicComponent(
+            title = "自动同步新连接的 Wi-Fi",
+            summary = autoSummary,
+            onClick = if (trusted && state.canToggleWifiAuto) { { onWifiAutoEnable(!enabled) } } else null,
+            endActions = {
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = { onWifiAutoEnable(it) },
+                    enabled = trusted && state.canToggleWifiAuto
+                )
+            }
+        )
+        if (needsScope) {
+            HorizontalDivider()
+            if (scope.requestPending()) {
+                BasicComponent(title = "等待 LSPosed 授权", summary = "请在 LSPosed 弹出的提示中同意「无线设置」。")
+            } else {
+                Menu(
+                    "申请无线设置作用域",
+                    "仅额外勾选「无线设置」，用于免定位读取当前已连接 Wi-Fi 凭据。",
+                    onRequestWirelessScope
+                )
+            }
+        } else if (trusted && health?.reachable() == true && (scope?.wirelessGranted() == true || scope?.frameworkConnected() != true)) {
+            HorizontalDivider()
+            BasicComponent(
+                title = "立即同步当前已连接 Wi-Fi",
+                summary = if (state.wifiSyncingCurrent) "正在通过无线设置读取并下发到手表…"
+                else "按需触发一次 1B 免 Root 同步，立即验证手表接收状态。",
+                endActions = {
+                    TextButton(
+                        if (state.wifiSyncingCurrent) "同步中…" else "立即同步",
+                        onSyncCurrentWifi,
+                        enabled = !state.wifiSyncingCurrent
+                    )
+                }
+            )
+        }
+        HorizontalDivider()
+        Menu(
+            "首次 / 批量同步已保存 Wi-Fi（需临时 Root）",
+            "按需读取系统已保存 Wi-Fi 列表并勾选下发（支持 WPA3/WPA2/WEP 及开放无密码网络）。",
+            onOpenWifiBulk
+        )
+    }
+}
+
+private fun LazyListScope.wifiBulkSyncPage(
+    state: WatchLinkUiState,
+    onLoadSavedWifi: () -> Unit,
+    onToggleWifiSelection: (String) -> Unit,
+    onSelectWifiPreset: (String) -> Unit,
+    onToggleWifiForceResend: (Boolean) -> Unit,
+    onStartBulkWifiSync: () -> Unit,
+    onCancelBulkWifiSync: () -> Unit,
+) {
+    val bulk = state.wifiBulk
+    val health = state.healthHost
+    val supportedItems = bulk.items.filter { it.record.isSupportedByWatch() }
+    val selectedCount = supportedItems.count { it.selected }
+
+    item("wifi-bulk-intro") {
+        Card(Modifier.fillMaxWidth()) {
+            BasicComponent(
+                title = "隐私与首次全同步说明",
+                summary = "仅在你点击下方按钮时临时使用 Root 在内存中读取系统 Wi-Fi 配置，" +
+                    "界面绝不展示明文密码、绝不落盘保存密码；离开此页面立即清空内存。同步完成后可随时收回 Root 权限。\n" +
+                    "当前手表：${wifiSupportSimple(health)}"
+            )
+        }
+    }
+
+    item("wifi-bulk-read") {
+        Card(Modifier.fillMaxWidth()) {
+            BasicComponent(
+                title = if (bulk.items.isEmpty()) "读取已保存 Wi-Fi 列表" else "重新读取已保存 Wi-Fi 列表",
+                summary = when {
+                    bulk.loading -> "正在使用 Root 读取系统 Wi-Fi 配置…"
+                    bulk.loadError != null -> bulk.loadError
+                    bulk.items.isNotEmpty() -> "已读取 ${bulk.items.size} 个网络，其中 ${supportedItems.size} 个支持同步到手表（含开放无密码网络）。"
+                    else -> "读取 /data/misc/apexdata/com.android.wifi/WifiConfigStore.xml 并按最近连接时间排序。"
+                },
+                endActions = {
+                    TextButton(
+                        if (bulk.loading) "读取中…" else "Root 读取",
+                        onLoadSavedWifi,
+                        enabled = !bulk.loading && !bulk.syncing
+                    )
+                }
+            )
+        }
+    }
+
+    if (bulk.items.isNotEmpty()) {
+        item("wifi-bulk-controls") {
+            Card(Modifier.fillMaxWidth()) {
+                BasicComponent(
+                    title = "快速勾选（已选 $selectedCount / ${supportedItems.size}）",
+                    summary = "开放无密码 Wi-Fi 已允许勾选；企业认证（EAP）暂不支持。",
+                    endActions = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            TextButton("全选", { onSelectWifiPreset("ALL") }, enabled = !bulk.syncing)
+                            TextButton("仅加密", { onSelectWifiPreset("ENCRYPTED") }, enabled = !bulk.syncing)
+                            TextButton("清空", { onSelectWifiPreset("NONE") }, enabled = !bulk.syncing)
+                        }
+                    }
+                )
+                HorizontalDivider()
+                BasicComponent(
+                    title = "强制重发已同步过的网络",
+                    summary = "关闭时会自动跳过本表已确认同步过的相同配置；若手表重连或重置后可开启重发。",
+                    onClick = if (!bulk.syncing) { { onToggleWifiForceResend(!bulk.forceResend) } } else null,
+                    endActions = {
+                        Switch(
+                            checked = bulk.forceResend,
+                            onCheckedChange = onToggleWifiForceResend,
+                            enabled = !bulk.syncing
+                        )
+                    }
+                )
+                HorizontalDivider()
+                val progressSummary = when {
+                    bulk.syncing -> "正在逐条同步 ${bulk.completedCount} / ${bulk.totalCount}（已确认 ${bulk.successCount}）…"
+                    bulk.summaryMessage != null -> bulk.summaryMessage
+                    health?.reachable() != true -> "运动健康 :PhoneService 未在线，请先打开华为运动健康并连接手表。"
+                    else -> "将按序通过华为原生 1/47 协议下发到手表，并等待每条确认回执。"
+                }
+                BasicComponent(
+                    title = if (bulk.syncing) "正在同步到手表" else "开始同步已选 Wi-Fi",
+                    summary = progressSummary,
+                    endActions = {
+                        if (bulk.syncing) {
+                            TextButton("停止", onCancelBulkWifiSync)
+                        } else {
+                            TextButton(
+                                "同步（$selectedCount）",
+                                onStartBulkWifiSync,
+                                enabled = selectedCount > 0 && health?.reachable() == true
+                            )
+                        }
+                    }
+                )
+            }
+        }
+
+        item("wifi-bulk-list-title") { SectionTitle("已保存网络列表") }
+        item("wifi-bulk-list") {
+            Card(Modifier.fillMaxWidth()) {
+                bulk.items.forEachIndexed { index, item ->
+                    if (index > 0) HorizontalDivider()
+                    val supported = item.record.isSupportedByWatch()
+                    val statusText = wifiBulkItemStatusText(item.status)
+                    val summary = buildString {
+                        append(item.record.securityLabel())
+                        if (item.record.hidden()) append(" · 隐藏网络")
+                        if (statusText.isNotEmpty()) append(" · ").append(statusText)
+                    }
+                    BasicComponent(
+                        title = item.record.ssid(),
+                        summary = summary,
+                        onClick = if (supported && !bulk.syncing) { { onToggleWifiSelection(item.key) } } else null,
+                        endActions = {
+                            Checkbox(
+                                state = if (item.selected) ToggleableState.On else ToggleableState.Off,
+                                onClick = { onToggleWifiSelection(item.key) },
+                                enabled = supported && !bulk.syncing
+                            )
+                        }
+                    )
+                }
+            }
         }
     }
 }
@@ -550,6 +835,8 @@ private fun LazyListScope.diagnosticsPage(
             HorizontalDivider()
             BasicComponent(title = "系统日历进程（可选）", summary = targetRuntimeText(scope, TargetProfile.CALENDAR))
             HorizontalDivider()
+            BasicComponent(title = "无线设置进程（可选）", summary = targetRuntimeText(scope, TargetProfile.WIRELESS_SETTINGS))
+            HorizontalDivider()
             BasicComponent(title = "运动健康进程（:PhoneService）", summary = targetRuntimeText(scope, TargetProfile.HEALTH))
             HorizontalDivider()
             BasicComponent(
@@ -605,6 +892,11 @@ private fun LazyListScope.diagnosticsPage(
                 title = "最近表端按键回程",
                 summary = actionSourceText(health?.lastActionSource() ?: clock?.actionSource())
             )
+            HorizontalDivider()
+            BasicComponent(
+                title = "Wi-Fi 同步通道状态",
+                summary = wifiDiagnosticsText(health)
+            )
         }
     }
 
@@ -658,12 +950,12 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
         Card(Modifier.fillMaxWidth()) {
             BasicComponent(
                 title = "1. 在 LSPosed 勾选目标宿主",
-                summary = "启用 WatchLink 模块，核心勾选「系统时钟」和「华为运动健康」；如需同步日历强提醒闹钟，再勾选「系统日历」。无需 Magisk 模块，也无需勾选 SystemUI。"
+                summary = "启用 WatchLink 模块，核心勾选「系统时钟」和「华为运动健康」；如需日历强提醒再勾选「系统日历」；如需连接新 Wi-Fi 免 Root 免定位自动同步，再勾选「无线设置」。无需 Magisk 模块，也无需勾选 SystemUI。"
             )
             HorizontalDivider()
             BasicComponent(
                 title = "2. 开启同步开关即可退出",
-                summary = "重启一次已勾选宿主（或使用 API 102 热重载），打开首页对应的同步开关后，即可关闭 WatchLink，日常无需后台保活。"
+                summary = "重启一次已勾选宿主（或使用 API 102 热重载），打开首页对应的同步开关后，即可关闭 WatchLink，日常无需后台保活。Wi-Fi 首次同步可临时用 Root 批量导入，日常新增连接由无线设置与运动健康直接完成。"
             )
             HorizontalDivider()
             BasicComponent(
@@ -680,7 +972,7 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
                 summary = "WatchLink ${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})\n" +
                     "包名：${BuildConfig.APPLICATION_ID}\n" +
                     "框架标准：LSPosed API 102（兼容 API 101）\n" +
-                    "已验证基线：一加时钟 $VERIFIED_CLOCK · 一加日历 $VERIFIED_CALENDAR · 华为运动健康 $VERIFIED_HEALTH"
+                    "已验证基线：一加时钟 $VERIFIED_CLOCK · 一加日历 $VERIFIED_CALENDAR · 无线设置 $VERIFIED_WIRELESS · 华为运动健康 $VERIFIED_HEALTH"
             )
             HorizontalDivider()
             Menu("作者的酷安主页", "查看更新日志、适配说明与问题反馈", onCoolapk)
@@ -702,22 +994,26 @@ private fun hostStatusSimple(scope: ModuleScope.View?, target: TargetProfile): S
         TargetProfile.CLOCK -> scope.clockActive()
         TargetProfile.CALENDAR -> scope.calendarActive()
         TargetProfile.HEALTH -> scope.healthActive()
+        TargetProfile.WIRELESS_SETTINGS -> scope.wirelessActive()
     }
     val granted = when (target) {
         TargetProfile.CLOCK -> scope.clockGranted()
         TargetProfile.CALENDAR -> scope.calendarGranted()
         TargetProfile.HEALTH -> scope.healthGranted()
+        TargetProfile.WIRELESS_SETTINGS -> scope.wirelessGranted()
     }
     val runtime = when (target) {
         TargetProfile.CLOCK -> scope.clockRuntime()
         TargetProfile.CALENDAR -> scope.calendarRuntime()
         TargetProfile.HEALTH -> scope.healthRuntime()
+        TargetProfile.WIRELESS_SETTINGS -> scope.wirelessRuntime()
     }
     return when {
         scope.frameworkConnected() && !granted -> "未勾选"
         scope.supportsApi102() && runtime.isStale() -> "待热重载（旧版本）"
         scope.supportsApi102() && runtime.isReloading() -> "热重载中…"
         active -> "已连接"
+        target == TargetProfile.WIRELESS_SETTINGS && granted -> "已授权（按需唤醒）"
         scope.checking() -> "检查中…"
         granted -> "已勾选，待重启加载"
         else -> "未确认"
@@ -729,6 +1025,78 @@ private fun calendarStatusSimple(scope: ModuleScope.View?, checks: HomeChecks): 
     if (scope == null) return "检查中"
     if (scope.frameworkConnected() && !scope.calendarGranted()) return "未启用（可选）"
     return hostStatusSimple(scope, TargetProfile.CALENDAR)
+}
+
+private fun wirelessStatusSimple(scope: ModuleScope.View?, checks: HomeChecks): String {
+    if (!checks.wirelessTrusted) return "未安装或签名不匹配"
+    if (scope == null) return "检查中"
+    if (scope.frameworkConnected() && !scope.wirelessGranted()) return "未启用（可选）"
+    return hostStatusSimple(scope, TargetProfile.WIRELESS_SETTINGS)
+}
+
+private fun wifiSupportSimple(health: HealthHostControl.Reply?): String = when {
+    health == null || !health.reachable() -> "待运动健康上线"
+    else -> when (health.wifiWatchSupport()) {
+        "SUPPORTED_NEW" -> "已支持新版 Wi-Fi 同步（bit 241）"
+        "SUPPORTED_LEGACY" -> "已支持标准 Wi-Fi 同步"
+        "SUPPORTED_UNKNOWN_CAP" -> "已支持 Wi-Fi 同步"
+        "UNSUPPORTED" -> "当前手表不支持 Wi-Fi 同步"
+        "WATCH_DISCONNECTED" -> "未连接手表"
+        else -> "待确认"
+    }
+}
+
+private fun wifiResultSimple(result: String?, source: String?): String {
+    val src = when (source) {
+        "BULK_1A" -> "批量同步"
+        "AUTO_1B" -> "自动同步"
+        else -> ""
+    }
+    val msg = when (result) {
+        "SENDING" -> "正在同步…"
+        "ACK_OK" -> "手表已确认接收（100000）"
+        "SENT_NO_ACK_HOOK" -> "已下发至手表（未开启回执监听）"
+        "SKIPPED_DUP" -> "已是已同步网络，已跳过"
+        "ACK_FAIL" -> "手表返回接收失败"
+        "ACK_TIMEOUT" -> "已下发，等待手表回执超时"
+        "WATCH_DISCONNECTED" -> "未连接手表"
+        "UNSUPPORTED_WATCH" -> "手表不支持 Wi-Fi 同步"
+        "UNSUPPORTED_NETWORK" -> "当前网络类型不支持（如企业认证）"
+        "WIRELESS_UNANSWERED" -> "无线设置未应答（请确认作用域已勾选）"
+        "NOT_CONNECTED" -> "手机当前未连接 Wi-Fi"
+        "DISABLED" -> "自动同步开关已关闭"
+        "DIRECT_UNAVAILABLE" -> "直发通道未就绪"
+        "FAILED" -> "同步失败"
+        else -> ""
+    }
+    return if (msg.isEmpty()) "" else if (src.isEmpty()) msg else "$src · $msg"
+}
+
+private fun wifiBulkItemStatusText(status: String): String = when (status) {
+    "PENDING" -> "排队中"
+    "SENDING" -> "同步中…"
+    "ACK_OK" -> "手表已确认"
+    "SENT_NO_ACK_HOOK" -> "已下发"
+    "SKIPPED_DUP" -> "已同步（跳过）"
+    "ACK_FAIL" -> "手表拒绝"
+    "ACK_TIMEOUT" -> "回执超时"
+    "WATCH_DISCONNECTED" -> "手表未连接"
+    "UNSUPPORTED_WATCH" -> "手表不支持"
+    "UNSUPPORTED_NETWORK" -> "不支持"
+    "HEALTH_UNREACHABLE" -> "健康未应答"
+    "FAILED", "DIRECT_UNAVAILABLE" -> "失败"
+    else -> ""
+}
+
+private fun wifiDiagnosticsText(health: HealthHostControl.Reply?): String {
+    if (health == null || !health.reachable()) return "待运动健康上线后读取"
+    val cap = wifiSupportSimple(health)
+    val ack = if (health.wifiAckReady()) "回执监听就绪" else "回执监听降级"
+    val last = wifiResultSimple(health.wifiLastResult(), health.wifiLastSource())
+    return buildString {
+        append(cap).append(" · ").append(ack).append(" · 已同步 ").append(health.wifiSyncedCount()).append(" 个")
+        if (last.isNotEmpty()) append("\n最近结果：").append(last)
+    }
 }
 
 private fun watchStateSimple(health: HealthHostControl.Reply?): String = when {
@@ -767,13 +1135,18 @@ private fun targetRuntimeText(scope: ModuleScope.View?, target: TargetProfile): 
         TargetProfile.CLOCK -> scope.clockActive()
         TargetProfile.CALENDAR -> scope.calendarActive()
         TargetProfile.HEALTH -> scope.healthActive()
+        TargetProfile.WIRELESS_SETTINGS -> scope.wirelessActive()
     }
     val runtime = when (target) {
         TargetProfile.CLOCK -> scope.clockRuntime()
         TargetProfile.CALENDAR -> scope.calendarRuntime()
         TargetProfile.HEALTH -> scope.healthRuntime()
+        TargetProfile.WIRELESS_SETTINGS -> scope.wirelessRuntime()
     }
     if (target == TargetProfile.CALENDAR && scope.frameworkConnected() && !scope.calendarGranted()) {
+        return "未勾选作用域（可选）"
+    }
+    if (target == TargetProfile.WIRELESS_SETTINGS && scope.frameworkConnected() && !scope.wirelessGranted()) {
         return "未勾选作用域（可选）"
     }
     val witness = if (active) "宿主已应答" else "宿主未应答"

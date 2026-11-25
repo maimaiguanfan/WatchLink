@@ -27,6 +27,7 @@ public final class WatchLinkModule extends XposedModule {
     private volatile String[] hostSources;
     private volatile Context hostContext;
     private volatile XposedInterface.HookHandle bootstrapHandle;
+    private volatile WirelessSettingsBridge earlyWirelessBridge;
     private volatile AlarmObserverInstaller currentInstaller;
     private final AtomicBoolean scheduled = new AtomicBoolean();
 
@@ -59,6 +60,11 @@ public final class WatchLinkModule extends XposedModule {
         hostSources = sources;
         int ownerUid = owner.uid;
 
+        // Arm the unobfuscated WirelessSettings wake hook synchronously so cold-start 1B queries never race.
+        if (profile == TargetProfile.WIRELESS_SETTINGS) {
+            earlyWirelessBridge = WirelessSettingsBridge.installEarlyHook(this, loader, openRemotePreferences());
+        }
+
         Consumer<Application> start = app -> {
             if (app != null) hostContext = app.getApplicationContext();
             launchInstall(profile, loader, sources, ownerUid, app, "WatchLink-hook-install");
@@ -85,6 +91,11 @@ public final class WatchLinkModule extends XposedModule {
         bootstrapHandle = null;
         if (boot != null) {
             try { boot.unhook(); } catch (RuntimeException ignored) {}
+        }
+        WirelessSettingsBridge earlyWireless = earlyWirelessBridge;
+        earlyWirelessBridge = null;
+        if (earlyWireless != null) {
+            try { earlyWireless.close(); } catch (RuntimeException ignored) {}
         }
         if (installer != null) {
             currentInstaller = null;
@@ -140,7 +151,10 @@ public final class WatchLinkModule extends XposedModule {
     private void launchInstall(TargetProfile profile, ClassLoader loader, String[] sources,
                                int ownerUid, Context readyContext, String threadName) {
         SharedPreferences remote = openRemotePreferences();
-        AlarmObserverInstaller installer = new AlarmObserverInstaller(this, profile, loader, ownerUid, remote);
+        WirelessSettingsBridge preInstalledWireless = earlyWirelessBridge;
+        earlyWirelessBridge = null;
+        AlarmObserverInstaller installer = new AlarmObserverInstaller(
+                this, profile, loader, ownerUid, remote, preInstalledWireless);
         currentInstaller = installer;
         Thread worker = new Thread(() -> {
             try {

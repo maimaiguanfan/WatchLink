@@ -41,5 +41,33 @@ public class HealthHostControlTest {
         assertEquals("UNKNOWN", offline.symbolSource());
         assertEquals("UNKNOWN", offline.watchState());
         assertEquals("IDLE", offline.testState());
+        assertEquals("UNKNOWN", offline.wifiWatchSupport());
+        assertEquals("NONE", offline.wifiLastResult());
+    }
+
+    @Test public void sanitizesWifiTelemetryAllowlists() {
+        var valid = new HealthHostControl.Reply(
+                true, true, true, true, true, true, "CACHE",
+                "READY_SUPPORTED_ON", "START_SERVICE", "SDK_AND_INTENT",
+                "IDLE", "NONE", "NONE",
+                true, "SUPPORTED_NEW", true, 5, "ACK_OK", "AUTO_1B", 1700000000000L);
+        assertTrue(valid.wifiAutoSyncEnabled());
+        assertEquals("SUPPORTED_NEW", valid.wifiWatchSupport());
+        assertTrue(valid.wifiAckReady());
+        assertEquals(5, valid.wifiSyncedCount());
+        assertEquals("ACK_OK", valid.wifiLastResult());
+        assertEquals("AUTO_1B", valid.wifiLastSource());
+        assertEquals(1700000000000L, valid.wifiLastAt());
+
+        var poisoned = new HealthHostControl.Reply(
+                true, true, false, true, true, true, "CACHE",
+                "READY_SUPPORTED_ON", "NONE", "NONE",
+                "IDLE", "NONE", "NONE",
+                true, "HomeSsidLeak", true, -3, "SecretPass", "evil", -9L);
+        assertEquals("UNKNOWN", poisoned.wifiWatchSupport());
+        assertEquals(0, poisoned.wifiSyncedCount());
+        assertEquals("NONE", poisoned.wifiLastResult());
+        assertEquals("NONE", poisoned.wifiLastSource());
+        assertEquals(0L, poisoned.wifiLastAt());
     }
 }

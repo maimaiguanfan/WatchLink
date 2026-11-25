@@ -4,6 +4,7 @@ import android.content.SharedPreferences;
 import io.github.watchlink.alarm.probe.TargetProfile;
 import io.github.watchlink.setup.WatchLinkPrefs;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 /**
  * Reads WatchLink's feature toggles from LSPosed RemotePreferences when available,
@@ -16,6 +17,7 @@ final class HostSettings {
     private final SharedPreferences.OnSharedPreferenceChangeListener remoteListener;
     private volatile Runnable disabledCallback;
     private volatile Runnable calendarDisabledCallback;
+    private volatile Consumer<Boolean> wifiAutoSyncChangedCallback;
 
     HostSettings(SharedPreferences remote, SharedPreferences local) {
         this.remote = remote;
@@ -29,6 +31,11 @@ final class HostSettings {
                         && !prefs.getBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, false)) {
                     Runnable callback = calendarDisabledCallback;
                     if (callback != null) callback.run();
+                } else if (WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = wifiAutoSyncChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED, false));
+                    }
                 }
             };
             try {
@@ -49,6 +56,10 @@ final class HostSettings {
 
     boolean isCalendarEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED);
+    }
+
+    boolean isWifiAutoSyncEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED);
     }
 
     boolean isEnabledFor(TargetProfile source) {
@@ -76,6 +87,10 @@ final class HostSettings {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, enabled).commit();
     }
 
+    boolean setLocalWifiAutoSyncFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED, enabled).commit();
+    }
+
     void onDisabled(Runnable callback) {
         disabledCallback = callback;
     }
@@ -84,9 +99,14 @@ final class HostSettings {
         calendarDisabledCallback = callback;
     }
 
+    void onWifiAutoSyncChanged(Consumer<Boolean> callback) {
+        wifiAutoSyncChangedCallback = callback;
+    }
+
     void close() {
         disabledCallback = null;
         calendarDisabledCallback = null;
+        wifiAutoSyncChangedCallback = null;
         if (remote != null && remoteListener != null) {
             try { remote.unregisterOnSharedPreferenceChangeListener(remoteListener); }
             catch (RuntimeException ignored) { /* Closing. */ }

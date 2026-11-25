@@ -22,12 +22,18 @@ import io.github.watchlink.setup.ModuleScope
 import io.github.watchlink.ui.HomeChecks
 import io.github.watchlink.ui.WatchLinkApp
 import io.github.watchlink.ui.WatchLinkUiState
+import io.github.watchlink.ui.WifiBulkItem
+import io.github.watchlink.ui.WifiBulkUiState
 import io.github.watchlink.validation.CalendarHostControl
 import io.github.watchlink.validation.ClockHostControl
 import io.github.watchlink.validation.HealthHostControl
 import io.github.watchlink.validation.HuaweiReminderService
+import io.github.watchlink.wifi.RootWifiConfigReader
+import io.github.watchlink.wifi.WifiNetworkRecord
+import io.github.watchlink.wifi.WifiSyncWire
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -39,6 +45,7 @@ import kotlin.coroutines.resume
 class MainActivity : ComponentActivity() {
     private var ui by mutableStateOf(WatchLinkUiState())
     private var switchRevision = 0
+    private var bulkSyncJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,12 +55,22 @@ class MainActivity : ComponentActivity() {
                 state = ui,
                 onEnable = ::setEnabled,
                 onCalendarEnable = ::setCalendarEnabled,
+                onWifiAutoEnable = ::setWifiAutoEnabled,
                 onDismissMessage = { ui = ui.copy(message = null) },
                 onClock = { open(Intent(AlarmClock.ACTION_SHOW_ALARMS).setPackage(TargetProfile.CLOCK.packageName)) },
                 onCalendar = { open(packageManager.getLaunchIntentForPackage(TargetProfile.CALENDAR.packageName)) },
                 onHealth = { open(packageManager.getLaunchIntentForPackage(TargetProfile.HEALTH.packageName)) },
                 onRequestScope = ::requestScope,
                 onRequestCalendarScope = ::requestCalendarScope,
+                onRequestWirelessScope = ::requestWirelessScope,
+                onSyncCurrentWifi = ::syncCurrentWifi,
+                onLoadSavedWifi = ::loadSavedWifiViaRoot,
+                onToggleWifiSelection = ::toggleWifiSelection,
+                onSelectWifiPreset = ::selectWifiPreset,
+                onToggleWifiForceResend = ::toggleWifiForceResend,
+                onStartBulkWifiSync = ::startBulkWifiSync,
+                onCancelBulkWifiSync = ::cancelBulkWifiSync,
+                onClearBulkWifiMemory = ::clearBulkWifiMemory,
                 onHotReload = ::triggerHotReload,
                 onRefresh = { lifecycleScope.launch { refreshAll(forceScope = true) } },
                 onHealthDownload = { open(Intent(Intent.ACTION_VIEW, "https://consumer.huawei.com/cn/support/content/zh-cn15981770/".toUri())) },
@@ -73,6 +90,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        clearBulkWifiMemory()
+        super.onDestroy()
     }
 
     private suspend fun refreshAll(forceScope: Boolean) {
@@ -116,6 +138,20 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private suspend fun writeRemoteWifiAutoSyncEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteWifiAutoSyncEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun syncOneWifi(record: WifiNetworkRecord, force: Boolean): WifiSyncWire.SyncResult =
+        suspendCancellableCoroutine { continuation ->
+            WifiSyncWire.sendSyncOne(applicationContext, record, force) { result ->
+                if (continuation.isActive) continuation.resume(result)
+            }
+        }
+
     private suspend fun hotReloadTargets(onlyStale: Boolean): String =
         suspendCancellableCoroutine { continuation ->
             ModuleScope.hotReloadTargets(applicationContext, onlyStale) { outcome ->
@@ -124,7 +160,7 @@ class MainActivity : ComponentActivity() {
         }
 
     private suspend fun queryHosts() {
-        if (ui.saving || ui.calendarSaving) return
+        if (ui.saving || ui.calendarSaving || ui.wifiAutoSaving) return
         val revision = ++switchRevision
         val (clockReply, calendarReply, healthReply) = coroutineScope {
             val clockJob = async { clockCommand(ClockHostControl.QUERY) }
@@ -146,6 +182,7 @@ class MainActivity : ComponentActivity() {
                 val clockVersion = readVersion(TargetProfile.CLOCK.packageName)
                 val calendarVersion = readVersion(TargetProfile.CALENDAR.packageName)
                 val healthVersion = readVersion(TargetProfile.HEALTH.packageName)
+                val wirelessVersion = readVersion(TargetProfile.WIRELESS_SETTINGS.packageName)
                 HomeChecks(
                     clockVersion = clockVersion,
                     clockTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.CLOCK),
@@ -156,6 +193,8 @@ class MainActivity : ComponentActivity() {
                     calendarVersion = calendarVersion,
                     calendarTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.CALENDAR),
                     calendarHost = currentCalendar,
+                    wirelessVersion = wirelessVersion,
+                    wirelessTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.WIRELESS_SETTINGS),
                 )
             }.getOrNull()
         }
@@ -193,6 +232,206 @@ class MainActivity : ComponentActivity() {
                 ModuleScope.inspect()
             }
             ui = ui.copy(scope = scope)
+        }
+    }
+
+    private fun requestWirelessScope() {
+        lifecycleScope.launch {
+            val scope = withContext(Dispatchers.IO) {
+                ModuleScope.requestWirelessSettings(applicationContext)
+                ModuleScope.inspect()
+            }
+            ui = ui.copy(scope = scope)
+        }
+    }
+
+    private fun setWifiAutoEnabled(enable: Boolean) {
+        if (ui.wifiAutoSaving) return
+        ++switchRevision
+        ui = ui.copy(wifiAutoSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteWifiAutoSyncEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_WIFI_AUTO else HealthHostControl.DISABLE_WIFI_AUTO
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.wifiAutoSyncEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                wifiAutoSaving = false,
+                message = when {
+                    !saved -> "未能保存 Wi-Fi 自动同步开关状态。请确认 LSPosed 已启用或运动健康在线后再试。"
+                    enable && scopeNow.frameworkConnected() && !scopeNow.wirelessGranted() ->
+                        "已开启新 Wi-Fi 自动同步，请点击下方「申请无线设置作用域」以实现免 Root、免定位自动同步。"
+                    else -> null
+                },
+            )
+            readChecks()
+        }
+    }
+
+    private fun syncCurrentWifi() {
+        if (ui.wifiSyncingCurrent) return
+        ui = ui.copy(wifiSyncingCurrent = true, message = null)
+        lifecycleScope.launch {
+            val initial = healthCommand(HealthHostControl.SYNC_CURRENT_WIFI)
+            if (!initial.reachable()) {
+                ui = ui.copy(
+                    healthHost = initial,
+                    wifiSyncingCurrent = false,
+                    message = "运动健康 :PhoneService 未应答，请先打开华为运动健康并确认手表已连接。",
+                )
+                return@launch
+            }
+            ui = ui.copy(healthHost = initial)
+            // Poll briefly while WirelessSettings answers and watch returns 1/47 ACK.
+            var latest = initial
+            repeat(4) {
+                delay(1200L)
+                latest = healthCommand(HealthHostControl.QUERY)
+                ui = ui.copy(healthHost = latest)
+                if (latest.wifiLastResult() != "SENDING") return@repeat
+            }
+            ui = ui.copy(wifiSyncingCurrent = false)
+            refreshScope(force = true)
+        }
+    }
+
+    private fun loadSavedWifiViaRoot() {
+        if (ui.wifiBulk.loading || ui.wifiBulk.syncing) return
+        ui = ui.copy(wifiBulk = ui.wifiBulk.copy(loading = true, loadError = null, summaryMessage = null))
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { RootWifiConfigReader.readSavedNetworks() }
+            val items = result.networks().map { record ->
+                WifiBulkItem(key = record.selectionKey(), record = record, selected = false)
+            }
+            val error = when (result.status()) {
+                RootWifiConfigReader.Status.OK -> null
+                RootWifiConfigReader.Status.EMPTY -> "未在系统配置中找到已保存的 Wi-Fi 网络。"
+                RootWifiConfigReader.Status.ROOT_DENIED -> "Root 授权被拒绝或不可用。请临时授予 WatchLink Root 权限后再试（同步完成后可随时收回）。"
+                RootWifiConfigReader.Status.FILE_UNAVAILABLE -> "未读取到系统 Wi-Fi 配置文件（/data/misc/apexdata/com.android.wifi/WifiConfigStore.xml）。"
+                RootWifiConfigReader.Status.PARSE_ERROR -> "系统 Wi-Fi 配置文件解析失败。"
+                RootWifiConfigReader.Status.TIMEOUT -> "读取系统 Wi-Fi 配置超时，请重试。"
+            }
+            ui = ui.copy(
+                wifiBulk = ui.wifiBulk.copy(
+                    loading = false,
+                    loadError = error,
+                    items = items,
+                    completedCount = 0,
+                    totalCount = 0,
+                    successCount = 0,
+                    summaryMessage = null,
+                )
+            )
+        }
+    }
+
+    private fun toggleWifiSelection(key: String) {
+        if (ui.wifiBulk.syncing) return
+        val updated = ui.wifiBulk.items.map { item ->
+            if (item.key == key && item.record.isSupportedByWatch()) item.copy(selected = !item.selected)
+            else item
+        }
+        ui = ui.copy(wifiBulk = ui.wifiBulk.copy(items = updated, summaryMessage = null))
+    }
+
+    private fun selectWifiPreset(mode: String) {
+        if (ui.wifiBulk.syncing) return
+        val updated = ui.wifiBulk.items.map { item ->
+            val supported = item.record.isSupportedByWatch()
+            val selected = when (mode) {
+                "ALL" -> supported
+                "ENCRYPTED" -> supported && !item.record.isOpen()
+                else -> false
+            }
+            item.copy(selected = selected)
+        }
+        ui = ui.copy(wifiBulk = ui.wifiBulk.copy(items = updated, summaryMessage = null))
+    }
+
+    private fun toggleWifiForceResend(force: Boolean) {
+        if (ui.wifiBulk.syncing) return
+        ui = ui.copy(wifiBulk = ui.wifiBulk.copy(forceResend = force))
+    }
+
+    private fun startBulkWifiSync() {
+        val current = ui.wifiBulk
+        if (current.syncing) return
+        val targets = current.items.filter { it.selected && it.record.isSupportedByWatch() }
+        if (targets.isEmpty()) return
+        val force = current.forceResend
+        val resetItems = current.items.map { item ->
+            if (item.selected && item.record.isSupportedByWatch()) item.copy(status = "PENDING")
+            else item
+        }
+        ui = ui.copy(
+            wifiBulk = current.copy(
+                items = resetItems,
+                syncing = true,
+                completedCount = 0,
+                totalCount = targets.size,
+                successCount = 0,
+                summaryMessage = null,
+            )
+        )
+        bulkSyncJob = lifecycleScope.launch {
+            var completed = 0
+            var succeeded = 0
+            var abortedReason: String? = null
+            try {
+                for ((index, target) in targets.withIndex()) {
+                    updateBulkItemStatus(target.key, "SENDING")
+                    val res = syncOneWifi(target.record, force)
+                    updateBulkItemStatus(target.key, res.status())
+                    completed++
+                    if (res.succeeded()) succeeded++
+                    ui = ui.copy(
+                        wifiBulk = ui.wifiBulk.copy(
+                            completedCount = completed,
+                            successCount = succeeded,
+                        )
+                    )
+                    if (!res.reachable() || res.status() in setOf("WATCH_DISCONNECTED", "UNSUPPORTED_WATCH", "DIRECT_UNAVAILABLE")) {
+                        abortedReason = when (res.status()) {
+                            "WATCH_DISCONNECTED" -> "手表已断开连接，批量同步已暂停。"
+                            "UNSUPPORTED_WATCH" -> "当前手表未声明 Wi-Fi 同步能力，已停止。"
+                            "DIRECT_UNAVAILABLE" -> "运动健康直发通道未就绪，请更新或重启运动健康。"
+                            else -> "运动健康 :PhoneService 未应答，批量同步已暂停。"
+                        }
+                        break
+                    }
+                    if (index + 1 < targets.size) {
+                        delay(250L)
+                    }
+                }
+            } finally {
+                val summary = abortedReason ?: "已完成 $completed / ${targets.size}（成功或已同步 $succeeded 个）。"
+                ui = ui.copy(wifiBulk = ui.wifiBulk.copy(syncing = false, summaryMessage = summary))
+                bulkSyncJob = null
+                queryHosts()
+            }
+        }
+    }
+
+    private fun updateBulkItemStatus(key: String, status: String) {
+        val updated = ui.wifiBulk.items.map { item ->
+            if (item.key == key) item.copy(status = status) else item
+        }
+        ui = ui.copy(wifiBulk = ui.wifiBulk.copy(items = updated))
+    }
+
+    private fun cancelBulkWifiSync() {
+        bulkSyncJob?.cancel()
+        bulkSyncJob = null
+        ui = ui.copy(wifiBulk = ui.wifiBulk.copy(syncing = false, summaryMessage = "已手动停止批量同步。"))
+    }
+
+    private fun clearBulkWifiMemory() {
+        bulkSyncJob?.cancel()
+        bulkSyncJob = null
+        if (ui.wifiBulk.items.isNotEmpty() || ui.wifiBulk.loadError != null || ui.wifiBulk.summaryMessage != null) {
+            ui = ui.copy(wifiBulk = WifiBulkUiState())
         }
     }
 

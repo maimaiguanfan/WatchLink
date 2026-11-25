@@ -31,6 +31,8 @@ final class HealthExternalSender {
     private record DirectChannel(
             Method managerFactory,
             Method sendDeviceData,
+            Method queryDeviceCapability,
+            Method isSupportSyncWifi,
             Constructor<?> commandCtor,
             Method setServiceId,
             Method setCommandId,
@@ -38,16 +40,37 @@ final class HealthExternalSender {
             Method setDataLen,
             Method setIdentify) {
 
-        void send(Context app, String deviceMac, int commandId, byte[] payload) throws ReflectiveOperationException {
+        void send(Context app, String deviceMac, int serviceId, int commandId, byte[] payload)
+                throws ReflectiveOperationException {
             Object manager = managerFactory.invoke(null, app);
             if (manager == null) throw new IllegalStateException("Health device manager null");
             Object command = commandCtor.newInstance();
-            setServiceId.invoke(command, 8);
+            setServiceId.invoke(command, serviceId);
             setCommandId.invoke(command, commandId);
             setDataContent.invoke(command, (Object) payload);
             setDataLen.invoke(command, payload.length);
             setIdentify.invoke(command, deviceMac);
             sendDeviceData.invoke(manager, command);
+        }
+
+        Boolean querySupportSyncWifi(Context app, String deviceMac) {
+            if (queryDeviceCapability == null || isSupportSyncWifi == null
+                    || deviceMac == null || deviceMac.isEmpty()) return null;
+            try {
+                Object manager = managerFactory.invoke(null, app);
+                if (manager == null) return null;
+                Object rawMap = queryDeviceCapability.invoke(manager, 1, deviceMac, "HwWifiSyncMgr");
+                if (!(rawMap instanceof java.util.Map<?, ?> map) || map.isEmpty()) return null;
+                Object cap = map.get(deviceMac);
+                if (cap == null && map.size() == 1) {
+                    cap = map.values().iterator().next();
+                }
+                if (cap == null || !isSupportSyncWifi.getDeclaringClass().isInstance(cap)) return null;
+                Object supported = isSupportSyncWifi.invoke(cap);
+                return supported instanceof Boolean b ? b : null;
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError unavailable) {
+                return null;
+            }
         }
     }
 
@@ -62,6 +85,21 @@ final class HealthExternalSender {
         return direct != null;
     }
 
+    boolean sendDeviceCommand(String deviceMac, int serviceId, int commandId, byte[] payload) {
+        if (direct == null || deviceMac == null || deviceMac.isEmpty() || payload == null) return false;
+        try {
+            direct.send(app, deviceMac, serviceId, commandId, payload);
+            return true;
+        } catch (Exception | LinkageError error) {
+            ProbeLog.failure("HEALTH_DISPATCH_FAILED", error);
+            return false;
+        }
+    }
+
+    Boolean querySupportSyncWifi(String deviceMac) {
+        return direct == null ? null : direct.querySupportSyncWifi(app, deviceMac);
+    }
+
     @RequiresApi(34)
     private static DirectChannel resolveDirectChannel(AlarmObserverInstaller installer, String factoryClass) {
         if (factoryClass == null || factoryClass.isEmpty()) return null;
@@ -73,13 +111,25 @@ final class HealthExternalSender {
             Method factory = findManagerFactory(provider, managerApi);
             if (factory == null) return null;
             Method send = installer.method(managerApi, "sendDeviceData", void.class, false, commandType);
+            Method queryCap = null;
+            Method supportWifi = null;
+            try {
+                queryCap = installer.method(managerApi, "queryDeviceCapability",
+                        java.util.Map.class, false, int.class, String.class, String.class);
+                Class<?> capType = installer.target("com.huawei.health.devicemgr.business.entity.DeviceCapability");
+                supportWifi = installer.method(capType, "isSupportSyncWifi", boolean.class, false);
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+                queryCap = null;
+                supportWifi = null;
+            }
             Constructor<?> ctor = commandType.getDeclaredConstructor();
             Method setServiceId = installer.method(commandType, "setServiceID", void.class, false, int.class);
             Method setCommandId = installer.method(commandType, "setCommandID", void.class, false, int.class);
             Method setDataContent = installer.method(commandType, "setDataContent", void.class, false, byte[].class);
             Method setDataLen = installer.method(commandType, "setDataLen", void.class, false, int.class);
             Method setIdentify = installer.method(commandType, "setmIdentify", void.class, false, String.class);
-            return new DirectChannel(factory, send, ctor, setServiceId, setCommandId, setDataContent, setDataLen, setIdentify);
+            return new DirectChannel(factory, send, queryCap, supportWifi, ctor,
+                    setServiceId, setCommandId, setDataContent, setDataLen, setIdentify);
         } catch (ReflectiveOperationException | RuntimeException | LinkageError unavailable) {
             return null;
         }
@@ -147,7 +197,7 @@ final class HealthExternalSender {
         }
         try {
             if (beforeDirectFallback != null) beforeDirectFallback.run();
-            direct.send(app, deviceMac, commandId, payload);
+            direct.send(app, deviceMac, 8, commandId, payload);
             ProbeLog.info("HEALTH_DISPATCH_FALLBACK_DIRECT mode=DIRECT_SDK");
             return new Dispatch(true, "DIRECT_SDK", "");
         } catch (Exception | LinkageError fallbackError) {

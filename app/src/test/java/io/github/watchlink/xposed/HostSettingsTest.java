@@ -111,4 +111,26 @@ public class HostSettingsTest {
         assertEquals(0, clockDisabled.get());
         assertEquals(1, calDisabled.get());
     }
+
+    @Test public void wifiAutoSyncToggleNotifiesChangesAndFallsBackLocally() {
+        MemoryPrefs remote = new MemoryPrefs();
+        MemoryPrefs local = new MemoryPrefs();
+        HostSettings settings = new HostSettings(remote, local);
+        AtomicInteger enabledEvents = new AtomicInteger();
+        settings.onWifiAutoSyncChanged(on -> {
+            if (Boolean.TRUE.equals(on)) enabledEvents.incrementAndGet();
+        });
+
+        assertFalse(settings.isWifiAutoSyncEnabled());
+        assertTrue(settings.setLocalWifiAutoSyncFallback(true));
+        assertTrue(settings.isWifiAutoSyncEnabled());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED, false).commit();
+        assertFalse(settings.isWifiAutoSyncEnabled());
+        assertEquals(0, enabledEvents.get());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED, true).commit();
+        assertTrue(settings.isWifiAutoSyncEnabled());
+        assertEquals(1, enabledEvents.get());
+    }
 }

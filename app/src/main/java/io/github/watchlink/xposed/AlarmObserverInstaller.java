@@ -41,15 +41,23 @@ final class AlarmObserverInstaller {
     private ClockNovemberLive clockLive;
     private CalendarLiveBridge calendarLive;
     private HealthAlarmBridge healthBridge;
+    private WirelessSettingsBridge wirelessBridge;
     private HostSettings hostSettings;
 
     AlarmObserverInstaller(XposedInterface module, TargetProfile profile, ClassLoader loader,
                            int ownerUid, SharedPreferences remotePrefs) {
+        this(module, profile, loader, ownerUid, remotePrefs, null);
+    }
+
+    AlarmObserverInstaller(XposedInterface module, TargetProfile profile, ClassLoader loader,
+                           int ownerUid, SharedPreferences remotePrefs,
+                           WirelessSettingsBridge preInstalledWireless) {
         this.module = module;
         this.ownerUid = ownerUid;
         this.profile = profile;
         this.loader = loader;
         this.remotePrefs = remotePrefs;
+        this.wirelessBridge = preInstalledWireless;
     }
 
     @RequiresApi(34)
@@ -85,6 +93,7 @@ final class AlarmObserverInstaller {
                 case CLOCK -> ".clock_settings_v1";
                 case CALENDAR -> ".calendar_settings_v1";
                 case HEALTH -> ".health_settings_v1";
+                case WIRELESS_SETTINGS -> ".wireless_settings_v1";
             };
             SharedPreferences local = hostContext.getSharedPreferences(
                     BuildConfig.APPLICATION_ID + localSuffix, Context.MODE_PRIVATE);
@@ -141,6 +150,16 @@ final class AlarmObserverInstaller {
                 calendarLive = live;
                 live.install(this, settings);
                 localControl = live.actionsResolved();
+            } else if (profile == TargetProfile.WIRELESS_SETTINGS) {
+                WirelessSettingsBridge bridge = wirelessBridge;
+                if (bridge == null) {
+                    bridge = WirelessSettingsBridge.installEarlyHook(module, loader, remotePrefs);
+                    wirelessBridge = bridge;
+                }
+                if (bridge == null || !bridge.isHookActive()) {
+                    throw new IllegalStateException("WIRELESS_SETTINGS_HOOK_UNAVAILABLE");
+                }
+                bridge.attachSettings(settings);
             } else {
                 HealthAlarmBridge bridge = new HealthAlarmBridge(hostContext, ownerUid, settings, sources);
                 healthBridge = bridge;
@@ -201,6 +220,10 @@ final class AlarmObserverInstaller {
             try { healthBridge.close(); } catch (RuntimeException ignored) {}
             healthBridge = null;
         }
+        if (wirelessBridge != null) {
+            try { wirelessBridge.close(); } catch (RuntimeException ignored) {}
+            wirelessBridge = null;
+        }
         if (hostSettings != null) {
             try { hostSettings.close(); } catch (RuntimeException ignored) {}
             hostSettings = null;
@@ -219,6 +242,8 @@ final class AlarmObserverInstaller {
             Class<?> application = target(CalendarSymbolResolver.APPLICATION);
             if (!Context.class.isAssignableFrom(application)) throw new NoSuchMethodException("Calendar application");
             getter = staticMethod(application, appGetter, Application.class);
+        } else if (target == TargetProfile.WIRELESS_SETTINGS) {
+            return null;
         } else {
             getter = staticMethod(target("com.huawei.hwcommonmodel.application.BaseApplication"),
                     "getContext", Context.class);
