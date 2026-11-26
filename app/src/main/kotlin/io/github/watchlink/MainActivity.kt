@@ -86,6 +86,7 @@ class MainActivity : ComponentActivity() {
         }
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                ui = ui.copy(checks = null, readError = false)
                 refreshAll(forceScope = true)
                 while (true) {
                     val activeTest = ui.healthHost?.testState() in setOf("SENDING", "SENT", "SENT_DIRECT", "SERVICE_RECEIVED", "OUTBOUND")
@@ -103,9 +104,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun refreshAll(forceScope: Boolean) {
-        refreshScope(forceScope)
-        queryHosts()
-        readChecks()
+        if (ui.refreshing) return
+        ui = ui.copy(refreshing = true)
+        try {
+            refreshScope(forceScope)
+            queryHosts()
+            readChecks()
+        } finally {
+            ui = ui.copy(refreshing = false)
+        }
     }
 
     private suspend fun clockCommand(action: String): ClockHostControl.Reply =
@@ -213,7 +220,7 @@ class MainActivity : ComponentActivity() {
                 )
             }.getOrNull()
         }
-        ui = ui.copy(checks = checks, readError = checks == null)
+        ui = ui.copy(checks = checks, scope = ModuleScope.inspect(), readError = checks == null)
     }
 
     private fun readVersion(pkg: String): String? = try {

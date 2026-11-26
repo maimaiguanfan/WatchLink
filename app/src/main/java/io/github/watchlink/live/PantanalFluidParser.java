@@ -5,20 +5,23 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Pure-Java parser turning ColorOS Pantanal UMS Fluid Cloud cards (Channel B) and
  * Android 16/17 promoted live notifications (Channel A) into normalized {@link LiveWindowPayload}.
  *
- * Explicitly excludes Clock timer and stopwatch cards per user preference.
+ * Only ongoing external service events qualify for a watch live window.
  */
 public final class PantanalFluidParser {
+    private static final int FLAG_ONGOING_EVENT = 0x00000002;
     private static final int FLAG_GROUP_SUMMARY = 0x00000200;
 
     private static final Set<String> EXCLUDED_PACKAGES = Set.of(
             "com.coloros.alarmclock",
             "com.android.deskclock",
             "com.oneplus.deskclock",
+            "com.heytap.speechassist",
             "com.huawei.health",
             "io.github.maimaiguanfan.watchlink"
     );
@@ -41,9 +44,20 @@ public final class PantanalFluidParser {
             "com.oplus.pantanal.ums",
             "com.oplus.exsystemservice",
             "com.oplus.sceneservice",
-            "com.oplus.cardservice",
-            "com.heytap.speechassist"
+            "com.oplus.cardservice"
     );
+
+    // Match complete scene tokens, including names such as "eleme_takeout_card".
+    private static final Pattern PICKUP_SCENE = scenePattern("pickup|pick_up|meal_pickup");
+    private static final Pattern TAXI_SCENE = scenePattern("taxi|ride_hailing|ridehailing");
+    private static final Pattern DELIVERY_SCENE = scenePattern("takeout|takeaway|delivery");
+    private static final Pattern QUEUE_SCENE = scenePattern("queue|queuing");
+    private static final Pattern LOCAL_SCENE = scenePattern(
+            "ringer|silent_mode|vibrate_mode|do_not_disturb|dnd|bookmark|favorite|collection");
+
+    private static Pattern scenePattern(String terms) {
+        return Pattern.compile("(?:^|[^a-z0-9])(?:" + terms + ")(?:$|[^a-z0-9])", Pattern.CASE_INSENSITIVE);
+    }
 
     private PantanalFluidParser() {}
 
@@ -61,7 +75,7 @@ public final class PantanalFluidParser {
         flattenJson(businessDataJson, flat, 0);
 
         String launchPkg = firstNonEmpty(flat, "launchPackage", "targetPackage", "appPackage", "pkgName", "packageName");
-        if (isExcludedClock(serviceId, hostPackage, launchPkg, subDomain, domain, "", flat)) {
+        if (isExcludedSource(serviceId, hostPackage, launchPkg, subDomain, domain, "", flat)) {
             return null;
         }
         String resolvedPkg = pickDisplayPackage(launchPkg, hostPackage);
@@ -70,8 +84,7 @@ public final class PantanalFluidParser {
                 LiveWindowPayload.SOURCE_UMS,
                 stableKey,
                 resolvedPkg,
-                domain,
-                subDomain,
+                safe(domain) + " " + safe(subDomain),
                 flat);
     }
 
@@ -95,7 +108,7 @@ public final class PantanalFluidParser {
         String subDomain = firstNonEmpty(flat, "subDomain", "sub_domain");
         String hints = safe(widgetCode) + " " + safe(layoutName) + " " + safe(cardName);
 
-        if (isExcludedClock(serviceId, nonEmpty(hostPkg) ? hostPkg : fallbackPackage, launchPkg, subDomain, domain, hints, flat)) {
+        if (isExcludedSource(serviceId, nonEmpty(hostPkg) ? hostPkg : fallbackPackage, launchPkg, subDomain, domain, hints, flat)) {
             return null;
         }
         String resolvedPkg = pickDisplayPackage(launchPkg, nonEmpty(hostPkg) ? hostPkg : fallbackPackage);
@@ -118,8 +131,7 @@ public final class PantanalFluidParser {
                 LiveWindowPayload.SOURCE_UMS,
                 stableKey,
                 resolvedPkg,
-                domain,
-                subDomain,
+                domain + " " + subDomain + " " + safe(layoutName) + " " + safe(cardName),
                 flat);
     }
 
@@ -146,12 +158,12 @@ public final class PantanalFluidParser {
 
         boolean isProgressStyle = templateClass != null && templateClass.endsWith("ProgressStyle");
         boolean hasOplusLive = oplusLiveAlertConfig != null && oplusLiveAlertConfig.trim().startsWith("{");
-        if (!promotedOngoing && !isProgressStyle && !hasOplusLive) {
+        if (!promotedOngoing && ((flags & FLAG_ONGOING_EVENT) == 0 || (!isProgressStyle && !hasOplusLive))) {
             return null;
         }
 
         String cleanTitle = firstNonEmptyStr(title, appLabel);
-        String cleanText = firstNonEmptyStr(text, bigText, subText);
+        String cleanText = firstNonEmptyStr(text, bigText, subText, shortCriticalText);
         if (cleanTitle.isEmpty() && cleanText.isEmpty()) return null;
         if (cleanText.isEmpty()) cleanText = cleanTitle;
 
@@ -170,7 +182,10 @@ public final class PantanalFluidParser {
             pct = Math.max(0, Math.min(100, (int) Math.round((progress * 100.0) / progressMax)));
         }
 
-        String eventType = classifyEvent(packageName, "", "", cleanTitle + " " + cleanText, Map.of());
+        // App labels and progress bars describe the presentation, not the event.
+        String evidence = String.join(" ", safe(title), safe(text), safe(bigText), safe(subText), safe(shortCriticalText));
+        String eventType = classifyEvent("", evidence, Map.of());
+        if (eventType == null) return null;
         String stableKey = "daemon:" + sbnKey.trim();
         LiveWindowPayload payload = new LiveWindowPayload(
                 LiveWindowPayload.SOURCE_DAEMON,
@@ -186,8 +201,7 @@ public final class PantanalFluidParser {
         return payload.isValidForOpenOrUpdate() ? payload : null;
     }
 
-    /** Returns true when a card or notification belongs to Clock timer or stopwatch (explicitly excluded). */
-    public static boolean isExcludedClock(
+    private static boolean isExcludedSource(
             long serviceId,
             String hostPackage,
             String launchPackage,
@@ -222,14 +236,19 @@ public final class PantanalFluidParser {
             String source,
             String stableKey,
             String packageName,
-            String domain,
-            String subDomain,
+            String scene,
             Map<String, Object> flat) {
         if (flat.isEmpty()) return null;
+        StringBuilder evidence = new StringBuilder();
+        for (String key : DISPLAY_FIELDS) {
+            if (flat.get(key) instanceof String value) evidence.append(value).append(' ');
+        }
+        String event = classifyEvent(scene, evidence.toString(), flat);
+        if (event == null) return null;
 
         // 1. MiniProgram / Store Pickup Code (verified live: Cotti Coffee 268451931 -> appName, pickupCode, waitTime)
-        String pickupCode = firstNonEmpty(flat, "pickupCode", "takeCode", "mealCode", "orderCode", "pickUpCode");
-        if (!pickupCode.isEmpty()) {
+        String pickupCode = identifier(flat, "pickupCode", "pickUpCode", "takeCode", "mealCode", "orderCode");
+        if (LiveWindowPayload.EVENT_PICK_UP.equals(event) && !pickupCode.isEmpty()) {
             String appName = firstNonEmpty(flat, "appName", "merchantName", "shopName", "brandName", "title", "fluidTitle");
             String waitTime = firstNonEmpty(flat, "waitTime", "waitText", "statusText", "subTitle", "fluidContent", "subContent");
             String title = appName.isEmpty() ? "取餐提醒" : appName;
@@ -251,7 +270,6 @@ public final class PantanalFluidParser {
             String capContent = firstNonEmpty(flat, "capsuleContent", "capsuleTextRight");
             int pct = extractProgress(flat, "currentProgress", "totalProgress");
             if (pct < 0) pct = extractProgress(flat, "progress", "progressCount");
-            String event = classifyEvent(packageName, domain, subDomain, fluidTitle + " " + fluidContent, flat);
             LiveWindowPayload p = new LiveWindowPayload(
                     source, stableKey, packageName, fluidTitle, fluidContent,
                     capTitle, capContent, event, pct, LiveWindowPayload.OP_CREATE);
@@ -265,7 +283,6 @@ public final class PantanalFluidParser {
             String cap1 = firstNonEmpty(flat, "capsuleContent1", "capsuleTitle");
             String cap2 = firstNonEmpty(flat, "capsuleContent2", "capsuleContent");
             int pct = extractProgress(flat, "progress", "progressCount");
-            String event = classifyEvent(packageName, domain, subDomain, mainContent + " " + subContent, flat);
             LiveWindowPayload p = new LiveWindowPayload(
                     source, stableKey, packageName, mainContent, subContent,
                     cap1, cap2, event, pct, LiveWindowPayload.OP_CREATE);
@@ -281,7 +298,6 @@ public final class PantanalFluidParser {
             int pct = extractProgress(flat, "bigCardProgress", "bigCardProgressMax");
             if (pct < 0) pct = extractProgress(flat, "smallCardProgress", "smallCardProgressMax");
             if (pct < 0) pct = extractProgress(flat, "progress", "progressCount");
-            String event = classifyEvent(packageName, domain, subDomain, cardTitle + " " + cardDesc, flat);
             LiveWindowPayload p = new LiveWindowPayload(
                     source, stableKey, packageName, cardTitle, cardDesc,
                     capLeft, capRight, event, pct, LiveWindowPayload.OP_CREATE);
@@ -290,7 +306,7 @@ public final class PantanalFluidParser {
 
         // 5. Ride-hailing / Taxi specific fields (plateNumber / licensePlate / carNo)
         String plate = firstNonEmpty(flat, "plateNumber", "licensePlate", "carNo", "carNumber", "plateNo");
-        if (!plate.isEmpty()) {
+        if (LiveWindowPayload.EVENT_TAXI.equals(event) && !plate.isEmpty()) {
             String status = firstNonEmpty(flat, "statusText", "etaText", "title", "text", "content", "desc", "carInfo");
             String title = status.isEmpty() ? ("网约车 " + plate) : status;
             String text = status.isEmpty() ? plate : (plate + " · " + status);
@@ -306,8 +322,8 @@ public final class PantanalFluidParser {
         }
 
         // 6. Queue number schema (queueNo / waitNo / tableNo)
-        String queueNo = firstNonEmpty(flat, "queueNo", "waitNo", "tableNo", "queueNumber");
-        if (!queueNo.isEmpty()) {
+        String queueNo = identifier(flat, "queueNo", "waitNo", "queueNumber", "tableNo");
+        if (LiveWindowPayload.EVENT_QUEUE.equals(event) && !queueNo.isEmpty()) {
             String shop = firstNonEmpty(flat, "shopName", "merchantName", "appName", "title");
             String waitInfo = firstNonEmpty(flat, "waitInfo", "waitTime", "waitCount", "content", "desc");
             String title = shop.isEmpty() ? "排队进度" : shop;
@@ -318,7 +334,7 @@ public final class PantanalFluidParser {
             return p.isValidForOpenOrUpdate() ? p : null;
         }
 
-        // 7. Generic fallback for any remaining Pantanal Fluid Cloud card with title/content/capsule
+        // 7. Generic layout for a card whose external event was already established.
         String genTitle = firstNonEmpty(flat, "title", "appName", "name", "capsuleTitle", "primaryText");
         String genText = firstNonEmpty(flat, "content", "text", "desc", "description", "statusText", "capsuleContent", "secondaryText");
         if (genTitle.isEmpty() && genText.isEmpty()) return null;
@@ -327,42 +343,73 @@ public final class PantanalFluidParser {
         int pct = extractProgress(flat, "progress", "progressCount");
         if (pct < 0) pct = extractProgress(flat, "currentProgress", "totalProgress");
         if (pct < 0) pct = extractProgress(flat, "progressPercent", "");
-        String event = classifyEvent(packageName, domain, subDomain, genTitle + " " + genText, flat);
         LiveWindowPayload p = new LiveWindowPayload(
                 source, stableKey, packageName, genTitle, genText,
                 capTitle, capContent, event, pct, LiveWindowPayload.OP_CREATE);
         return p.isValidForOpenOrUpdate() ? p : null;
     }
 
-    static String classifyEvent(String pkg, String domain, String subDomain, String textHints, Map<String, Object> flat) {
-        String lowPkg = safe(pkg).toLowerCase(Locale.US);
-        String lowMeta = (safe(domain) + " " + safe(subDomain)).toLowerCase(Locale.US);
-        String lowText = safe(textHints).toLowerCase(Locale.US);
+    private static final List<String> DISPLAY_FIELDS = List.of(
+            "title", "text", "content", "desc", "description", "statusText", "name", "appName",
+            "mainTitle", "subTitle", "mainContent", "subContent", "primaryText", "secondaryText",
+            "fluidTitle", "fluidContent", "bigCardTitle", "smallCardTitle", "cardTitle",
+            "bigCardDescription", "smallCardDescription", "cardDescription", "capsuleTitle",
+            "capsuleContent", "capsuleContent1", "capsuleContent2", "capsuleTextLeft", "capsuleTextRight");
 
-        if (lowPkg.contains("didi") || lowPkg.contains("autonavi") || lowPkg.contains("baidumap")
-                || lowPkg.contains("t3go") || lowPkg.contains("caocao") || lowPkg.contains("uber")
-                || lowMeta.contains("taxi") || lowMeta.contains("ride") || lowMeta.contains("cab")
-                || lowText.contains("打车") || lowText.contains("网约车") || lowText.contains("司机")
-                || lowText.contains("上车点") || lowText.contains("接驾")) {
+    /** Returns null for an unrecognized scene, before the SmartEdge encoder normalizes its event. */
+    private static String classifyEvent(String scene, String text, Map<String, Object> flat) {
+        String context = (scene + " " + text).toLowerCase(Locale.ROOT);
+        if (LOCAL_SCENE.matcher(scene).find() || containsAny(context,
+                "响铃模式", "振动模式", "震动模式", "静音模式", "免打扰", "勿扰模式",
+                "收藏", "摘录", "剪藏", "识屏", "小布助手", "优惠券", "领券", "红包活动",
+                "do not disturb", "ringer mode", "saved post", "bookmark")) return null;
+
+        if (!identifier(flat, "pickupCode", "pickUpCode", "takeCode", "mealCode").isEmpty()
+                || PICKUP_SCENE.matcher(scene).find()
+                || containsAny(context, "取餐码", "取餐号", "请取餐", "等待取餐", "待取餐", "可取餐",
+                        "pickup code", "pickup number", "ready for pickup")) {
+            return LiveWindowPayload.EVENT_PICK_UP;
+        }
+        boolean hasJourneyProgress = containsAny(context, "分钟", "公里", "已接单", "即将到达", "已到达");
+        if (TAXI_SCENE.matcher(scene).find()
+                || (hasJourneyProgress && containsAny(context, "打车", "网约车", "专车", "司机"))
+                || containsAny(context, "司机已", "司机距", "司机正", "司机即将", "司机还有", "司机接单",
+                        "正在叫车", "等待上车", "请上车", "上车点", "正在接驾", "接驾中", "打车行程",
+                        "driver is arriving", "driver has arrived", "driver is on the way")
+                || (!firstNonEmpty(flat, "plateNumber", "licensePlate", "carNo", "carNumber", "plateNo").isEmpty()
+                        && containsAny(context, "司机", "接驾", "上车", "网约车"))) {
             return LiveWindowPayload.EVENT_TAXI;
         }
-        if (lowMeta.contains("queue") || lowText.contains("排队") || lowText.contains("排号") || lowText.contains("等位")) {
+        if (QUEUE_SCENE.matcher(scene).find() || !identifier(flat, "queueNo", "waitNo", "queueNumber").isEmpty()
+                || containsAny(context, "排队中", "排队进度", "排队号", "排号", "等位", "等待叫号",
+                        "queue number", "in the queue")) {
             return LiveWindowPayload.EVENT_QUEUE;
         }
-        if (lowPkg.contains("meituan") || lowPkg.contains("ele") || lowPkg.contains("takeout")
-                || lowPkg.contains("cainiao") || lowPkg.contains("sf-express") || lowPkg.contains("jd.")
-                || lowPkg.contains("jingdong") || lowPkg.contains("dada") || lowPkg.contains("shansong")
-                || lowMeta.contains("takeout") || lowMeta.contains("delivery") || lowMeta.contains("express")
-                || lowMeta.contains("logistics")
-                || lowText.contains("骑手") || lowText.contains("配送") || lowText.contains("外卖")
-                || lowText.contains("送达") || lowText.contains("快递") || lowText.contains("派送")) {
+        if (DELIVERY_SCENE.matcher(scene).find()
+                || (hasJourneyProgress && containsAny(context, "外卖", "骑手", "配送"))
+                || containsAny(context, "骑手已", "骑手正", "骑手距", "骑手即将", "骑手接单", "骑手取餐",
+                        "配送中", "正在配送", "外卖配送", "预计送达", "已送达", "正在派送", "正在备餐", "商家已接单",
+                        "out for delivery", "order is on the way", "order is being prepared")) {
             return LiveWindowPayload.EVENT_DELIVERY;
         }
-        if (flat != null && (flat.containsKey("mainContent") || flat.containsKey("fluidTitle")
-                || flat.containsKey("smallCardTitle") || flat.containsKey("progressCount"))) {
-            return LiveWindowPayload.EVENT_DELIVERY;
+        return null;
+    }
+
+    private static boolean containsAny(String text, String... phrases) {
+        for (String phrase : phrases) {
+            if (text.contains(phrase)) return true;
         }
-        return LiveWindowPayload.EVENT_PICK_UP;
+        return false;
+    }
+
+    private static String identifier(Map<String, Object> flat, String... keys) {
+        for (String key : keys) {
+            Object value = flat.get(key);
+            if (value instanceof Number number) return number.toString();
+            String id = firstNonEmpty(flat, key);
+            if (!id.isEmpty()) return id;
+        }
+        return "";
     }
 
     private static String buildDecisionStableKey(long serviceId, String serviceInstanceId, String pkg) {

@@ -98,7 +98,7 @@ class HomeChecksTest {
     }
 
     @Test fun surfacesHostContractWatchStateAndDegradedAdvisories() {
-        assertEquals(SetupLevel.CHECKING, setupLevel(null, emptyList(), null))
+        assertEquals(SetupLevel.PENDING, setupLevel(null, emptyList(), null))
 
         val cases = listOf(
             ready.copy(clockHost = clockReply(localClockControl = false)) to SetupIssue.CLOCK_CONTRACT,
@@ -106,6 +106,7 @@ class HomeChecksTest {
             ready.copy(healthHost = healthReply(watchState = "WATCH_DISCONNECTED")) to SetupIssue.WATCH_DISCONNECTED,
             ready.copy(healthHost = healthReply(watchState = "READY_SUPPORTED_OFF")) to SetupIssue.WATCH_SWITCH_OFF,
             ready.copy(healthHost = healthReply(watchState = "READY_UNSUPPORTED")) to SetupIssue.WATCH_UNSUPPORTED,
+            ready.copy(healthHost = healthReply(watchState = "READY_DEVICE_MISMATCH")) to SetupIssue.WATCH_DEVICE_MISMATCH,
             ready.copy(healthHost = healthReply(sdkObserver = false, symbolSource = "DEGRADED")) to SetupIssue.HEALTH_SDK_DEGRADED,
         )
         for ((checks, expected) in cases) {
@@ -113,5 +114,22 @@ class HomeChecksTest {
             assertEquals(listOf(expected), issues)
             assertEquals(SetupLevel.ATTENTION, setupLevel(checks, issues, active))
         }
+    }
+
+    @Test fun incompleteEvidenceStaysPendingUntilTheHostsAndWatchAnswer() {
+        val waiting = scopeView(framework = false, clockActive = false, healthActive = false)
+        for ((checks, scope) in listOf(
+            ready to null,
+            ready to waiting,
+            ready.copy(clockHost = null) to active,
+            ready.copy(healthHost = HealthHostControl.unavailable()) to active,
+            ready.copy(healthHost = healthReply(watchState = "UNKNOWN")) to active,
+        )) {
+            val issues = checks.issues(scope)
+            assertEquals(emptyList<SetupIssue>(), issues)
+            assertEquals(SetupLevel.PENDING, setupLevel(checks, issues, scope))
+        }
+        val disconnected = ready.copy(clockHost = null, healthHost = healthReply(watchState = "WATCH_DISCONNECTED"))
+        assertEquals(SetupLevel.ATTENTION, setupLevel(disconnected, disconnected.issues(active), active))
     }
 }

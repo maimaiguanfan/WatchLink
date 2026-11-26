@@ -99,6 +99,9 @@ final class HealthDaemonLiveBridge {
                                 // Suppress duplicate ordinary watch notification in-place.
                                 return null;
                             }
+                        } else {
+                            // A notification ID can be reused for an unrelated card.
+                            closeIfTracked(sbn);
                         }
                     }
                 }
@@ -109,18 +112,7 @@ final class HealthDaemonLiveBridge {
                 if (active) {
                     Object arg = chain.getArg(0);
                     if (arg instanceof StatusBarNotification sbn) {
-                        String key = sbn.getKey();
-                        if (key != null && activeKeys.remove(key)) {
-                            LiveWindowPayload close = new LiveWindowPayload(
-                                    LiveWindowPayload.SOURCE_DAEMON,
-                                    "daemon:" + key.trim(),
-                                    sbn.getPackageName(),
-                                    "", "", "", "",
-                                    LiveWindowPayload.EVENT_PICK_UP,
-                                    -1,
-                                    LiveWindowPayload.OP_CLOSE);
-                            forwardAsync(close, true);
-                        }
+                        closeIfTracked(sbn);
                     }
                 }
                 return chain.proceed();
@@ -208,6 +200,14 @@ final class HealthDaemonLiveBridge {
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    private void closeIfTracked(StatusBarNotification sbn) {
+        String key = sbn.getKey();
+        if (key == null || !activeKeys.remove(key)) return;
+        forwardAsync(new LiveWindowPayload(LiveWindowPayload.SOURCE_DAEMON, "daemon:" + key.trim(),
+                sbn.getPackageName(), "", "", "", "", LiveWindowPayload.EVENT_PICK_UP,
+                -1, LiveWindowPayload.OP_CLOSE), true);
     }
 
     private void forwardAsync(LiveWindowPayload payload, boolean removal) {

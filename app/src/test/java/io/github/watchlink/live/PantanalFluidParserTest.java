@@ -106,6 +106,67 @@ public class PantanalFluidParserTest {
         assertEquals("5分钟", live.capsuleContent());
     }
 
+    @Test public void ignoresDeviceModesBookmarksAndUnknownActivitiesAcrossAllCapturePaths() {
+        for (String title : List.of("已切换为响铃模式", "振动模式", "免打扰已开启", "已收藏：司机已到达",
+                "外卖优惠券", "更新下载", "导航中")) {
+            // A popular app, a live layout and even a progress bar are insufficient.
+            String json = "{\"fluidTitle\":\"" + title + "\",\"fluidContent\":\"查看详情\",\"currentProgress\":25}";
+            assertNull(title, PantanalFluidParser.parseDecisionRow(1, "1", "com.sankuai.meituan",
+                    "", "", json, ""));
+            assertNull(title, PantanalFluidParser.parsePushData(1, 1, "widget", "", "", json, "me.ele", ""));
+            assertNull(title, PantanalFluidParser.parsePromotedNotification("n", "com.sdu.didi.psnger", "打车",
+                    2, true, "ProgressStyle", null, title, "查看详情", "", "", "", 25, 100, false));
+        }
+        // A saved post can itself mention a pickup code or contain nested order information.
+        assertNull(PantanalFluidParser.parseDecisionRow(1, "1", "com.oplus.pantanal.ums", "", "",
+                "{\"title\":\"帖子已收藏\",\"pickupCode\":\"A1\"}", ""));
+        assertNull(PantanalFluidParser.parsePromotedNotification("n", "com.heytap.speechassist", "小布助手",
+                2, true, "", null, "取餐码 A1", "", "", "", "", 0, 0, false));
+        assertNull(PantanalFluidParser.parsePushData(1, 1, "", "collection_card", "",
+                "{\"mainContent\":\"骑手已到达\"}", "", ""));
+        assertNull(PantanalFluidParser.parseDecisionRow(1, "1", "", "", "",
+                "{\"orderCode\":\"x\",\"title\":\"订单优惠\"}", ""));
+    }
+
+    @Test public void acceptsSpecificEvidenceWithoutRelyingOnAnAppOrGenericLayout() {
+        LiveWindowPayload pickup = PantanalFluidParser.parsePushData(1, 2, "", "", "",
+                "{\"pickupCode\":103,\"appName\":\"咖啡店\"}", "", "");
+        assertNotNull(pickup);
+        assertEquals("取餐码 103", pickup.capsuleContent());
+
+        LiveWindowPayload taxi = PantanalFluidParser.parsePushData(1, 3, "", "taxi_card", "",
+                "{\"mainContent\":\"还有 3 分钟\"}", "", "");
+        assertNotNull(taxi);
+        assertEquals(LiveWindowPayload.EVENT_TAXI, taxi.eventType());
+
+        LiveWindowPayload queue = PantanalFluidParser.parseDecisionRow(1, "q", "", "", "",
+                "{\"queueNo\":7,\"waitTime\":\"约 10 分钟\"}", "");
+        assertNotNull(queue);
+        assertEquals(LiveWindowPayload.EVENT_QUEUE, queue.eventType());
+
+        LiveWindowPayload nativePickup = PantanalFluidParser.parsePromotedNotification("n", "example.app", "咖啡店",
+                2, true, "", null, "订单更新", "请到柜台", "", "", "取餐码 81", -1, 0, false);
+        assertNotNull(nativePickup);
+        assertEquals(LiveWindowPayload.EVENT_PICK_UP, nativePickup.eventType());
+        LiveWindowPayload ride = PantanalFluidParser.parsePromotedNotification("ride", "example.app", "",
+                2, true, "", null, "滴滴打车", "约 3 分钟", "", "", "", -1, 0, false);
+        assertNotNull(ride);
+        assertEquals(LiveWindowPayload.EVENT_TAXI, ride.eventType());
+        assertNull(PantanalFluidParser.parsePromotedNotification("n", "example.app", "取餐码",
+                2, true, "", null, "", "查看详情", "", "", "", -1, 0, false));
+    }
+
+    @Test public void nativeLiveStylesNeedAnOngoingEventUnlessAlreadyPromoted() {
+        for (boolean vendorStyle : List.of(false, true)) {
+            String template = vendorStyle ? null : "android.app.Notification$ProgressStyle";
+            String config = vendorStyle ? "{}" : null;
+            assertNull(PantanalFluidParser.parsePromotedNotification("n", "example.app", "外卖",
+                    0, false, template, config, "配送中", "预计送达", "", "", "", 50, 100, false));
+            assertNotNull(PantanalFluidParser.parsePromotedNotification("n", "example.app", "外卖",
+                    2, false, template, config, "配送中", "预计送达", "", "", "", 50, 100, false));
+        }
+    }
+
     @Test public void trackerDeduplicatesThrottlesReconcilesAndExpiresOrphans() {
         LiveWindowTracker tracker = new LiveWindowTracker();
         LiveWindowPayload base = new LiveWindowPayload(

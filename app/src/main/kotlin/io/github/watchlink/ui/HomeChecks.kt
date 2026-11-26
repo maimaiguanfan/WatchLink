@@ -22,10 +22,11 @@ internal enum class SetupIssue {
     WATCH_DISCONNECTED,
     WATCH_SWITCH_OFF,
     WATCH_UNSUPPORTED,
+    WATCH_DEVICE_MISMATCH,
     HEALTH_SDK_DEGRADED,
 }
 
-internal enum class SetupLevel { CHECKING, READY, ATTENTION, MISSING_SCOPE }
+internal enum class SetupLevel { PENDING, READY, ATTENTION, MISSING_SCOPE }
 
 internal data class HomeChecks(
     val clockVersion: String?,
@@ -45,8 +46,11 @@ internal data class HomeChecks(
     fun issues(scope: ModuleScope.View?): List<SetupIssue> = buildList {
         val stale = scope?.hasStaleTarget() == true
         if (stale) add(SetupIssue.HOST_STALE)
-        if (scope?.active() != true && !(stale && scope.configured())) {
-            add(SetupIssue.SCOPE)
+        if (scope?.frameworkConnected() == true) {
+            if (!scope.configured() || (!stale && !scope.checking() && !scope.active()
+                        && clockHost?.reachable() == true && healthHost?.reachable() == true)) {
+                add(SetupIssue.SCOPE)
+            }
         }
         if (!clockTrusted) add(SetupIssue.CLOCK_APP)
         if (clockHost?.reachable() == true && !clockHost.localClockControl()) add(SetupIssue.CLOCK_CONTRACT)
@@ -57,6 +61,7 @@ internal data class HomeChecks(
                 "WATCH_DISCONNECTED" -> add(SetupIssue.WATCH_DISCONNECTED)
                 "READY_SUPPORTED_OFF" -> add(SetupIssue.WATCH_SWITCH_OFF)
                 "READY_UNSUPPORTED" -> add(SetupIssue.WATCH_UNSUPPORTED)
+                "READY_DEVICE_MISMATCH" -> add(SetupIssue.WATCH_DEVICE_MISMATCH)
             }
             if (!healthHost.sdkObserver()) add(SetupIssue.HEALTH_SDK_DEGRADED)
         }
@@ -64,8 +69,10 @@ internal data class HomeChecks(
 }
 
 internal fun setupLevel(checks: HomeChecks?, issues: List<SetupIssue>, scope: ModuleScope.View?): SetupLevel = when {
-    checks == null -> SetupLevel.CHECKING
-    SetupIssue.SCOPE in issues && scope?.configured() != true -> SetupLevel.MISSING_SCOPE
+    SetupIssue.SCOPE in issues && scope?.frameworkConnected() == true && !scope.configured() -> SetupLevel.MISSING_SCOPE
     issues.isNotEmpty() -> SetupLevel.ATTENTION
+    scope?.active() != true || checks?.clockHost?.reachable() != true || checks.healthHost?.reachable() != true ->
+        SetupLevel.PENDING
+    checks.healthHost.watchState() !in setOf("READY_SUPPORTED_ON", "READY_SUPPORTED_UNSET") -> SetupLevel.PENDING
     else -> SetupLevel.READY
 }

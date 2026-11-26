@@ -77,6 +77,7 @@ internal data class WatchLinkUiState(
     val testing: Boolean = false,
     val liveTesting: Boolean = false,
     val sharing: Boolean = false,
+    val refreshing: Boolean = false,
     val readError: Boolean = false,
     val message: String? = null,
 ) {
@@ -123,6 +124,9 @@ internal data class WatchLinkUiState(
 
 private enum class Page(val title: String) {
     HOME("WatchLink"),
+    REMINDERS("闹钟与日历"),
+    LIVE("实况通知"),
+    WIFI("Wi-Fi 同步"),
     WIFI_SYNC("批量同步 Wi-Fi"),
     DIAGNOSTICS("测试与诊断"),
     GUIDE("使用说明与关于"),
@@ -162,13 +166,15 @@ internal fun WatchLinkApp(
     onShare: () -> Unit,
 ) {
     MiuixTheme(colors = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
-        var page by rememberSaveable { mutableStateOf(Page.HOME) }
+        var history by rememberSaveable { mutableStateOf(arrayListOf<Page>()) }
+        val page = history.lastOrNull() ?: Page.HOME
+        val openPage: (Page) -> Unit = { next -> history = ArrayList(history + next) }
         val homeScroll = rememberLazyListState()
         val scroll = if (page == Page.HOME) homeScroll else key(page) { rememberLazyListState() }
         val behavior = MiuixScrollBehavior()
         val back = {
             if (page == Page.WIFI_SYNC) onClearBulkWifiMemory()
-            page = Page.HOME
+            history = ArrayList(history.dropLast(1))
         }
         BackHandler(enabled = page != Page.HOME, onBack = back)
         Scaffold(modifier = Modifier.fillMaxSize(), topBar = {
@@ -193,27 +199,23 @@ internal fun WatchLinkApp(
                         }
                     }
                     when (page) {
-                        Page.HOME -> homePage(
-                            state = state,
-                            onEnable = onEnable,
-                            onCalendarEnable = onCalendarEnable,
-                            onLiveWindowEnable = onLiveWindowEnable,
-                            onWifiAutoEnable = onWifiAutoEnable,
-                            onClock = onClock,
-                            onCalendar = onCalendar,
-                            onHealth = onHealth,
-                            onRequestScope = onRequestScope,
-                            onRequestCalendarScope = onRequestCalendarScope,
-                            onRequestUmsScope = onRequestUmsScope,
-                            onRequestWirelessScope = onRequestWirelessScope,
-                            onSyncCurrentWifi = onSyncCurrentWifi,
-                            onOpenWifiBulk = { page = Page.WIFI_SYNC },
-                            onHotReload = onHotReload,
-                            onRefresh = onRefresh,
-                            onHealthDownload = onHealthDownload,
-                            onOpenDiagnostics = { page = Page.DIAGNOSTICS },
-                            onOpenGuide = { page = Page.GUIDE },
-                        )
+                        Page.HOME -> homePage(state, onRefresh, openPage)
+                        Page.REMINDERS -> {
+                            item("clock") { AutoReminderCard(state, onEnable) }
+                            item("calendar") {
+                                CalendarReminderCard(state, onCalendarEnable, onRequestCalendarScope, onCalendar, onRefresh)
+                            }
+                            recentRing(state)
+                            recentCalendarRing(state)
+                        }
+                        Page.LIVE -> item("live") {
+                            LiveWindowSyncCard(state, onLiveWindowEnable, onRequestUmsScope) { openPage(Page.DIAGNOSTICS) }
+                        }
+                        Page.WIFI -> item("wifi") {
+                            WifiSyncCard(state, onWifiAutoEnable, onRequestWirelessScope, onSyncCurrentWifi) {
+                                openPage(Page.WIFI_SYNC)
+                            }
+                        }
                         Page.WIFI_SYNC -> wifiBulkSyncPage(
                             state = state,
                             onLoadSavedWifi = onLoadSavedWifi,
@@ -223,16 +225,13 @@ internal fun WatchLinkApp(
                             onStartBulkWifiSync = onStartBulkWifiSync,
                             onCancelBulkWifiSync = onCancelBulkWifiSync,
                         )
-                        Page.DIAGNOSTICS -> diagnosticsPage(
-                            state = state,
-                            onStartTest = onStartTest,
-                            onCancelTest = onCancelTest,
-                            onStartLiveTest = onStartLiveTest,
-                            onCancelLiveTest = onCancelLiveTest,
-                            onHotReload = onHotReload,
-                            onRefresh = onRefresh,
-                            onShare = onShare,
-                        )
+                        Page.DIAGNOSTICS -> {
+                            setupActions(state, onHotReload, onRequestScope, onClock, onHealth, onRefresh, onHealthDownload)
+                            diagnosticsPage(
+                                state, onStartTest, onCancelTest, onStartLiveTest, onCancelLiveTest,
+                                onHotReload, onRefresh, onShare,
+                            )
+                        }
                         Page.GUIDE -> guidePage(onCoolapk)
                     }
                 }
@@ -241,38 +240,46 @@ internal fun WatchLinkApp(
     }
 }
 
-private fun LazyListScope.homePage(
+private fun LazyListScope.homePage(state: WatchLinkUiState, onRefresh: () -> Unit, openPage: (Page) -> Unit) {
+    val issues = state.checks?.issues(state.scope).orEmpty()
+    item("status") { StatusCard(state, issues, onRefresh) { openPage(Page.DIAGNOSTICS) } }
+    item("features-title") { SectionTitle("同步设置") }
+    item("features") {
+        Card(Modifier.fillMaxWidth()) {
+            Menu(Page.REMINDERS.title, "手机闹钟、日历强提醒与最近响铃") { openPage(Page.REMINDERS) }
+            HorizontalDivider()
+            Menu(Page.LIVE.title, "取餐码、打车行程、配送与排号进度") { openPage(Page.LIVE) }
+            HorizontalDivider()
+            Menu(Page.WIFI.title, "自动同步新连接、管理已保存的网络") { openPage(Page.WIFI) }
+        }
+    }
+    item("support-title") { SectionTitle("支持") }
+    item("support") {
+        Card(Modifier.fillMaxWidth()) {
+            Menu(Page.DIAGNOSTICS.title, "宿主状态、手表测试与日志") { openPage(Page.DIAGNOSTICS) }
+            HorizontalDivider()
+            Menu(Page.GUIDE.title, "配置步骤、版本与反馈") { openPage(Page.GUIDE) }
+        }
+    }
+}
+
+private fun LazyListScope.setupActions(
     state: WatchLinkUiState,
-    onEnable: (Boolean) -> Unit,
-    onCalendarEnable: (Boolean) -> Unit,
-    onLiveWindowEnable: (Boolean) -> Unit,
-    onWifiAutoEnable: (Boolean) -> Unit,
-    onClock: () -> Unit,
-    onCalendar: () -> Unit,
-    onHealth: () -> Unit,
-    onRequestScope: () -> Unit,
-    onRequestCalendarScope: () -> Unit,
-    onRequestUmsScope: () -> Unit,
-    onRequestWirelessScope: () -> Unit,
-    onSyncCurrentWifi: () -> Unit,
-    onOpenWifiBulk: () -> Unit,
     onHotReload: (Boolean) -> Unit,
+    onRequestScope: () -> Unit,
+    onClock: () -> Unit,
+    onHealth: () -> Unit,
     onRefresh: () -> Unit,
     onHealthDownload: () -> Unit,
-    onOpenDiagnostics: () -> Unit,
-    onOpenGuide: () -> Unit,
 ) {
     val issues = state.checks?.issues(state.scope).orEmpty()
-    item("status") { StatusCard(state, issues) }
-
-    if (state.checks == null && state.readError) {
-        item("retry") {
+    if (state.scope?.active() != true && SetupIssue.SCOPE !in issues && SetupIssue.HOST_STALE !in issues) {
+        item("setup-scope") {
             Card(Modifier.fillMaxWidth()) {
-                Menu("重新检查", "暂时无法读取应用与模块状态，点击重试。", onRefresh)
+                ScopeActions(state.scope, onRequestScope, onClock, onHealth, onRefresh)
             }
         }
     }
-
     if (state.checks != null && issues.isNotEmpty()) {
         item("remedies-title") { SectionTitle("待处理事项") }
         item("remedies") {
@@ -305,94 +312,76 @@ private fun LazyListScope.homePage(
                             title = "当前手表不支持原生闹钟协同",
                             summary = "已连接设备未声明华为原生协同闹钟能力。"
                         )
-                        SetupIssue.HEALTH_SDK_DEGRADED -> Menu(
-                            "运动健康正以兼容模式运行",
-                            "闹钟响铃推送与表端按键回传仍可正常工作；部分增强检测已降级，可在「测试与诊断」发送测试确认。",
-                            onOpenDiagnostics
+                        SetupIssue.WATCH_DEVICE_MISMATCH -> Menu("确认当前手表", "运动健康的主设备与连接记录不一致。", onHealth)
+                        SetupIssue.HEALTH_SDK_DEGRADED -> BasicComponent(
+                            title = "运动健康正以兼容模式运行",
+                            summary = "可在本页发送测试提醒，确认闹钟响铃和表端按键回传。"
                         )
                     }
                 }
             }
         }
     }
-
-    item("auto") { AutoReminderCard(state, onEnable) }
-    item("calendar") {
-        CalendarReminderCard(
-            state = state,
-            onEnable = onCalendarEnable,
-            onRequestCalendarScope = onRequestCalendarScope,
-            onOpenCalendar = onCalendar,
-            onRefresh = onRefresh,
-        )
-    }
-    item("live-window") {
-        LiveWindowSyncCard(
-            state = state,
-            onEnable = onLiveWindowEnable,
-            onRequestUmsScope = onRequestUmsScope,
-            onOpenDiagnostics = onOpenDiagnostics,
-        )
-    }
-    item("wifi") {
-        WifiSyncCard(
-            state = state,
-            onWifiAutoEnable = onWifiAutoEnable,
-            onRequestWirelessScope = onRequestWirelessScope,
-            onSyncCurrentWifi = onSyncCurrentWifi,
-            onOpenWifiBulk = onOpenWifiBulk,
-        )
-    }
-    recentRing(state)
-    recentCalendarRing(state)
-
-    item("more-title") { SectionTitle("更多功能") }
-    item("navigation") {
-        Card(Modifier.fillMaxWidth()) {
-            Menu("测试与诊断", "测试手表提醒、热重载宿主、查看适配状态与导出日志", onOpenDiagnostics)
-            HorizontalDivider()
-            Menu("使用说明与关于", "配置步骤、重启免启动原理、版本信息与作者主页", onOpenGuide)
-        }
-    }
 }
 
 @Composable
-private fun StatusCard(state: WatchLinkUiState, issues: List<SetupIssue>) {
+private fun StatusCard(
+    state: WatchLinkUiState,
+    issues: List<SetupIssue>,
+    onRefresh: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+) {
     val checks = state.checks
     val level = setupLevel(checks, issues, state.scope)
-    val enabled = state.effectiveEnabled || state.effectiveCalendarEnabled || state.effectiveLiveWindowEnabled
+    val enabled = state.effectiveEnabled || state.effectiveCalendarEnabled ||
+            state.effectiveLiveWindowEnabled || state.effectiveWifiAutoEnabled
     var expanded by rememberSaveable { mutableStateOf(false) }
 
     val (background, ink) = when (level) {
         SetupLevel.READY -> (if (enabled) Color(0xFF15694E) else Color(0xFF2356B8)) to Color.White
         SetupLevel.ATTENTION -> Color(0xFFFFDF8E) to Color(0xFF473108)
         SetupLevel.MISSING_SCOPE -> Color(0xFFB0323F) to Color.White
-        SetupLevel.CHECKING -> MiuixTheme.colorScheme.surface to MiuixTheme.colorScheme.onSurface
+        SetupLevel.PENDING -> if (isSystemInDarkTheme()) Color(0xFF373A3E) to Color(0xFFE4E6EA)
+            else Color(0xFFE9EBEE) to Color(0xFF393C41)
     }
     val title = when (level) {
         SetupLevel.READY -> if (enabled) "同步已开启" else "已准备就绪"
         SetupLevel.ATTENTION -> "有 ${issues.size} 项建议处理"
         SetupLevel.MISSING_SCOPE -> "需要启用模块"
-        SetupLevel.CHECKING -> if (state.readError) "状态读取失败" else "正在检查状态"
+        SetupLevel.PENDING -> "待刷新"
     }
     val summary = when (level) {
         SetupLevel.READY -> if (enabled)
-            "手机响铃时将自动同步到手表，重启后无需打开本应用"
+            "已启用的功能将自动同步到手表"
         else
-            "模块与手表连接正常，开启下方开关即可自动同步提醒"
-        SetupLevel.ATTENTION -> "请按下方「待处理事项」完成调整，点此可展开状态概况"
-        SetupLevel.MISSING_SCOPE -> "请在 LSPosed 中启用 WatchLink，并勾选系统时钟与华为运动健康"
-        SetupLevel.CHECKING -> if (state.readError) "点击下方「重新检查」重试" else "正在核对模块作用域、宿主与手表状态"
+            "模块与手表已连接，可在同步设置中开启功能"
+        SetupLevel.ATTENTION -> "点此查看待处理事项"
+        SetupLevel.MISSING_SCOPE -> "点此检查系统时钟与华为运动健康的作用域"
+        SetupLevel.PENDING -> when {
+            state.refreshing -> "正在查询宿主和手表状态…"
+            state.readError -> "本次读取失败，点此重新刷新"
+            else -> "尚未取得完整状态，点此刷新"
+        }
     }
 
     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors(background, ink)) {
         Column(
             Modifier.fillMaxWidth()
                 .clickable(
-                    enabled = checks != null,
+                    enabled = level != SetupLevel.PENDING || !state.refreshing,
                     role = Role.Button,
-                    onClickLabel = if (expanded) "收起状态概况" else "展开状态概况"
-                ) { expanded = !expanded }
+                    onClickLabel = when (level) {
+                        SetupLevel.PENDING -> "刷新模块状态"
+                        SetupLevel.READY -> if (expanded) "收起状态概况" else "展开状态概况"
+                        else -> "查看待处理事项"
+                    },
+                ) {
+                    when (level) {
+                        SetupLevel.PENDING -> onRefresh()
+                        SetupLevel.READY -> expanded = !expanded
+                        else -> onOpenDiagnostics()
+                    }
+                }
                 .padding(horizontal = 20.dp, vertical = 22.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -400,6 +389,7 @@ private fun StatusCard(state: WatchLinkUiState, issues: List<SetupIssue>) {
                     Icon(if (level == SetupLevel.READY) ShieldReady else ShieldStatus, null, tint = ink, modifier = Modifier.size(28.dp))
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("模块状态", color = ink.copy(alpha = .85f), fontSize = 13.sp)
                     Text(
                         title,
                         color = ink,
@@ -409,16 +399,16 @@ private fun StatusCard(state: WatchLinkUiState, issues: List<SetupIssue>) {
                     )
                     Text(summary, color = ink.copy(alpha = .92f), fontSize = 14.sp)
                 }
-                if (checks != null) {
+                if (level != SetupLevel.PENDING) {
                     Icon(
                         Next,
                         null,
                         tint = ink,
-                        modifier = Modifier.size(18.dp).rotate(if (expanded) -90f else 90f)
+                        modifier = Modifier.size(18.dp).rotate(if (level != SetupLevel.READY) 0f else if (expanded) -90f else 90f)
                     )
                 }
             }
-            if (expanded && checks != null) {
+            if (expanded && level == SetupLevel.READY && checks != null) {
                 Spacer(Modifier.height(16.dp))
                 CheckLine("系统时钟", hostStatusSimple(state.scope, TargetProfile.CLOCK), ink)
                 CheckLine("系统日历（可选）", calendarStatusSimple(state.scope, checks), ink)
@@ -547,9 +537,9 @@ private fun LiveWindowSyncCard(
         when {
             state.liveWindowSaving -> append("正在保存开关状态…")
             !state.canToggleLiveWindow -> append("请先启用模块框架或打开华为运动健康。")
-            needsUmsScope -> append("已开启（Android 实况通知已就绪）· 授权「智慧服务」后可同步小程序取餐码、外卖等 ColorOS 流体云")
-            enabled -> append("已开启 · 同步小程序取餐码、外卖配送、打车等流体云与实况通知到手表弦月窗（已自动过滤时钟倒计时/秒表）")
-            else -> append("可选 · 将 ColorOS 流体云（取餐码、美团/饿了么外卖、打车）与 Android 实况通知同步至手表原生实况窗（不同步倒计时/秒表）")
+            needsUmsScope -> append("授权「智慧服务」后可同步 ColorOS 流体云中的订单和行程")
+            enabled -> append("已开启 · 取餐、打车、配送和排号进度会显示在手表实况窗")
+            else -> append("将流体云和 Android 实况通知中的取餐码、打车、配送与排号进度同步到手表")
         }
         if (health != null && health.reachable()) {
             append("\n手表状态：").append(liveSupportSimple(health))
@@ -1078,7 +1068,7 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
             HorizontalDivider()
             BasicComponent(
                 title = "2. 开启同步开关即可退出",
-                summary = "重启一次已勾选宿主（或使用 API 102 热重载），打开首页对应的同步开关后，即可关闭 WatchLink，日常无需后台保活。Wi-Fi 首次同步可临时用 Root 批量导入，日常新增连接由无线设置与运动健康直接完成。"
+                summary = "重启一次已勾选宿主（或使用 API 102 热重载），从首页进入对应的同步设置并开启功能后，即可关闭 WatchLink，日常无需后台保活。Wi-Fi 首次同步可临时用 Root 批量导入，日常新增连接由无线设置与运动健康直接完成。"
             )
             HorizontalDivider()
             BasicComponent(
