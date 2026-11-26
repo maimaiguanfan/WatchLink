@@ -6,6 +6,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.os.SystemClock;
 import androidx.annotation.RequiresApi;
@@ -18,7 +19,10 @@ import io.github.watchlink.live.LiveWindowTracker;
 import io.github.watchlink.live.LiveWindowWire;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import io.github.watchlink.timer.TimerCards;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -57,6 +61,9 @@ final class HealthLiveWindowBridge {
     private final HostSettings settings;
     private final ScheduledExecutorService worker;
     private final HealthCooperativeReadiness readiness;
+    // Only opaque occurrence keys survive a Health restart. A missed CLOSE can then be replayed.
+    private final SharedPreferences timerLedger;
+    private static final String PUBLISHED = "publishedKeys";
     private final LiveWindowTracker tracker = new LiveWindowTracker();
 
     private BroadcastReceiver wireReceiver;
@@ -78,6 +85,7 @@ final class HealthLiveWindowBridge {
                            HealthCooperativeReadiness readiness) {
         this.app = app;
         this.settings = settings;
+        this.timerLedger = app.getSharedPreferences(BuildConfig.APPLICATION_ID + ".timer_cards", Context.MODE_PRIVATE);
         this.worker = worker;
         this.readiness = readiness;
     }
@@ -92,7 +100,7 @@ final class HealthLiveWindowBridge {
                 int uid = getSentFromUid();
                 String pkg = getSentFromPackage();
                 TargetProfile senderProfile = TargetProfile.fromPackage(pkg);
-                if (uid < 0 || (senderProfile != TargetProfile.UMS && senderProfile != TargetProfile.HEALTH)
+                if (uid < 0 || (senderProfile != TargetProfile.UMS && senderProfile != TargetProfile.HEALTH && senderProfile != TargetProfile.CLOCK)
                         || intent.getComponent() != null
                         || !TargetProfile.HEALTH.packageName.equals(intent.getPackage())
                         || (intent.getFlags() & Intent.FLAG_RECEIVER_REGISTERED_ONLY) == 0) {
@@ -103,7 +111,8 @@ final class HealthLiveWindowBridge {
                     worker.execute(() -> {
                         try {
                             if (!installed || !SenderVerifier.verifyReminderSender(app, senderProfile, uid, pkg)) return;
-                            String expectedSource = senderProfile == TargetProfile.UMS
+                            String expectedSource = senderProfile == TargetProfile.CLOCK ? LiveWindowPayload.SOURCE_CLOCK_TIMER
+                                    : senderProfile == TargetProfile.UMS
                                     ? LiveWindowPayload.SOURCE_UMS : LiveWindowPayload.SOURCE_DAEMON;
                             LiveWindowPayload payload = LiveWindowWire.fromIntent(intent, expectedSource);
                             if (payload != null) handleIncomingLocked(payload);
@@ -124,13 +133,14 @@ final class HealthLiveWindowBridge {
         settings.onLiveWindowChanged(enabled -> worker.execute(() -> {
             notifyDaemonState(Boolean.TRUE.equals(enabled), isWatchCapableOrUnknown());
             if (!Boolean.TRUE.equals(enabled)) {
-                closeAllActiveLocked("DISABLED");
+                closeGroupLocked(false);
             }
         }));
 
         cleanupFuture = worker.scheduleWithFixedDelay(
                 this::expireOrphansLocked, CLEANUP_INTERVAL_MS, CLEANUP_INTERVAL_MS, TimeUnit.MILLISECONDS);
         installed = true;
+        worker.execute(this::closeForgottenTimers);
         notifyDaemonState(settings.isLiveWindowEnabled(), isWatchCapableOrUnknown());
         ProbeLog.info("HEALTH_LIVE_READY source=HEALTH");
     }
@@ -142,7 +152,7 @@ final class HealthLiveWindowBridge {
     void onSettingsFallbackChanged(boolean enabled) {
         notifyDaemonState(enabled, isWatchCapableOrUnknown());
         if (!enabled) {
-            closeAllActiveLocked("DISABLED");
+            closeGroupLocked(false);
         }
     }
 
@@ -267,15 +277,20 @@ final class HealthLiveWindowBridge {
     }
 
     private void handleIncomingLocked(LiveWindowPayload incoming) {
-        if (!settings.isLiveWindowEnabled()) {
+        boolean timer = LiveWindowPayload.SOURCE_CLOCK_TIMER.equals(incoming.source());
+        if (incoming.operation() != LiveWindowPayload.OP_CLOSE && !(timer
+                ? settings.isTimerEnabled() && settings.isTimerLiveWindowEnabled() : settings.isLiveWindowEnabled())) {
             lastResult = "DISABLED";
             lastSource = incoming.source();
             return;
         }
         if (incoming.operation() == LiveWindowPayload.OP_CLOSE) {
             LiveWindowPayload closed = tracker.onRemove(incoming.stableKey());
-            if (closed == null) return;
-            String mode = dispatchJson(closed.toSmartEdgeJson());
+            if (closed == null) {
+                if (!timer || !publishedTimerKeys().contains(incoming.stableKey())) return;
+                closed = TimerCards.close(incoming.stableKey());
+            }
+            String mode = dispatchCard(closed);
             lastDispatchMode = mode;
             lastSource = closed.source();
             lastResult = isDispatchSuccess(mode) ? "CLOSED" : ("BG_RESTRICTED".equals(mode) ? "BG_RESTRICTED" : "FAILED");
@@ -285,7 +300,7 @@ final class HealthLiveWindowBridge {
 
         String support = readWatchSupport();
         boolean supported = !"UNSUPPORTED".equals(support);
-        notifyDaemonState(true, supported);
+        if (!timer) notifyDaemonState(true, supported);
         if ("WATCH_DISCONNECTED".equals(support)) {
             lastResult = "WATCH_DISCONNECTED";
             lastSource = incoming.source();
@@ -307,7 +322,7 @@ final class HealthLiveWindowBridge {
         LiveWindowPayload toSend = tracker.onUpsert(incoming, SystemClock.elapsedRealtime());
         if (toSend == null) return;
 
-        String mode = dispatchJson(toSend.toSmartEdgeJson());
+        String mode = dispatchCard(toSend);
         lastDispatchMode = mode;
         lastSource = toSend.source();
         if (isDispatchSuccess(mode)) {
@@ -325,14 +340,14 @@ final class HealthLiveWindowBridge {
         }
     }
 
-    private void closeAllActiveLocked(String reason) {
-        List<LiveWindowPayload> closures = tracker.closeAll();
+    void closeGroupLocked(boolean timers) {
+        List<LiveWindowPayload> closures = tracker.closeSourceGroup(timers);
         for (LiveWindowPayload close : closures) {
-            String mode = dispatchJson(close.toSmartEdgeJson());
+            String mode = dispatchCard(close);
             lastDispatchMode = mode;
         }
         if (!closures.isEmpty()) {
-            lastResult = reason;
+            lastResult = "DISABLED";
         }
     }
 
@@ -341,8 +356,33 @@ final class HealthLiveWindowBridge {
         List<LiveWindowPayload> stale = tracker.expireStale(
                 SystemClock.elapsedRealtime(), LiveWindowTracker.DEFAULT_ORPHAN_TIMEOUT_MS);
         for (LiveWindowPayload close : stale) {
-            dispatchJson(close.toSmartEdgeJson());
+            dispatchCard(close);
         }
+        closeForgottenTimers();
+    }
+
+    private Set<String> publishedTimerKeys() {
+        return timerLedger.getStringSet(PUBLISHED, Set.of());
+    }
+
+    private void closeForgottenTimers() {
+        if (!installed) return;
+        for (String key : publishedTimerKeys()) {
+            if (!tracker.isActive(key)) dispatchCard(TimerCards.close(key));
+        }
+    }
+
+    private String dispatchCard(LiveWindowPayload card) {
+        if (!LiveWindowPayload.SOURCE_CLOCK_TIMER.equals(card.source())) return dispatchJson(card.toSmartEdgeJson());
+        boolean closing = card.operation() == LiveWindowPayload.OP_CLOSE;
+        if (closing && "WATCH_DISCONNECTED".equals(readWatchSupport())) return "FAILED";
+        String mode = dispatchJson(card.toSmartEdgeJson());
+        if (isDispatchSuccess(mode) && (closing || card.operation() == LiveWindowPayload.OP_CREATE)) {
+            Set<String> keys = new HashSet<>(publishedTimerKeys());
+            boolean changed = closing ? keys.remove(card.stableKey()) : keys.add(card.stableKey());
+            if (changed) timerLedger.edit().putStringSet(PUBLISHED, keys).apply();
+        }
+        return mode;
     }
 
     private String dispatchJson(String json) {

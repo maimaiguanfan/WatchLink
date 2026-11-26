@@ -18,6 +18,7 @@ import io.github.watchlink.validation.ClockHostControl;
 import io.github.watchlink.validation.DailyAlarmWire;
 import io.github.watchlink.validation.HuaweiReminderService;
 import io.github.watchlink.validation.PhoneRingWire;
+import io.github.watchlink.timer.TimerRing;
 import java.util.Arrays;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -140,6 +141,7 @@ final class ClockDailyAlarms extends BroadcastReceiver {
         enqueue(() -> {
             if (!SenderVerifier.verifyReminderSender(app, TargetProfile.HEALTH, uid, TargetProfile.HEALTH.packageName)) return;
             if (DailyAlarmWire.STATUS.equals(intent.getAction())) {
+                if (TimerRing.TYPE.equals(intent.getStringExtra(TimerRing.TYPE_EXTRA))) return;
                 status(intent);
             } else if (DailyAlarmWire.HEALTH_READY.equals(intent.getAction())) {
                 Active current = active;

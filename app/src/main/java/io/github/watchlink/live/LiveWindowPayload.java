@@ -27,6 +27,8 @@ public record LiveWindowPayload(
 
     public static final String SOURCE_UMS = "UMS";
     public static final String SOURCE_DAEMON = "DAEMON";
+    public static final String SOURCE_CLOCK_TIMER = "CLOCK_TIMER";
+    public static final String CLOCK_TIMER_KEY_PREFIX = "clock-timer:";
     public static final String SOURCE_TEST = "TEST";
 
     // Verified against Huawei Health 17.0.10.330 Lctp.b & live WATCH 6 Pro testing (OTHER is dropped!).
@@ -139,7 +141,7 @@ public record LiveWindowPayload(
         fieldInt(sb, "notification.live.capsuleType", 1); sb.append(',');
         field(sb, "notification.live.capsuleTitle", capsuleTitle); sb.append(',');
         field(sb, "notification.live.capsuleContent", capsuleContent); sb.append(',');
-        fieldBool(sb, "notification.live.capsuleRemind", operation == OP_CREATE);
+        fieldBool(sb, "notification.live.capsuleRemind", operation == OP_CREATE && !SOURCE_CLOCK_TIMER.equals(source));
         sb.append("}}");
         return sb.toString();
     }
@@ -167,6 +169,7 @@ public record LiveWindowPayload(
         if (raw == null) return SOURCE_UMS;
         return switch (raw.trim().toUpperCase(Locale.US)) {
             case SOURCE_DAEMON -> SOURCE_DAEMON;
+            case SOURCE_CLOCK_TIMER -> SOURCE_CLOCK_TIMER;
             case SOURCE_TEST -> SOURCE_TEST;
             default -> SOURCE_UMS;
         };

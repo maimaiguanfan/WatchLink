@@ -172,6 +172,7 @@ final class HealthDaemonLiveBridge {
 
     private LiveWindowPayload extractLivePayload(StatusBarNotification sbn) {
         try {
+            if (TargetProfile.CLOCK.packageName.equals(sbn.getPackageName())) return null;
             Notification n = sbn.getNotification();
             if (n == null) return null;
             Bundle extras = n.extras;

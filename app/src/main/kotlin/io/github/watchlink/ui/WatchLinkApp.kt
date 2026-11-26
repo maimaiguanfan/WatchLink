@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.watchlink.BuildConfig
 import io.github.watchlink.alarm.probe.TargetProfile
+import io.github.watchlink.setup.WatchLinkPrefs
 import io.github.watchlink.setup.ModuleScope
 import io.github.watchlink.validation.CalendarHostControl
 import io.github.watchlink.validation.ClockHostControl
@@ -68,6 +69,7 @@ internal data class WatchLinkUiState(
     val checks: HomeChecks? = null,
     val scope: ModuleScope.View? = null,
     val saving: Boolean = false,
+    val timerSaving: Boolean = false,
     val calendarSaving: Boolean = false,
     val liveWindowSaving: Boolean = false,
     val wifiAutoSaving: Boolean = false,
@@ -137,6 +139,7 @@ internal fun WatchLinkApp(
     state: WatchLinkUiState,
     onEnable: (Boolean) -> Unit,
     onCalendarEnable: (Boolean) -> Unit,
+    onTimerOption: (String, Boolean) -> Unit,
     onLiveWindowEnable: (Boolean) -> Unit,
     onWifiAutoEnable: (Boolean) -> Unit,
     onDismissMessage: () -> Unit,
@@ -205,6 +208,7 @@ internal fun WatchLinkApp(
                             item("calendar") {
                                 CalendarReminderCard(state, onCalendarEnable, onRequestCalendarScope, onCalendar, onRefresh)
                             }
+                            item("countdown") { CountdownCard(state, onTimerOption) }
                             recentRing(state)
                             recentCalendarRing(state)
                         }
@@ -246,7 +250,7 @@ private fun LazyListScope.homePage(state: WatchLinkUiState, onRefresh: () -> Uni
     item("features-title") { SectionTitle("同步设置") }
     item("features") {
         Card(Modifier.fillMaxWidth()) {
-            Menu(Page.REMINDERS.title, "手机闹钟、日历强提醒与最近响铃") { openPage(Page.REMINDERS) }
+            Menu(Page.REMINDERS.title, "手机闹钟、倒计时与日历强提醒") { openPage(Page.REMINDERS) }
             HorizontalDivider()
             Menu(Page.LIVE.title, "取餐码、打车行程、配送与排号进度") { openPage(Page.LIVE) }
             HorizontalDivider()
@@ -334,7 +338,7 @@ private fun StatusCard(
     val checks = state.checks
     val level = setupLevel(checks, issues, state.scope)
     val enabled = state.effectiveEnabled || state.effectiveCalendarEnabled ||
-            state.effectiveLiveWindowEnabled || state.effectiveWifiAutoEnabled
+            state.effectiveLiveWindowEnabled || state.effectiveWifiAutoEnabled || state.scope?.timerOptions()?.enabled() == true
     var expanded by rememberSaveable { mutableStateOf(false) }
 
     val (background, ink) = when (level) {
@@ -456,6 +460,36 @@ private fun AutoReminderCard(state: WatchLinkUiState, onEnable: (Boolean) -> Uni
             }
         )
     }
+}
+
+@Composable
+private fun CountdownCard(state: WatchLinkUiState, change: (String, Boolean) -> Unit) {
+    val options = state.scope?.timerOptions()
+    val enabled = options?.enabled() == true
+    val canSave = state.scope?.remotePrefsSupported() == true && !state.timerSaving
+    val support = state.healthHost?.takeIf { it.reachable() }?.liveWatchSupport()
+    Card(Modifier.fillMaxWidth()) {
+        TimerSwitch("倒计时同步", "手机倒计时响铃时提醒手表，可在任一端停止本轮响铃。",
+            enabled, canSave) { change(WatchLinkPrefs.KEY_TIMER_ENABLED, it) }
+        if (enabled) {
+            HorizontalDivider()
+            TimerSwitch("运行中显示手表实况窗", when (support) {
+                "UNSUPPORTED" -> "此手表不支持实况窗，到期仍会发送强提醒。"
+                "WATCH_DISCONNECTED" -> "手表未连接。连接后可显示预计结束时间与暂停进度。"
+                else -> "显示预计结束时间和进度，暂停或恢复时静默更新。"
+            }, options.live(), canSave) { change(WatchLinkPrefs.KEY_TIMER_LIVE, it) }
+            HorizontalDivider()
+            TimerSwitch("手表延后键映射为再次计时", "响铃时在手表点延后，手机按本次原时长重新开始。",
+                options.restart(), canSave) { change(WatchLinkPrefs.KEY_TIMER_RESTART, it) }
+        }
+    }
+}
+
+@Composable
+private fun TimerSwitch(title: String, summary: String, value: Boolean, canSave: Boolean, change: (Boolean) -> Unit) {
+    BasicComponent(title = title, summary = summary,
+        onClick = if (canSave) { { change(!value) } } else null,
+        endActions = { Switch(checked = value, enabled = canSave, onCheckedChange = change) })
 }
 
 @Composable

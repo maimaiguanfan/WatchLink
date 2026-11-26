@@ -61,7 +61,7 @@ public final class HealthHostControl {
     private static final Set<String> LIVE_RESULTS = Set.of(
             "NONE", "OPENED", "UPDATED", "CLOSED", "WATCH_DISCONNECTED",
             "UNSUPPORTED_WATCH", "DISABLED", "BG_RESTRICTED", "FAILED");
-    private static final Set<String> LIVE_SOURCES = Set.of("NONE", "UMS", "DAEMON", "TEST");
+    private static final Set<String> LIVE_SOURCES = Set.of("NONE", "UMS", "DAEMON", "TEST", "CLOCK_TIMER");
     private static final Set<String> LIVE_TEST_STATES = Set.of(
             "IDLE", "OPENED", "UPDATED", "CLOSED", "WATCH_UNAVAILABLE", "FAILED");
 

@@ -71,6 +71,8 @@ public final class LiveWindowWire {
         String event = intent.getStringExtra(EXTRA_EVENT);
         int progress = intent.getIntExtra(EXTRA_PROGRESS, -1);
         String src = expectedSource != null ? expectedSource : intent.getStringExtra(EXTRA_SOURCE);
+        if (LiveWindowPayload.SOURCE_CLOCK_TIMER.equals(src) != key.startsWith(LiveWindowPayload.CLOCK_TIMER_KEY_PREFIX)) return null;
+        if (LiveWindowPayload.SOURCE_CLOCK_TIMER.equals(src) && !TargetProfile.CLOCK.packageName.equals(pkg)) return null;
         LiveWindowPayload payload = new LiveWindowPayload(
                 src, key, pkg, title, text, capTitle, capContent, event, progress, op);
         if (op != LiveWindowPayload.OP_CLOSE && !payload.isValidForOpenOrUpdate()) return null;

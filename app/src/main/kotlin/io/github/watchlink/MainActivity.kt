@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
                 state = ui,
                 onEnable = ::setEnabled,
                 onCalendarEnable = ::setCalendarEnabled,
+                onTimerOption = ::setTimerOption,
                 onLiveWindowEnable = ::setLiveWindowEnabled,
                 onWifiAutoEnable = ::setWifiAutoEnabled,
                 onDismissMessage = { ui = ui.copy(message = null) },
@@ -557,6 +558,20 @@ class MainActivity : ComponentActivity() {
                 },
             )
             readChecks()
+        }
+    }
+
+    private fun setTimerOption(key: String, enabled: Boolean) {
+        if (ui.timerSaving) return
+        ui = ui.copy(timerSaving = true)
+        lifecycleScope.launch {
+            val saved = suspendCancellableCoroutine { continuation ->
+                ModuleScope.writeTimerOption(key, enabled) {
+                    if (continuation.isActive) continuation.resume(it)
+                }
+            }
+            ui = ui.copy(timerSaving = false, scope = ModuleScope.inspect(),
+                message = if (saved) null else "未能保存倒计时设置，请检查 LSPosed 连接。")
         }
     }
 

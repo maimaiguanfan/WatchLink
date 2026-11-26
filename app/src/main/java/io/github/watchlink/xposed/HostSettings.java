@@ -16,6 +16,7 @@ final class HostSettings {
     // Strong reference prevents SharedPreferences' WeakHashMap from evicting the listener.
     private final SharedPreferences.OnSharedPreferenceChangeListener remoteListener;
     private volatile Runnable disabledCallback;
+    private volatile Runnable timerChanged;
     private volatile Runnable calendarDisabledCallback;
     private volatile Consumer<Boolean> wifiAutoSyncChangedCallback;
     private volatile Consumer<Boolean> liveWindowChangedCallback;
@@ -27,6 +28,10 @@ final class HostSettings {
             remoteListener = (prefs, key) -> {
                 if (WatchLinkPrefs.KEY_ENABLED.equals(key) && !prefs.getBoolean(WatchLinkPrefs.KEY_ENABLED, false)) {
                     Runnable callback = disabledCallback;
+                    if (callback != null) callback.run();
+                } else if (key == null || WatchLinkPrefs.timerKey(key)) {
+                    mirrorTimerSettings();
+                    Runnable callback = timerChanged;
                     if (callback != null) callback.run();
                 } else if (WatchLinkPrefs.KEY_CALENDAR_ENABLED.equals(key)
                         && !prefs.getBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED, false)) {
@@ -46,10 +51,24 @@ final class HostSettings {
             };
             try {
                 remote.registerOnSharedPreferenceChangeListener(remoteListener);
+                mirrorTimerSettings();
             } catch (RuntimeException ignored) { /* Proceed with direct reads if listener unsupported. */ }
         } else {
             remoteListener = null;
         }
+    }
+
+    private void mirrorTimerSettings() {
+        if (remote == null) return;
+        try {
+            var editor = local.edit();
+            for (String key : java.util.List.of(WatchLinkPrefs.KEY_TIMER_ENABLED, WatchLinkPrefs.KEY_TIMER_LIVE,
+                    WatchLinkPrefs.KEY_TIMER_RESTART)) {
+                if (remote.contains(key)) editor.putBoolean(key, remote.getBoolean(key, WatchLinkPrefs.KEY_TIMER_LIVE.equals(key)));
+                else editor.remove(key);
+            }
+            editor.apply();
+        } catch (RuntimeException unavailable) { /* Retain the last synchronized settings. */ }
     }
 
     boolean remoteAvailable() {
@@ -59,6 +78,14 @@ final class HostSettings {
     boolean isEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_ENABLED);
     }
+
+    boolean isTimerEnabled() { return readBoolean(WatchLinkPrefs.KEY_TIMER_ENABLED); }
+
+    boolean isTimerLiveWindowEnabled() { return readBoolean(WatchLinkPrefs.KEY_TIMER_LIVE); }
+
+    boolean isTimerRestartEnabled() { return readBoolean(WatchLinkPrefs.KEY_TIMER_RESTART); }
+
+    void onTimerChanged(Runnable callback) { timerChanged = callback; }
 
     boolean isCalendarEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_CALENDAR_ENABLED);
@@ -73,6 +100,11 @@ final class HostSettings {
     }
 
     boolean isEnabledFor(TargetProfile source) {
+        return isEnabledFor(source, false);
+    }
+
+    boolean isEnabledFor(TargetProfile source, boolean timer) {
+        if (timer) return source == TargetProfile.CLOCK && isTimerEnabled();
         if (source == TargetProfile.CALENDAR) return isCalendarEnabled();
         if (source == TargetProfile.CLOCK) return isEnabled();
         return false;
@@ -86,7 +118,7 @@ final class HostSettings {
                 }
             } catch (RuntimeException ignored) { /* Fall back to host-local preference. */ }
         }
-        return local.getBoolean(key, false);
+        return local.getBoolean(key, WatchLinkPrefs.KEY_TIMER_LIVE.equals(key));
     }
 
     boolean setLocalFallback(boolean enabled) {
@@ -123,6 +155,7 @@ final class HostSettings {
 
     void close() {
         disabledCallback = null;
+        timerChanged = null;
         calendarDisabledCallback = null;
         wifiAutoSyncChangedCallback = null;
         liveWindowChangedCallback = null;

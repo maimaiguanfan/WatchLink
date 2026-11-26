@@ -1,6 +1,7 @@
 package io.github.watchlink.xposed;
 
 import android.content.BroadcastReceiver;
+import io.github.watchlink.timer.TimerRing;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -123,8 +124,8 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         ProbeLog.info((sdkObserverReady ? "HEALTH_SDK_OBSERVER_READY" : "HEALTH_SDK_OBSERVER_DEGRADED")
                 + " sdk_observer=" + sdkObserverReady);
 
-        settings.onDisabled(() -> worker.execute(() -> cancelActiveDailyFor(TargetProfile.CLOCK)));
-        settings.onCalendarDisabled(() -> worker.execute(() -> cancelActiveDailyFor(TargetProfile.CALENDAR)));
+        settings.onDisabled(() -> worker.execute(() -> cancelActiveDailyFor(TargetProfile.CLOCK, false)));
+        settings.onCalendarDisabled(() -> worker.execute(() -> cancelActiveDailyFor(TargetProfile.CALENDAR, false)));
 
         HealthWifiBridge wifi = new HealthWifiBridge(app, ownerUid, settings, sender, readiness, sdkObserverReady);
         wifi.install(installer, symbols);
@@ -133,6 +134,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         HealthLiveWindowBridge live = new HealthLiveWindowBridge(app, settings, worker, readiness);
         live.install(installer, symbols);
         liveBridge = live;
+        settings.onTimerChanged(() -> worker.execute(() -> {
+            if (!settings.isTimerEnabled()) cancelActiveDailyFor(TargetProfile.CLOCK, true);
+            if (!settings.isTimerEnabled() || !settings.isTimerLiveWindowEnabled()) live.closeGroupLocked(true);
+        }));
 
         IntentFilter filter = new IntentFilter(DailyAlarmWire.OPEN);
         filter.addAction(DailyAlarmWire.END);
@@ -226,6 +231,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     void close() {
         installed = false;
         settings.onDisabled(null);
+        settings.onTimerChanged(null);
         settings.onCalendarDisabled(null);
         daily.stop();
         if (liveBridge != null) {
@@ -282,6 +288,8 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         int reminder = intent.getIntExtra("reminder", 0);
         long at = intent.getLongExtra("at", 0), start = intent.getLongExtra("elapsed", -1);
         if (!DailyAlarmWire.isRun(run) || reminder <= 0) return;
+        boolean timer = TimerRing.TYPE.equals(intent.getStringExtra(TimerRing.TYPE_EXTRA));
+        if (timer != TimerRing.timerNotice(reminder) || (timer && source != TargetProfile.CLOCK)) return;
 
         long wall = System.currentTimeMillis(), elapsed = SystemClock.elapsedRealtime();
         if (DailyAlarmWire.END.equals(intent.getAction())) {
@@ -297,7 +305,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         }
 
         if (!DailyAlarmWire.inWindow(at, start, PhoneRingWire.MAX_AGE, wall, elapsed)) return;
-        if (!settings.isEnabledFor(source)) {
+        if (!settings.isEnabledFor(source, timer)) {
             dailyReport(new DailyAlarmObservation.Evidence(source, run, reminder, "DISABLED", wall, elapsed), "");
             return;
         }
@@ -308,7 +316,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         String title = DailyReminderTitle.forWatch(intent.getStringExtra("title"));
         if (title == null) {
             title = source == TargetProfile.CALENDAR
-                    ? HuaweiReminderService.CALENDAR_TITLE : HuaweiReminderService.ALARM_TITLE;
+                    ? HuaweiReminderService.CALENDAR_TITLE : timer ? "倒计时" : HuaweiReminderService.ALARM_TITLE;
         }
         int snoozeMinutes = intent.getIntExtra("snoozeMinutes", 0);
         if (snoozeMinutes != 0 && !PhoneRingWire.validSnooze(snoozeMinutes)) snoozeMinutes = 0;
@@ -374,8 +382,8 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         }
     }
 
-    private void cancelActiveDailyFor(TargetProfile source) {
-        if (source == null || source != activeDailySource) return;
+    private void cancelActiveDailyFor(TargetProfile source, boolean timer) {
+        if (source == null || source != activeDailySource || timer != TimerRing.timerNotice(activeDailyReminder)) return;
         String run = activeDailyRun;
         int reminder = activeDailyReminder;
         String deviceMac = activeDailyDevice;
@@ -525,6 +533,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
             Intent status = DailyAlarmWire.route(DailyAlarmWire.STATUS, evidence.source().packageName)
                     .putExtra("run", evidence.run())
                     .putExtra("reminder", evidence.reminder())
+                    .putExtra(TimerRing.TYPE_EXTRA, TimerRing.timerNotice(evidence.reminder()) ? TimerRing.TYPE : "ALARM")
                     .putExtra("kind", evidence.kind())
                     .putExtra("at", evidence.wall())
                     .putExtra("elapsed", evidence.elapsed());
@@ -561,12 +570,12 @@ final class HealthAlarmBridge extends BroadcastReceiver {
             case HealthHostControl.ENABLE -> settings.setLocalFallback(true);
             case HealthHostControl.DISABLE -> {
                 settings.setLocalFallback(false);
-                cancelActiveDailyFor(TargetProfile.CLOCK);
+                cancelActiveDailyFor(TargetProfile.CLOCK, false);
             }
             case HealthHostControl.ENABLE_CALENDAR -> settings.setLocalCalendarFallback(true);
             case HealthHostControl.DISABLE_CALENDAR -> {
                 settings.setLocalCalendarFallback(false);
-                cancelActiveDailyFor(TargetProfile.CALENDAR);
+                cancelActiveDailyFor(TargetProfile.CALENDAR, false);
             }
             case HealthHostControl.ENABLE_WIFI_AUTO -> {
                 settings.setLocalWifiAutoSyncFallback(true);

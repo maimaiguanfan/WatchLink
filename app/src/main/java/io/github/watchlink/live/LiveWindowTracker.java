@@ -59,7 +59,8 @@ public final class LiveWindowTracker {
             existing.lastSentElapsedMs = Math.max(existing.lastSentElapsedMs, nowElapsedMs);
             return null;
         }
-        boolean majorChange = !incoming.eventType().equals(existing.payload.eventType())
+        boolean majorChange = LiveWindowPayload.SOURCE_CLOCK_TIMER.equals(incoming.source())
+                || !incoming.eventType().equals(existing.payload.eventType())
                 || !incoming.title().equals(existing.payload.title())
                 || Math.abs(incoming.progress() - existing.payload.progress()) >= 5
                 || (incoming.progress() == 100 && existing.payload.progress() != 100);
@@ -106,6 +107,16 @@ public final class LiveWindowTracker {
                 it.remove();
             }
         }
+        return closures;
+    }
+
+    public synchronized List<LiveWindowPayload> closeSourceGroup(boolean timers) {
+        List<LiveWindowPayload> closures = new ArrayList<>();
+        active.values().removeIf(entry -> {
+            if (LiveWindowPayload.SOURCE_CLOCK_TIMER.equals(entry.payload.source()) != timers) return false;
+            closures.add(entry.payload.withOperation(LiveWindowPayload.OP_CLOSE));
+            return true;
+        });
         return closures;
     }
 

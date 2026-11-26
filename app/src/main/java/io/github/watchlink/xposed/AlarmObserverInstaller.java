@@ -39,6 +39,7 @@ final class AlarmObserverInstaller {
     private AutoCloseable diagnosticHandle;
     private BroadcastReceiver scopeWitnessReceiver;
     private ClockNovemberLive clockLive;
+    private ClockCountdownBridge clockTimer;
     private CalendarLiveBridge calendarLive;
     private HealthAlarmBridge healthBridge;
     private WirelessSettingsBridge wirelessBridge;
@@ -128,6 +129,13 @@ final class AlarmObserverInstaller {
                 clockLive = live;
                 live.install(this, occurrence, service, symbols);
                 active.set(true);
+                clockTimer = new ClockCountdownBridge(hostContext, settings);
+                try { clockTimer.install(this, sources); }
+                catch (Exception | LinkageError unavailable) {
+                    clockTimer.close();
+                    clockTimer = null;
+                    ProbeLog.failure("TIMER_CLOCK_UNAVAILABLE", unavailable);
+                }
                 if (live.actions != null) {
                     localControl = symbols.actionContractVerified() && live.actions.actionsResolved();
                     if (!localControl) {
@@ -192,7 +200,7 @@ final class AlarmObserverInstaller {
     }
 
     synchronized boolean isBusy() {
-        return (clockLive != null && clockLive.hasActiveRing())
+        return (clockTimer != null && clockTimer.busy()) || (clockLive != null && clockLive.hasActiveRing())
                 || (calendarLive != null && calendarLive.hasActiveRing())
                 || (healthBridge != null && healthBridge.hasActiveSession());
     }
@@ -212,6 +220,10 @@ final class AlarmObserverInstaller {
         if (diagnosticHandle != null) {
             try { diagnosticHandle.close(); } catch (Exception ignored) {}
             diagnosticHandle = null;
+        }
+        if (clockTimer != null) {
+            clockTimer.close();
+            clockTimer = null;
         }
         if (clockLive != null) {
             try { clockLive.close(); }
