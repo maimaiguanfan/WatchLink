@@ -53,7 +53,7 @@ public final class ModuleScope {
     public record TimerOptions(boolean enabled, boolean live, boolean restart) {
         static TimerOptions read(SharedPreferences prefs) {
             return new TimerOptions(prefs.getBoolean(WatchLinkPrefs.KEY_TIMER_ENABLED, false),
-                    prefs.getBoolean(WatchLinkPrefs.KEY_TIMER_LIVE, true),
+                    prefs.getBoolean(WatchLinkPrefs.KEY_TIMER_LIVE, false),
                     prefs.getBoolean(WatchLinkPrefs.KEY_TIMER_RESTART, false));
         }
     }

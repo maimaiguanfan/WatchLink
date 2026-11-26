@@ -64,7 +64,7 @@ final class HostSettings {
             var editor = local.edit();
             for (String key : java.util.List.of(WatchLinkPrefs.KEY_TIMER_ENABLED, WatchLinkPrefs.KEY_TIMER_LIVE,
                     WatchLinkPrefs.KEY_TIMER_RESTART)) {
-                if (remote.contains(key)) editor.putBoolean(key, remote.getBoolean(key, WatchLinkPrefs.KEY_TIMER_LIVE.equals(key)));
+                if (remote.contains(key)) editor.putBoolean(key, remote.getBoolean(key, false));
                 else editor.remove(key);
             }
             editor.apply();
@@ -118,7 +118,7 @@ final class HostSettings {
                 }
             } catch (RuntimeException ignored) { /* Fall back to host-local preference. */ }
         }
-        return local.getBoolean(key, WatchLinkPrefs.KEY_TIMER_LIVE.equals(key));
+        return local.getBoolean(key, false);
     }
 
     boolean setLocalFallback(boolean enabled) {

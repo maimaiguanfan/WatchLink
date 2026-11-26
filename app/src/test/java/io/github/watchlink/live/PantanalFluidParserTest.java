@@ -20,9 +20,11 @@ public class PantanalFluidParserTest {
         assertEquals("com.tencent.mm", p.packageName());
         assertEquals(LiveWindowPayload.EVENT_PICK_UP, p.eventType());
         assertEquals("库迪咖啡", p.title());
-        assertTrue(p.text().contains("取餐码 A739"));
-        assertTrue(p.text().contains("约3分钟"));
-        assertEquals("取餐码 A739", p.capsuleContent());
+        assertEquals("A739 约3分钟", p.text());
+        assertEquals("库迪咖啡", p.capsuleTitle());
+        assertEquals("A739", p.capsuleContent());
+        assertFalse(p.text().contains("取餐码"));
+        assertFalse(p.capsuleContent().contains("取餐码"));
         assertEquals(-1, p.progress());
     }
 
@@ -132,7 +134,17 @@ public class PantanalFluidParserTest {
         LiveWindowPayload pickup = PantanalFluidParser.parsePushData(1, 2, "", "", "",
                 "{\"pickupCode\":103,\"appName\":\"咖啡店\"}", "", "");
         assertNotNull(pickup);
-        assertEquals("取餐码 103", pickup.capsuleContent());
+        assertEquals("103", pickup.capsuleContent());
+
+        LiveWindowPayload cappuccino = PantanalFluidParser.parsePushData(1, 4, "", "", "",
+                "{\"fluidTitle\":\"卡布奇诺 取餐码 A633\",\"fluidContent\":\"卡布奇诺 取餐码 A633\",\"capsuleTitle\":\"卡布奇诺\",\"capsuleContent\":\"取餐码 A633\"}",
+                "com.tencent.mm", "");
+        assertNotNull(cappuccino);
+        assertEquals(LiveWindowPayload.EVENT_PICK_UP, cappuccino.eventType());
+        assertEquals("卡布奇诺 A633", cappuccino.title());
+        assertEquals("卡布奇诺 A633", cappuccino.text());
+        assertEquals("卡布奇诺", cappuccino.capsuleTitle());
+        assertEquals("A633", cappuccino.capsuleContent());
 
         LiveWindowPayload taxi = PantanalFluidParser.parsePushData(1, 3, "", "taxi_card", "",
                 "{\"mainContent\":\"还有 3 分钟\"}", "", "");

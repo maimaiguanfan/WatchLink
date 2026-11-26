@@ -250,12 +250,13 @@ public final class PantanalFluidParser {
         String pickupCode = identifier(flat, "pickupCode", "pickUpCode", "takeCode", "mealCode", "orderCode");
         if (LiveWindowPayload.EVENT_PICK_UP.equals(event) && !pickupCode.isEmpty()) {
             String appName = firstNonEmpty(flat, "appName", "merchantName", "shopName", "brandName", "title", "fluidTitle");
+            String itemName = firstNonEmpty(flat, "goodsName", "productName", "dishName", "itemName");
             String waitTime = firstNonEmpty(flat, "waitTime", "waitText", "statusText", "subTitle", "fluidContent", "subContent");
-            String title = appName.isEmpty() ? "取餐提醒" : appName;
-            String codePhrase = pickupCode.contains("取餐") ? pickupCode : ("取餐码 " + pickupCode);
-            String text = waitTime.isEmpty() ? codePhrase : (codePhrase + " · " + waitTime);
+            String cleanCode = WatchLiveTextFormatter.cleanPickupCode(pickupCode);
+            String title = !itemName.isEmpty() ? itemName : (appName.isEmpty() ? "取餐提醒" : appName);
+            String text = WatchLiveTextFormatter.formatPickupWithWait("", cleanCode, waitTime);
             String capsuleTitle = title;
-            String capsuleContent = codePhrase;
+            String capsuleContent = cleanCode;
             LiveWindowPayload p = new LiveWindowPayload(
                     source, stableKey, packageName, title, text,
                     capsuleTitle, capsuleContent, LiveWindowPayload.EVENT_PICK_UP, -1, LiveWindowPayload.OP_CREATE);

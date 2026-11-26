@@ -64,6 +64,15 @@ public record LiveWindowPayload(
         progress = progress < 0 ? -1 : Math.min(100, progress);
         operation = (operation == OP_CREATE || operation == OP_UPDATE || operation == OP_CLOSE)
                 ? operation : OP_UPDATE;
+        if (EVENT_PICK_UP.equals(eventType) && !SOURCE_CLOCK_TIMER.equals(source) && operation != OP_CLOSE) {
+            title = WatchLiveTextFormatter.compactPickupLine(title);
+            text = WatchLiveTextFormatter.compactPickupLine(text);
+            WatchLiveTextFormatter.Pair cap = WatchLiveTextFormatter.compactPickupCapsule(capsuleTitle, capsuleContent);
+            capsuleTitle = cap.title();
+            capsuleContent = cap.content();
+            if (title.isEmpty() && !text.isEmpty()) title = text;
+            if (capsuleContent.isEmpty() && !text.isEmpty()) capsuleContent = text;
+        }
     }
 
     public boolean isValidForOpenOrUpdate() {

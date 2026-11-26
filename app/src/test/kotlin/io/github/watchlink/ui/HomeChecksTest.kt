@@ -132,4 +132,17 @@ class HomeChecksTest {
         val disconnected = ready.copy(clockHost = null, healthHost = healthReply(watchState = "WATCH_DISCONNECTED"))
         assertEquals(SetupLevel.ATTENTION, setupLevel(disconnected, disconnected.issues(active), active))
     }
+
+    @Test fun sleepingClockRemainsReadyWhenScopeRemotePrefsAndHealthWatchAreReady() {
+        val sleepingClockScope = scopeView(
+            clockActive = false,
+            clockRuntime = ModuleScope.TargetRuntime.ABSENT,
+        )
+        val checksWithSleepingClock = ready.copy(
+            clockHost = ClockHostControl.Reply(false, false, "UNREACHABLE", false, false, "UNKNOWN")
+        )
+        val issues = checksWithSleepingClock.issues(sleepingClockScope)
+        assertEquals(emptyList<SetupIssue>(), issues)
+        assertEquals(SetupLevel.READY, setupLevel(checksWithSleepingClock, issues, sleepingClockScope))
+    }
 }

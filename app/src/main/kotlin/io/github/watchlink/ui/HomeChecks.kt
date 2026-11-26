@@ -71,8 +71,13 @@ internal data class HomeChecks(
 internal fun setupLevel(checks: HomeChecks?, issues: List<SetupIssue>, scope: ModuleScope.View?): SetupLevel = when {
     SetupIssue.SCOPE in issues && scope?.frameworkConnected() == true && !scope.configured() -> SetupLevel.MISSING_SCOPE
     issues.isNotEmpty() -> SetupLevel.ATTENTION
-    scope?.active() != true || checks?.clockHost?.reachable() != true || checks.healthHost?.reachable() != true ->
-        SetupLevel.PENDING
+    checks == null || scope == null -> SetupLevel.PENDING
+    !scope.healthActive() || checks.healthHost?.reachable() != true -> SetupLevel.PENDING
     checks.healthHost.watchState() !in setOf("READY_SUPPORTED_ON", "READY_SUPPORTED_UNSET") -> SetupLevel.PENDING
-    else -> SetupLevel.READY
+    scope.clockActive() && checks.clockHost?.reachable() == true -> SetupLevel.READY
+    // System Clock routinely sleeps when idle; once scope and RemotePreferences are active it loads on alarm/timer wake.
+    scope.configured() && scope.remotePrefsSupported()
+            && !scope.clockActive() && !scope.clockRuntime().isStale() && !scope.clockRuntime().isReloading()
+            && checks.clockHost != null && !checks.clockHost.reachable() -> SetupLevel.READY
+    else -> SetupLevel.PENDING
 }

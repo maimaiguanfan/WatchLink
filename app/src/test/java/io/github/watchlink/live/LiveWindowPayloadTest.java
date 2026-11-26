@@ -62,19 +62,21 @@ public class LiveWindowPayloadTest {
         assertEquals(1L, root.get("notification.live.type"));
         assertEquals("PICK_UP", root.get("notification.live.event"));
         assertEquals("库迪咖啡", root.get("notification.live.titleOverlay"));
-        assertEquals("取餐码 A739 · 约2分钟", root.get("notification.live.contentOverlay"));
+        assertEquals("A739 约2分钟", root.get("notification.live.contentOverlay"));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> feature = (Map<String, Object>) root.get("notification.live.feature");
         assertNotNull(feature);
         assertEquals("库迪咖啡", feature.get("notification.live.feature.titleText"));
-        assertEquals("取餐码 A739", feature.get("notification.live.feature.contentText"));
+        assertEquals("A739", feature.get("notification.live.feature.contentText"));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> capsule = (Map<String, Object>) root.get("notification.live.capsule");
         assertNotNull(capsule);
         assertEquals(1L, capsule.get("notification.live.capsuleStatus"));
         assertEquals(Boolean.FALSE, capsule.get("notification.live.capsuleRemind"));
+        assertEquals("库迪咖啡", capsule.get("notification.live.capsuleTitle"));
+        assertEquals("A739", capsule.get("notification.live.capsuleContent"));
 
         // Close sets capsuleStatus=0 and op=2.
         Map<String, Object> closeRoot = SimpleJson.parseObject(p.withOperation(LiveWindowPayload.OP_CLOSE).toSmartEdgeJson());
@@ -84,6 +86,37 @@ public class LiveWindowPayloadTest {
         Map<String, Object> closeCap = (Map<String, Object>) closeRoot.get("notification.live.capsule");
         assertEquals(0L, closeCap.get("notification.live.capsuleStatus"));
         assertEquals(Boolean.FALSE, closeCap.get("notification.live.capsuleRemind"));
+    }
+
+    @Test public void compactsPickupLinesAndCapsulesToTenWatchCellsPreservingCode() {
+        // Real measured watch truncation baseline: space = 0.5 cell, CJK/ASCII = 1.0 cell, limit = 10.0 cells (20 half-cells).
+        assertEquals(20, WatchLiveTextFormatter.halfCells("卡布奇诺 取餐码 A6"));
+
+        // Exact reported case: "卡布奇诺 取餐码 A633" -> removes "取餐码" and fits in 8.5 cells.
+        assertEquals("卡布奇诺 A633", WatchLiveTextFormatter.compactPickupLine("卡布奇诺 取餐码 A633"));
+        assertTrue(WatchLiveTextFormatter.halfCells("卡布奇诺 A633") <= 20);
+
+        // Long product name must be ellipsized while keeping pickup code A633 intact within 10.0 cells.
+        String longProduct = WatchLiveTextFormatter.compactPickupLine("超级大杯冰生椰拿铁少冰 取餐码 A633");
+        assertEquals("超级大杯… A633", longProduct);
+        assertTrue(WatchLiveTextFormatter.halfCells(longProduct) <= 20);
+        assertTrue(longProduct.endsWith("A633"));
+
+        // Combined capsuleTitle + " " + capsuleContent must also stay within 10.0 cells with code intact.
+        LiveWindowPayload longCap = new LiveWindowPayload(
+                LiveWindowPayload.SOURCE_UMS, "ums:1:cap", "com.tencent.mm",
+                "生椰拿铁大杯少冰无糖", "生椰拿铁大杯少冰无糖 取餐码 A633",
+                "生椰拿铁大杯少冰无糖", "取餐码 A633",
+                LiveWindowPayload.EVENT_PICK_UP, -1, LiveWindowPayload.OP_CREATE);
+        assertEquals("生椰拿铁…", longCap.capsuleTitle());
+        assertEquals("A633", longCap.capsuleContent());
+        assertTrue(WatchLiveTextFormatter.halfCells(longCap.capsuleTitle() + " " + longCap.capsuleContent()) <= 20);
+        assertEquals("生椰拿铁… A633", longCap.text());
+
+        // Very long code leaves no room for product name: drop product name, preserve code intact.
+        WatchLiveTextFormatter.Pair longCodePair = WatchLiveTextFormatter.compactPickupCapsule("卡布奇诺", "取餐码 ABCD12345");
+        assertEquals("", longCodePair.title());
+        assertEquals("ABCD12345", longCodePair.content());
     }
 
     @Test public void deterministicIdAndRedactedToString() {

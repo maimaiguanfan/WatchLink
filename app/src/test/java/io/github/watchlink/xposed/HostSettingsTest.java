@@ -163,14 +163,16 @@ public class HostSettingsTest {
         HostSettings settings = new HostSettings(remote, local);
         var clock = io.github.watchlink.alarm.probe.TargetProfile.CLOCK;
         assertFalse(settings.isTimerEnabled());
-        assertTrue(settings.isTimerLiveWindowEnabled());
+        assertFalse(settings.isTimerLiveWindowEnabled());
         assertFalse(settings.isTimerRestartEnabled());
         remote.edit().putBoolean(WatchLinkPrefs.KEY_TIMER_ENABLED, true)
+                .putBoolean(WatchLinkPrefs.KEY_TIMER_LIVE, true)
                 .putBoolean(WatchLinkPrefs.KEY_TIMER_RESTART, true).apply();
         assertTrue(settings.isEnabledFor(clock, true));
         assertFalse(settings.isEnabledFor(clock, false));
         assertFalse(settings.isEnabledFor(io.github.watchlink.alarm.probe.TargetProfile.CALENDAR, true));
         assertFalse(settings.isLiveWindowEnabled());
+        assertTrue(settings.isTimerLiveWindowEnabled());
         remote.edit().putBoolean(WatchLinkPrefs.KEY_TIMER_LIVE, false).apply();
         var fallback = new HostSettings(null, local);
         assertTrue(fallback.isTimerEnabled());
