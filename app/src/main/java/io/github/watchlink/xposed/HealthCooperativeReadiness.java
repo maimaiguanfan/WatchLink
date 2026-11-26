@@ -34,6 +34,12 @@ final class HealthCooperativeReadiness {
             return "LiveDeviceSnapshot(connected=" + connected + ", bit84=" + bit84 + ", bit219=" + bit219 + ")";
         }
     }
+
+    record ConnectedDevice(Object deviceInfo, String rawMac) {
+        @Override public String toString() {
+            return "ConnectedDevice(present=" + (deviceInfo != null && rawMac != null && !rawMac.isEmpty()) + ")";
+        }
+    }
     private final Method manager, connected, identify, expand;
     private final Object mainDevices;
 
@@ -85,6 +91,24 @@ final class HealthCooperativeReadiness {
             if (primary == null || primary.size() != 1) return null;
             String key = (String) identify.invoke(primary.get(0));
             return onlyRouteMatches(key) ? DeviceToken.of(key) : null;
+        } catch (Exception unavailable) {
+            return null;
+        }
+    }
+
+    /** Returns the connected primary wearable DeviceInfo and MAC for in-process Health command dispatch. */
+    ConnectedDevice connectedPrimaryDevice() {
+        try {
+            List<?> devices = connectedDevices(mainDevices);
+            if (devices == null || devices.isEmpty()) return null;
+            for (Object device : devices) {
+                if (device == null) continue;
+                String key = (String) identify.invoke(device);
+                if (key != null && !key.isEmpty()) {
+                    return new ConnectedDevice(device, key);
+                }
+            }
+            return null;
         } catch (Exception unavailable) {
             return null;
         }

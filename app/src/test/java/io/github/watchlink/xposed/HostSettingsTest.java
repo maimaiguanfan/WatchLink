@@ -180,4 +180,28 @@ public class HostSettingsTest {
         assertFalse(fallback.isTimerLiveWindowEnabled());
         assertFalse(fallback.isLiveWindowEnabled());
     }
+
+    @Test public void rawCommandDebugToggleDefaultsOffAndNotifiesChanges() {
+        MemoryPrefs remote = new MemoryPrefs();
+        MemoryPrefs local = new MemoryPrefs();
+        HostSettings settings = new HostSettings(remote, local);
+        AtomicInteger onCount = new AtomicInteger();
+        AtomicInteger offCount = new AtomicInteger();
+        settings.onRawCommandDebugChanged(on -> {
+            if (Boolean.TRUE.equals(on)) onCount.incrementAndGet();
+            else offCount.incrementAndGet();
+        });
+
+        assertFalse(settings.isRawCommandDebugEnabled());
+        assertTrue(settings.setLocalRawCommandDebugFallback(true));
+        assertTrue(settings.isRawCommandDebugEnabled());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, false).commit();
+        assertFalse(settings.isRawCommandDebugEnabled());
+        assertEquals(1, offCount.get());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, true).commit();
+        assertTrue(settings.isRawCommandDebugEnabled());
+        assertEquals(1, onCount.get());
+    }
 }

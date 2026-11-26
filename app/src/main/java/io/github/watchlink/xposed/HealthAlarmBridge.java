@@ -51,6 +51,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     private HealthCooperativeReadiness readiness;
     private HealthWifiBridge wifiBridge;
     private HealthLiveWindowBridge liveBridge;
+    private HealthRawCommandBridge rawCommandBridge;
     private BroadcastReceiver controlReceiver;
     private boolean registered;
     private volatile boolean installed;
@@ -134,6 +135,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         HealthLiveWindowBridge live = new HealthLiveWindowBridge(app, settings, worker, readiness);
         live.install(installer, symbols);
         liveBridge = live;
+
+        HealthRawCommandBridge raw = new HealthRawCommandBridge(app, settings, worker, sender, readiness);
+        raw.install(installer, symbols);
+        rawCommandBridge = raw;
         settings.onTimerChanged(() -> worker.execute(() -> {
             if (!settings.isTimerEnabled()) cancelActiveDailyFor(TargetProfile.CLOCK, true);
             if (!settings.isTimerEnabled() || !settings.isTimerLiveWindowEnabled()) live.closeGroupLocked(true);
@@ -216,16 +221,20 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     boolean hasActiveSession() {
         HealthWifiBridge wifi = wifiBridge;
         HealthLiveWindowBridge live = liveBridge;
+        HealthRawCommandBridge raw = rawCommandBridge;
         return anySessionArmed()
                 || (wifi != null && wifi.isBusy())
-                || (live != null && live.isBusy());
+                || (live != null && live.isBusy())
+                || (raw != null && raw.isCapturing());
     }
 
     private boolean anySessionArmed() {
         HealthWifiBridge wifi = wifiBridge;
+        HealthRawCommandBridge raw = rawCommandBridge;
         return daily.active(System.currentTimeMillis(), SystemClock.elapsedRealtime())
                 || activeTest != null
-                || (wifi != null && wifi.isAwaitingAck());
+                || (wifi != null && wifi.isAwaitingAck())
+                || (raw != null && raw.isCapturing());
     }
 
     void close() {
@@ -234,6 +243,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         settings.onTimerChanged(null);
         settings.onCalendarDisabled(null);
         daily.stop();
+        if (rawCommandBridge != null) {
+            try { rawCommandBridge.close(); } catch (RuntimeException ignored) {}
+            rawCommandBridge = null;
+        }
         if (liveBridge != null) {
             try { liveBridge.close(); } catch (RuntimeException ignored) {}
             liveBridge = null;
@@ -443,6 +456,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     }
 
     private synchronized void observeSdk(boolean received, String device, byte[] frame) {
+        HealthRawCommandBridge raw = rawCommandBridge;
+        if (raw != null) {
+            raw.observeSdkFrame(received, frame);
+        }
         HealthWifiBridge wifi = wifiBridge;
         if (wifi != null) {
             wifi.observeSdkFrame(received, frame);
@@ -599,6 +616,14 @@ final class HealthAlarmBridge extends BroadcastReceiver {
             case HealthHostControl.CANCEL_LIVE_WINDOW -> {
                 if (liveBridge != null) liveBridge.cancelLiveTest();
             }
+            case HealthHostControl.ENABLE_RAW_DEBUG -> {
+                settings.setLocalRawCommandDebugFallback(true);
+                if (rawCommandBridge != null) rawCommandBridge.onSettingsFallbackChanged(true);
+            }
+            case HealthHostControl.DISABLE_RAW_DEBUG -> {
+                settings.setLocalRawCommandDebugFallback(false);
+                if (rawCommandBridge != null) rawCommandBridge.onSettingsFallbackChanged(false);
+            }
             case HealthHostControl.TEST -> startManualTestLocked();
             case HealthHostControl.CANCEL_TEST -> cancelTestLocked(true);
             default -> {}
@@ -637,7 +662,8 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 live.lastResult(),
                 live.lastSource(),
                 live.dispatchMode(),
-                live.testState());
+                live.testState(),
+                settings.isRawCommandDebugEnabled());
     }
 
     private void startManualTestLocked() {

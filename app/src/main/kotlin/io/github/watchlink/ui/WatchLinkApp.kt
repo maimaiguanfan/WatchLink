@@ -72,6 +72,7 @@ internal data class WatchLinkUiState(
     val calendarSaving: Boolean = false,
     val liveWindowSaving: Boolean = false,
     val wifiAutoSaving: Boolean = false,
+    val rawCommandDebugSaving: Boolean = false,
     val wifiSyncingCurrent: Boolean = false,
     val wifiBulk: WifiBulkUiState = WifiBulkUiState(),
     val reloading: Boolean = false,
@@ -125,6 +126,15 @@ internal data class WatchLinkUiState(
         get() = !wifiAutoSaving && (scope?.remotePrefsSupported() == true
                 || healthHost?.reachable() == true)
 
+    val effectiveRawCommandDebugEnabled: Boolean
+        get() = scope?.remoteRawCommandDebugEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.rawCommandDebugEnabled()
+            ?: false
+
+    val canToggleRawCommandDebug: Boolean
+        get() = !rawCommandDebugSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
     val enabledFeatureCount: Int
         get() = listOf(
             effectiveEnabled,
@@ -153,6 +163,7 @@ internal fun WatchLinkApp(
     onTimerOption: (String, Boolean) -> Unit,
     onLiveWindowEnable: (Boolean) -> Unit,
     onWifiAutoEnable: (Boolean) -> Unit,
+    onRawCommandDebugEnable: (Boolean) -> Unit,
     onDismissMessage: () -> Unit,
     onClock: () -> Unit,
     onCalendar: () -> Unit,
@@ -246,7 +257,7 @@ internal fun WatchLinkApp(
                             setupActions(state, onHotReload, onRequestScope, onClock, onHealth, onRefresh, onHealthDownload)
                             diagnosticsPage(
                                 state, onStartTest, onCancelTest, onStartLiveTest, onCancelLiveTest,
-                                onHotReload, onRefresh, onShare,
+                                onRawCommandDebugEnable, onHotReload, onRefresh, onShare,
                             )
                         }
                         Page.GUIDE -> guidePage(onCoolapk)
@@ -735,6 +746,7 @@ private fun LazyListScope.diagnosticsPage(
     onCancelTest: () -> Unit,
     onStartLiveTest: () -> Unit,
     onCancelLiveTest: () -> Unit,
+    onRawCommandDebugEnable: (Boolean) -> Unit,
     onHotReload: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onShare: () -> Unit,
@@ -874,6 +886,20 @@ private fun LazyListScope.diagnosticsPage(
             BasicComponent(title = "实况窗通道", summary = liveDiagnosticsText(health))
             HorizontalDivider()
             BasicComponent(title = "Wi-Fi 通道", summary = wifiDiagnosticsText(health))
+        }
+    }
+
+    item("debug-raw-title") { SectionTitle("高级调试") }
+    item("debug-raw-card") {
+        Card(Modifier.fillMaxWidth()) {
+            SwitchRow(
+                title = "自定义指令调试",
+                summary = "高风险：允许通过 ADB 广播命令直接向手表发送底层蓝牙指令（如 5.49.5、5.1.12 或 WearEngine 事件）。错误或危险指令（如 5.1.13 恢复出厂）可能导致手表异常、配置损坏或重启，仅限开发者协议调试使用。\n" +
+                    "默认关闭且不监听任何调试命令；开启后仍需通过命令行发送（Action：${BuildConfig.APPLICATION_ID}.debug.SEND_RAW_COMMAND）。",
+                checked = state.effectiveRawCommandDebugEnabled,
+                enabled = state.canToggleRawCommandDebug,
+                onCheckedChange = onRawCommandDebugEnable,
+            )
         }
     }
 

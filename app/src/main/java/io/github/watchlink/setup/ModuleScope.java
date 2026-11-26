@@ -73,7 +73,33 @@ public final class ModuleScope {
                        boolean requestPending, String requestResult,
                        boolean remotePrefsSupported,
                        Boolean remoteEnabled, Boolean remoteCalendarEnabled,
-                       Boolean remoteWifiAutoSyncEnabled, Boolean remoteLiveWindowEnabled, TimerOptions timerOptions) {
+                       Boolean remoteWifiAutoSyncEnabled, Boolean remoteLiveWindowEnabled,
+                       TimerOptions timerOptions, Boolean remoteRawCommandDebugEnabled) {
+        public View(boolean frameworkConnected,
+                       String frameworkName,
+                       String frameworkVersion,
+                       int frameworkApiVersion,
+                       boolean clockGranted, boolean healthGranted, boolean calendarGranted,
+                       boolean wirelessGranted, boolean umsGranted,
+                       boolean clockActive, boolean healthActive, boolean calendarActive,
+                       boolean wirelessActive, boolean umsActive,
+                       TargetRuntime clockRuntime, TargetRuntime healthRuntime,
+                       TargetRuntime calendarRuntime, TargetRuntime wirelessRuntime,
+                       TargetRuntime umsRuntime, TargetRuntime daemonRuntime,
+                       boolean checking,
+                       boolean requestPending, String requestResult,
+                       boolean remotePrefsSupported,
+                       Boolean remoteEnabled, Boolean remoteCalendarEnabled,
+                       Boolean remoteWifiAutoSyncEnabled, Boolean remoteLiveWindowEnabled,
+                       TimerOptions timerOptions) {
+            this(frameworkConnected, frameworkName, frameworkVersion, frameworkApiVersion, clockGranted,
+                    healthGranted, calendarGranted, wirelessGranted, umsGranted, clockActive, healthActive,
+                    calendarActive, wirelessActive, umsActive, clockRuntime, healthRuntime, calendarRuntime,
+                    wirelessRuntime, umsRuntime, daemonRuntime, checking, requestPending, requestResult,
+                    remotePrefsSupported, remoteEnabled, remoteCalendarEnabled, remoteWifiAutoSyncEnabled,
+                    remoteLiveWindowEnabled, timerOptions, null);
+        }
+
         public View(boolean frameworkConnected,
                        String frameworkName,
                        String frameworkVersion,
@@ -95,7 +121,7 @@ public final class ModuleScope {
                     calendarActive, wirelessActive, umsActive, clockRuntime, healthRuntime, calendarRuntime,
                     wirelessRuntime, umsRuntime, daemonRuntime, checking, requestPending, requestResult,
                     remotePrefsSupported, remoteEnabled, remoteCalendarEnabled, remoteWifiAutoSyncEnabled,
-                    remoteLiveWindowEnabled, null);
+                    remoteLiveWindowEnabled, null, null);
         }
 
 
@@ -214,6 +240,7 @@ public final class ModuleScope {
     private static Boolean remoteCalendarEnabled;
     private static Boolean remoteWifiAutoSyncEnabled;
     private static Boolean remoteLiveWindowEnabled;
+    private static Boolean remoteRawCommandDebugEnabled;
     private static TargetRuntime clockRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime healthRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime calendarRuntime = TargetRuntime.UNSUPPORTED;
@@ -291,6 +318,11 @@ public final class ModuleScope {
         writeRemoteBoolean(WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED, enabled, callback);
     }
 
+    /** Persists the opt-in ADB raw watch command debug toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteRawCommandDebugEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, enabled, callback);
+    }
+
     public static void writeTimerOption(String key, boolean enabled, Consumer<Boolean> callback) {
         if (!WatchLinkPrefs.timerKey(key)) throw new IllegalArgumentException("Unknown timer setting");
         writeRemoteBoolean(key, enabled, callback);
@@ -315,6 +347,7 @@ public final class ModuleScope {
                         else if (WatchLinkPrefs.KEY_CALENDAR_ENABLED.equals(key)) remoteCalendarEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED.equals(key)) remoteWifiAutoSyncEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED.equals(key)) remoteLiveWindowEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG.equals(key)) remoteRawCommandDebugEnabled = enabled;
                         ProbeLog.info("REMOTE_PREFS_SAVED");
                         publish();
                     }
@@ -523,6 +556,7 @@ public final class ModuleScope {
         remoteCalendarEnabled = null;
         remoteWifiAutoSyncEnabled = null;
         remoteLiveWindowEnabled = null;
+        remoteRawCommandDebugEnabled = null;
         clockRuntime = TargetRuntime.UNSUPPORTED;
         healthRuntime = TargetRuntime.UNSUPPORTED;
         calendarRuntime = TargetRuntime.UNSUPPORTED;
@@ -558,6 +592,7 @@ public final class ModuleScope {
         remoteCalendarEnabled = null;
         remoteWifiAutoSyncEnabled = null;
         remoteLiveWindowEnabled = null;
+        remoteRawCommandDebugEnabled = null;
         runningTargets.clear();
         daemonTarget = null;
         XposedService service = framework;
@@ -595,6 +630,8 @@ public final class ModuleScope {
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED, false) : null;
                 remoteLiveWindowEnabled = prefs.contains(WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED, false) : null;
+                remoteRawCommandDebugEnabled = prefs.contains(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, false) : null;
             } catch (RuntimeException error) {
                 ProbeLog.failure("REMOTE_PREFS_READ_FAILED", error);
             }
@@ -715,7 +752,7 @@ public final class ModuleScope {
                 probe != null,
                 !awaiting.isEmpty(), result,
                 remotePrefsSupported, remoteEnabled, remoteCalendarEnabled,
-                remoteWifiAutoSyncEnabled, remoteLiveWindowEnabled, timerOptions);
+                remoteWifiAutoSyncEnabled, remoteLiveWindowEnabled, timerOptions, remoteRawCommandDebugEnabled);
     }
 
     private ModuleScope() {}

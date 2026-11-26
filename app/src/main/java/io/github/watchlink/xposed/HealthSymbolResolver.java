@@ -27,9 +27,10 @@ import java.util.zip.ZipFile;
  * structurally by interfaces, superclass, and log markers ONCE and caches by APK fingerprint.
  */
 final class HealthSymbolResolver {
-    static final String SCHEMA = "health-v3";
+    static final String SCHEMA = "health-v4";
     private static final String D_PLUGIN_PROXY = "Lcom/huawei/haf/bundle/AppBundlePluginProxy;";
     private static final String D_DEVICE_MGR_API = "Lcom/huawei/health/devicemgr/api/DeviceMgrApi;";
+    private static final String D_SAMPLE_CMD_API = "Lcom/huawei/health/devicemgr/api/outofprocess/SendSampleCommandApi;";
     private static final String D_UNITE_CHANNEL = "Lcom/huawei/unitedevice/api/UniteChannelInterface;";
     private static final String D_ENGINE_CHANNEL = "Lcom/huawei/unitedevice/api/EngineChannelInterface;";
     private static final String D_MSG_CALLBACK = "Lcom/huawei/devicesdk/callback/MessageReceiveCallback;";
@@ -48,17 +49,24 @@ final class HealthSymbolResolver {
             String deviceMgrFactoryClass,
             String wifiSyncMgrClass,
             String liveNotifyMgrClass,
+            String sampleCommandApiClass,
             String source) {
+
+        Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
+                String deviceMgrFactoryClass, String wifiSyncMgrClass, String liveNotifyMgrClass, String source) {
+            this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
+                    wifiSyncMgrClass, liveNotifyMgrClass, "", source);
+        }
 
         Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
                 String deviceMgrFactoryClass, String wifiSyncMgrClass, String source) {
             this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
-                    wifiSyncMgrClass, "", source);
+                    wifiSyncMgrClass, "", "", source);
         }
 
         Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
                 String deviceMgrFactoryClass, String source) {
-            this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass, "", "", source);
+            this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass, "", "", "", source);
         }
 
         boolean completeSdk() {
@@ -73,6 +81,7 @@ final class HealthSymbolResolver {
             map.put("deviceMgrFactoryClass", empty(deviceMgrFactoryClass));
             map.put("wifiSyncMgrClass", empty(wifiSyncMgrClass));
             map.put("liveNotifyMgrClass", empty(liveNotifyMgrClass));
+            map.put("sampleCommandApiClass", empty(sampleCommandApiClass));
             return map;
         }
 
@@ -84,9 +93,10 @@ final class HealthSymbolResolver {
             String mgr = map.getOrDefault("deviceMgrFactoryClass", "");
             String wifi = map.getOrDefault("wifiSyncMgrClass", "");
             String live = map.getOrDefault("liveNotifyMgrClass", "");
+            String sampleCmd = map.getOrDefault("sampleCommandApiClass", "");
             if (catalog.isEmpty() && send.isEmpty() && recv.isEmpty()
-                    && mgr.isEmpty() && wifi.isEmpty() && live.isEmpty()) return null;
-            return new Symbols(catalog, send, recv, mgr, wifi, live, "CACHE");
+                    && mgr.isEmpty() && wifi.isEmpty() && live.isEmpty() && sampleCmd.isEmpty()) return null;
+            return new Symbols(catalog, send, recv, mgr, wifi, live, sampleCmd, "CACHE");
         }
 
         private static boolean notEmpty(String s) { return s != null && !s.isEmpty(); }
@@ -101,7 +111,8 @@ final class HealthSymbolResolver {
         }
         Symbols fast = Build.VERSION.SDK_INT >= 34 ? tryFastPath(installer) : null;
         if (fast != null && fast.completeSdk() && !fast.deviceMgrFactoryClass().isEmpty()
-                && !fast.wifiSyncMgrClass().isEmpty() && !fast.liveNotifyMgrClass().isEmpty()) {
+                && !fast.wifiSyncMgrClass().isEmpty() && !fast.liveNotifyMgrClass().isEmpty()
+                && !fast.sampleCommandApiClass().isEmpty()) {
             if (cache != null) cache.write(fp, fast.toMap());
             return fast;
         }
@@ -147,7 +158,18 @@ final class HealthSymbolResolver {
             if (oca != null && dataCb != null && dataCb.isAssignableFrom(oca) && hasLiveNotifyShape(oca)) {
                 liveMgr = oca.getName();
             }
-            return new Symbols(catalog.getName(), send.getName(), recv.getName(), mgr, wifiMgr, liveMgr, "FAST_PATH");
+            String sampleCmd = "";
+            Class<?> sampleApi = opt(installer, "com.huawei.health.devicemgr.api.outofprocess.SendSampleCommandApi");
+            if (sampleApi != null) {
+                try {
+                    Class<?> found = HealthReminderCatalog.factory(proxy, sampleApi,
+                            opt(installer, "eqe"), opt(installer, "eqk")).getDeclaringClass();
+                    sampleCmd = found.getName();
+                } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+                    sampleCmd = "";
+                }
+            }
+            return new Symbols(catalog.getName(), send.getName(), recv.getName(), mgr, wifiMgr, liveMgr, sampleCmd, "FAST_PATH");
         } catch (ReflectiveOperationException | RuntimeException | LinkageError miss) {
             return null;
         }
@@ -190,6 +212,7 @@ final class HealthSymbolResolver {
         Set<String> mgrFactories = new HashSet<>();
         Set<String> wifiSyncMgrs = new HashSet<>();
         Set<String> liveNotifyMgrs = new HashSet<>();
+        Set<String> sampleCmdApis = new HashSet<>();
         try {
             for (String source : sources) {
                 if (source == null) continue;
@@ -202,7 +225,7 @@ final class HealthSymbolResolver {
                             DexBackedDexFile dex = DexBackedDexFile.fromInputStream(null, in);
                             for (ClassDef type : dex.getClasses()) {
                                 inspectClass(type, catalogs, sendFacades, recvCallbacks,
-                                        mgrFactories, wifiSyncMgrs, liveNotifyMgrs);
+                                        mgrFactories, wifiSyncMgrs, liveNotifyMgrs, sampleCmdApis);
                             }
                         }
                     }
@@ -218,16 +241,21 @@ final class HealthSymbolResolver {
                 unique(mgrFactories),
                 unique(wifiSyncMgrs),
                 unique(liveNotifyMgrs),
+                unique(sampleCmdApis),
                 "DEX_SCAN");
     }
 
     private static void inspectClass(ClassDef type, Set<String> catalogs, Set<String> sendFacades,
                                      Set<String> recvCallbacks, Set<String> mgrFactories,
-                                     Set<String> wifiSyncMgrs, Set<String> liveNotifyMgrs) {
+                                     Set<String> wifiSyncMgrs, Set<String> liveNotifyMgrs,
+                                     Set<String> sampleCmdApis) {
         String desc = type.getType();
         List<String> ifaces = type.getInterfaces();
         if (D_PLUGIN_PROXY.equals(type.getSuperclass()) && ifaces.contains(D_DEVICE_MGR_API)) {
             catalogs.add(toClassName(desc));
+        }
+        if (D_PLUGIN_PROXY.equals(type.getSuperclass()) && ifaces.contains(D_SAMPLE_CMD_API)) {
+            sampleCmdApis.add(toClassName(desc));
         }
         if (!AccessFlags.ABSTRACT.isSet(type.getAccessFlags())
                 && ifaces.contains(D_UNITE_CHANNEL) && ifaces.contains(D_ENGINE_CHANNEL)

@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
                 onTimerOption = ::setTimerOption,
                 onLiveWindowEnable = ::setLiveWindowEnabled,
                 onWifiAutoEnable = ::setWifiAutoEnabled,
+                onRawCommandDebugEnable = ::setRawCommandDebugEnabled,
                 onDismissMessage = { ui = ui.copy(message = null) },
                 onClock = { open(Intent(AlarmClock.ACTION_SHOW_ALARMS).setPackage(TargetProfile.CLOCK.packageName)) },
                 onCalendar = { open(packageManager.getLaunchIntentForPackage(TargetProfile.CALENDAR.packageName)) },
@@ -165,6 +166,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private suspend fun writeRemoteRawCommandDebugEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteRawCommandDebugEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
     private suspend fun syncOneWifi(record: WifiNetworkRecord, force: Boolean): WifiSyncWire.SyncResult =
         suspendCancellableCoroutine { continuation ->
             WifiSyncWire.sendSyncOne(applicationContext, record, force) { result ->
@@ -180,7 +188,7 @@ class MainActivity : ComponentActivity() {
         }
 
     private suspend fun queryHosts() {
-        if (ui.saving || ui.calendarSaving || ui.wifiAutoSaving || ui.liveWindowSaving) return
+        if (ui.saving || ui.calendarSaving || ui.wifiAutoSaving || ui.liveWindowSaving || ui.rawCommandDebugSaving) return
         val revision = ++switchRevision
         val (clockReply, calendarReply, healthReply) = coroutineScope {
             val clockJob = async { clockCommand(ClockHostControl.QUERY) }
@@ -298,6 +306,26 @@ class MainActivity : ComponentActivity() {
                         "已开启实况窗同步（支持 Android 实况通知）。如需同步小程序取餐码、美团/饿了么等 ColorOS 流体云，请点击下方「申请智慧服务作用域」。"
                     else -> null
                 },
+            )
+            readChecks()
+        }
+    }
+
+    private fun setRawCommandDebugEnabled(enable: Boolean) {
+        if (ui.rawCommandDebugSaving) return
+        ++switchRevision
+        ui = ui.copy(rawCommandDebugSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteRawCommandDebugEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_RAW_DEBUG else HealthHostControl.DISABLE_RAW_DEBUG
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.rawCommandDebugEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                rawCommandDebugSaving = false,
+                message = if (!saved) "未能保存自定义指令调试开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
             )
             readChecks()
         }

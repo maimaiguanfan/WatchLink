@@ -31,6 +31,7 @@ public final class HealthHostControl {
             SYNC_CURRENT_WIFI = "SYNC_CURRENT_WIFI",
             ENABLE_LIVE_WINDOW = "ENABLE_LIVE_WINDOW", DISABLE_LIVE_WINDOW = "DISABLE_LIVE_WINDOW",
             TEST_LIVE_WINDOW = "TEST_LIVE_WINDOW", CANCEL_LIVE_WINDOW = "CANCEL_LIVE_WINDOW",
+            ENABLE_RAW_DEBUG = "ENABLE_RAW_DEBUG", DISABLE_RAW_DEBUG = "DISABLE_RAW_DEBUG",
             TEST = "TEST", CANCEL_TEST = "CANCEL_TEST";
     private static final String ACTION = BuildConfig.APPLICATION_ID + ".cooperative.HEALTH_CONTROL_V1";
     private static final int ACK = 1;
@@ -72,7 +73,24 @@ public final class HealthHostControl {
                         boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
                         int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
                         boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
-                        String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState) {
+                        String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                        boolean rawCommandDebugEnabled) {
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, false);
+        }
+
         public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
                      boolean serviceWitness, boolean sdkObserver, String symbolSource,
                      String watchState, String lastDispatchMode, String lastActionSource,
@@ -83,7 +101,7 @@ public final class HealthHostControl {
                     watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
                     wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
                     wifiLastSource, wifiLastAt,
-                    false, "UNKNOWN", 0, "NONE", "NONE", "NONE", "IDLE");
+                    false, "UNKNOWN", 0, "NONE", "NONE", "NONE", "IDLE", false);
         }
 
         public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
@@ -93,7 +111,7 @@ public final class HealthHostControl {
             this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
                     watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
                     false, "UNKNOWN", false, 0, "NONE", "NONE", 0L,
-                    false, "UNKNOWN", 0, "NONE", "NONE", "NONE", "IDLE");
+                    false, "UNKNOWN", 0, "NONE", "NONE", "NONE", "IDLE", false);
         }
 
         public Reply(boolean reachable, boolean enabled, boolean remotePrefs,
@@ -103,7 +121,7 @@ public final class HealthHostControl {
             this(reachable, enabled, false, remotePrefs, serviceWitness, sdkObserver, symbolSource,
                     watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
                     false, "UNKNOWN", false, 0, "NONE", "NONE", 0L,
-                    false, "UNKNOWN", 0, "NONE", "NONE", "NONE", "IDLE");
+                    false, "UNKNOWN", 0, "NONE", "NONE", "NONE", "IDLE", false);
         }
 
         public Reply {
@@ -133,6 +151,7 @@ public final class HealthHostControl {
             liveLastSource = pick(reachable, LIVE_SOURCES, liveLastSource, "NONE");
             liveDispatchMode = pick(reachable, DISPATCH_MODES, liveDispatchMode, "NONE");
             liveTestState = pick(reachable, LIVE_TEST_STATES, liveTestState, "IDLE");
+            rawCommandDebugEnabled = reachable && rawCommandDebugEnabled;
         }
 
         private static String pick(boolean reachable, Set<String> allowed, String value, String fallback) {
@@ -149,6 +168,7 @@ public final class HealthHostControl {
                 || SYNC_CURRENT_WIFI.equals(value)
                 || ENABLE_LIVE_WINDOW.equals(value) || DISABLE_LIVE_WINDOW.equals(value)
                 || TEST_LIVE_WINDOW.equals(value) || CANCEL_LIVE_WINDOW.equals(value)
+                || ENABLE_RAW_DEBUG.equals(value) || DISABLE_RAW_DEBUG.equals(value)
                 || TEST.equals(value) || CANCEL_TEST.equals(value);
     }
 
@@ -208,6 +228,7 @@ public final class HealthHostControl {
                             details.putString("liveLastSource", reply.liveLastSource());
                             details.putString("liveDispatchMode", reply.liveDispatchMode());
                             details.putString("liveTestState", reply.liveTestState());
+                            details.putBoolean("rawCommandDebugEnabled", reply.rawCommandDebugEnabled());
                             pending.setResult(ACK, null, details);
                         } catch (RuntimeException e) {
                             ProbeLog.failure("HEALTH_HOST_CONTROL_FAILED", e);
@@ -280,7 +301,8 @@ public final class HealthHostControl {
                                         data.getString("liveLastResult"),
                                         data.getString("liveLastSource"),
                                         data.getString("liveDispatchMode"),
-                                        data.getString("liveTestState")));
+                                        data.getString("liveTestState"),
+                                        data.getBoolean("rawCommandDebugEnabled", false)));
                             } else callback.accept(unavailable());
                         }
                     }, main, 0, null, null);
