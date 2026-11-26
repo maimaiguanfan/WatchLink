@@ -25,6 +25,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RequiresApi(34)
 final class CalendarLiveBridge implements CalendarDailyAlarms.ActionExecutor {
     private static final String LOCK_SCREEN_FINISH_ACTION = "action_finish_alert_lock_screen";
+    private static final String NOTIFICATION_INFO_INTERFACE = "com.android.calendar.alerts.INotificationInfo";
+    private static final String TASK_NOTIFICATION_INFO_CLASS = "com.android.calendar.alerts.TaskNotificationInfo";
+    private static final String TODO_FALLBACK_TITLE = "待办提醒";
     private static final long VERIFY_TIMEOUT_MS = 2_500L;
 
     private final Context app;
@@ -180,11 +183,17 @@ final class CalendarLiveBridge implements CalendarDailyAlarms.ActionExecutor {
                 Object rawId = targetIdGetter.invoke(bean);
                 if (rawId instanceof Long l) targetId = l;
             } catch (Exception ignored) {}
+            boolean isTodo = isTaskNotificationListener(listenerObj);
+            if (isTodo && (title == null || title.trim().isEmpty())) {
+                title = TODO_FALLBACK_TITLE;
+            }
             long wall = System.currentTimeMillis();
             long elapsed = SystemClock.elapsedRealtime();
             activeListener = new WeakReference<>(listenerObj);
             alertActive = true;
-            String key = targetId + "@" + (wall / 5_000L);
+            String kind = isTodo ? "TODO" : "EVENT";
+            String key = kind + ":" + targetId + "@" + (wall / 5_000L);
+            ProbeLog.info("CALENDAR_FORCE_SHOW kind=" + kind);
             CalendarDailyAlarms d = daily;
             if (d != null) d.onRingStart(key, title, wall, elapsed);
         });
@@ -377,6 +386,31 @@ final class CalendarLiveBridge implements CalendarDailyAlarms.ActionExecutor {
     private void reportAction(String run, String action, String status) {
         CalendarDailyAlarms d = daily;
         if (d != null) d.actionResult(run, action, status);
+    }
+
+    /**
+     * Structurally inspects the unobfuscated INotificationInfo field on ForceAlertService's listener
+     * to distinguish ColorOS Calendar To-Do strong reminders (TaskNotificationInfo) from events so
+     * their independent database IDs can never collide in ring deduplication.
+     */
+    static boolean isTaskNotificationListener(Object listenerObj) {
+        if (listenerObj == null) return false;
+        try {
+            for (Field field : listenerObj.getClass().getDeclaredFields()) {
+                Class<?> fieldType = field.getType();
+                if (NOTIFICATION_INFO_INTERFACE.equals(fieldType.getName())
+                        || TASK_NOTIFICATION_INFO_CLASS.equals(fieldType.getName())) {
+                    field.setAccessible(true);
+                    Object info = field.get(listenerObj);
+                    if (info != null && TASK_NOTIFICATION_INFO_CLASS.equals(info.getClass().getName())) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            return false;
+        }
+        return false;
     }
 
     void close() {

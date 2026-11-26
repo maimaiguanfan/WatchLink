@@ -226,4 +226,107 @@ public class PantanalFluidParserTest {
         assertEquals(LiveWindowPayload.OP_CLOSE, expired.get(0).operation());
         assertEquals(0, tracker.activeCount());
     }
+
+    @Test public void parsesFlightTrainExpressParcelMovieAndGameFlashbackWithinTenCells() {
+        // Flight
+        LiveWindowPayload flight = PantanalFluidParser.parseDecisionRow(
+                268452100L, "fl-1", "com.oplus.sceneservice", "TRAVEL", "flight",
+                "{\"flightNo\":\"CA1234\",\"boardingGate\":\"B12\",\"statusText\":\"正在登机\"}", "");
+        assertNotNull(flight);
+        assertFalse(flight.isGameFlashback());
+        assertEquals(LiveWindowPayload.EVENT_TAXI, flight.eventType());
+        assertEquals("CA1234 B12", flight.text());
+        assertTrue(WatchLiveTextFormatter.halfCells(flight.text()) <= WatchLiveTextFormatter.MAX_WATCH_HALF_CELLS);
+
+        // Train
+        LiveWindowPayload train = PantanalFluidParser.parseDecisionRow(
+                268452101L, "tr-1", "com.oplus.sceneservice", "TRAVEL", "train",
+                "{\"trainNo\":\"G123\",\"checkPort\":\"5B\",\"statusText\":\"开始检票\"}", "");
+        assertNotNull(train);
+        assertEquals(LiveWindowPayload.EVENT_TAXI, train.eventType());
+        assertEquals("G123 5B", train.text());
+        assertTrue(WatchLiveTextFormatter.halfCells(train.text()) <= WatchLiveTextFormatter.MAX_WATCH_HALF_CELLS);
+
+        // Express delivery in transit
+        LiveWindowPayload express = PantanalFluidParser.parseDecisionRow(
+                268452102L, "ex-1", "com.oplus.sceneservice", "LIFE", "express",
+                "{\"fluidTitle\":\"顺丰快递派送中\",\"fluidContent\":\"快递员正在派件，预计30分钟送达\",\"capsuleTitle\":\"顺丰\",\"capsuleContent\":\"派件中\"}", "");
+        assertNotNull(express);
+        assertEquals(LiveWindowPayload.EVENT_DELIVERY, express.eventType());
+
+        // Parcel pickup code strips boilerplate and protects code 1-2-3456
+        LiveWindowPayload parcel = PantanalFluidParser.parseDecisionRow(
+                268452103L, "pc-1", "com.oplus.sceneservice", "LIFE", "parcel_pickup",
+                "{\"appName\":\"菜鸟驿站\",\"parcelCode\":\"1-2-3456\"}", "");
+        assertNotNull(parcel);
+        assertEquals(LiveWindowPayload.EVENT_PICK_UP, parcel.eventType());
+        assertEquals("1-2-3456", parcel.capsuleContent());
+        assertFalse(parcel.text().contains("取件码"));
+        assertTrue(WatchLiveTextFormatter.halfCells(parcel.text()) <= WatchLiveTextFormatter.MAX_WATCH_HALF_CELLS);
+
+        // Movie ticket
+        LiveWindowPayload movie = PantanalFluidParser.parseDecisionRow(
+                268452104L, "mv-1", "com.oplus.sceneservice", "LIFE", "movie",
+                "{\"movieName\":\"流浪地球3\",\"ticketCode\":\"842190\"}", "");
+        assertNotNull(movie);
+        assertEquals(LiveWindowPayload.EVENT_PICK_UP, movie.eventType());
+        assertEquals("842190", movie.capsuleContent());
+        assertTrue(WatchLiveTextFormatter.halfCells(movie.text()) <= WatchLiveTextFormatter.MAX_WATCH_HALF_CELLS);
+
+        // Game Flashback via UMS Push
+        LiveWindowPayload gameUms = PantanalFluidParser.parsePushData(
+                50001, 9, "game_flashback", "game_revive_card", "gamespace",
+                "{\"launchPackage\":\"com.tencent.tmgp.sgame\",\"extra_title\":\"王者荣耀\",\"extra_content\":\"复活倒计时 28秒\"}",
+                "com.oplus.games", "");
+        assertNotNull(gameUms);
+        assertTrue(gameUms.isGameFlashback());
+        assertEquals(LiveWindowPayload.EVENT_QUEUE, gameUms.eventType());
+        assertEquals("复活 28秒", gameUms.text());
+        assertEquals("28秒", gameUms.capsuleContent());
+
+        // Game Flashback via Channel A ongoing game assistant notification
+        LiveWindowPayload gameDaemon = PantanalFluidParser.parsePromotedNotification(
+                "0|com.oplus.games|8|fb|0", "com.oplus.games", "游戏助手",
+                0x2, false, null, null,
+                "和平精英", "起飞倒计时 15秒", "", "", "", -1, 0, false);
+        assertNotNull(gameDaemon);
+        assertTrue(gameDaemon.isGameFlashback());
+        assertEquals(LiveWindowPayload.EVENT_QUEUE, gameDaemon.eventType());
+        assertEquals("起飞 15秒", gameDaemon.text());
+    }
+
+    @Test public void trackerSeparatesGameFlashbackFromRegularLiveWindowsAndAllowsOneSecondTicks() {
+        LiveWindowTracker tracker = new LiveWindowTracker();
+        LiveWindowPayload regular = new LiveWindowPayload(
+                LiveWindowPayload.SOURCE_UMS, "ums:1:r", "com.sankuai.meituan",
+                "配送中", "预计10分钟", "美团", "10分钟",
+                LiveWindowPayload.EVENT_DELIVERY, 30, LiveWindowPayload.OP_CREATE);
+        LiveWindowPayload game1 = new LiveWindowPayload(
+                LiveWindowPayload.SOURCE_UMS, LiveWindowPayload.GAME_FLASHBACK_KEY_PREFIX + "ums:g", "com.tencent.tmgp.sgame",
+                "复活 10秒", "复活 10秒", "复活", "10秒",
+                LiveWindowPayload.EVENT_QUEUE, -1, LiveWindowPayload.OP_CREATE);
+        LiveWindowPayload game2 = new LiveWindowPayload(
+                LiveWindowPayload.SOURCE_UMS, LiveWindowPayload.GAME_FLASHBACK_KEY_PREFIX + "ums:g", "com.tencent.tmgp.sgame",
+                "复活 10秒", "复活 9秒", "复活", "9秒",
+                LiveWindowPayload.EVENT_QUEUE, -1, LiveWindowPayload.OP_CREATE);
+
+        assertNotNull(tracker.onUpsert(regular, 1_000L));
+        assertNotNull(tracker.onUpsert(game1, 1_000L));
+        // 1-second countdown update passes game throttle (900ms) even with same title.
+        LiveWindowPayload tick = tracker.onUpsert(game2, 2_000L);
+        assertNotNull(tick);
+        assertEquals(LiveWindowPayload.OP_UPDATE, tick.operation());
+
+        // Closing regular live windows leaves game flashback active.
+        List<LiveWindowPayload> closedRegular = tracker.closeSourceGroup(false);
+        assertEquals(1, closedRegular.size());
+        assertFalse(closedRegular.get(0).isGameFlashback());
+        assertEquals(1, tracker.activeCount());
+
+        // Closing game flashback closes only the game card.
+        List<LiveWindowPayload> closedGame = tracker.closeGameFlashback();
+        assertEquals(1, closedGame.size());
+        assertTrue(closedGame.get(0).isGameFlashback());
+        assertEquals(0, tracker.activeCount());
+    }
 }

@@ -71,6 +71,7 @@ internal data class WatchLinkUiState(
     val timerSaving: Boolean = false,
     val calendarSaving: Boolean = false,
     val liveWindowSaving: Boolean = false,
+    val gameFlashbackSaving: Boolean = false,
     val wifiAutoSaving: Boolean = false,
     val rawCommandDebugSaving: Boolean = false,
     val wifiSyncingCurrent: Boolean = false,
@@ -117,6 +118,20 @@ internal data class WatchLinkUiState(
         get() = !liveWindowSaving && (scope?.remotePrefsSupported() == true
                 || healthHost?.reachable() == true)
 
+    val effectiveGameFlashbackEnabled: Boolean
+        get() = scope?.remoteGameFlashbackEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.gameFlashbackEnabled()
+            ?: false
+
+    val effectiveGameFlashbackLeadSec: Int
+        get() = scope?.remoteGameFlashbackLeadSec()
+            ?: healthHost?.takeIf { it.reachable() }?.gameFlashbackLeadSec()
+            ?: WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC
+
+    val canToggleGameFlashback: Boolean
+        get() = !gameFlashbackSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
     val effectiveWifiAutoEnabled: Boolean
         get() = scope?.remoteWifiAutoSyncEnabled()
             ?: healthHost?.takeIf { it.reachable() }?.wifiAutoSyncEnabled()
@@ -141,6 +156,7 @@ internal data class WatchLinkUiState(
             effectiveTimerEnabled,
             effectiveCalendarEnabled,
             effectiveLiveWindowEnabled,
+            effectiveGameFlashbackEnabled,
             effectiveWifiAutoEnabled,
         ).count { it }
 }
@@ -162,6 +178,8 @@ internal fun WatchLinkApp(
     onCalendarEnable: (Boolean) -> Unit,
     onTimerOption: (String, Boolean) -> Unit,
     onLiveWindowEnable: (Boolean) -> Unit,
+    onGameFlashbackEnable: (Boolean) -> Unit,
+    onGameFlashbackLeadSec: (Int) -> Unit,
     onWifiAutoEnable: (Boolean) -> Unit,
     onRawCommandDebugEnable: (Boolean) -> Unit,
     onDismissMessage: () -> Unit,
@@ -234,9 +252,13 @@ internal fun WatchLinkApp(
                             onOpenCalendar = onCalendar,
                             onRefresh = onRefresh,
                         )
-                        Page.LIVE -> item("live") {
-                            LiveWindowSyncCard(state, onLiveWindowEnable, onRequestUmsScope)
-                        }
+                        Page.LIVE -> livePage(
+                            state = state,
+                            onLiveWindowEnable = onLiveWindowEnable,
+                            onGameFlashbackEnable = onGameFlashbackEnable,
+                            onGameFlashbackLeadSec = onGameFlashbackLeadSec,
+                            onRequestUmsScope = onRequestUmsScope,
+                        )
                         Page.WIFI -> wifiPage(
                             state = state,
                             onWifiAutoEnable = onWifiAutoEnable,
@@ -279,8 +301,12 @@ private fun LazyListScope.homePage(state: WatchLinkUiState, onRefresh: () -> Uni
     }
     val remindersSummary = if (activeReminders.isEmpty()) "闹钟、倒计时与日历强提醒"
     else "已开启：${activeReminders.joinToString(" · ")}"
-    val liveSummary = if (state.effectiveLiveWindowEnabled) "已开启 · 流体云与实况通知"
-    else "取餐、打车、配送与排号"
+    val activeLive = buildList {
+        if (state.effectiveLiveWindowEnabled) add("流体云与实况通知")
+        if (state.effectiveGameFlashbackEnabled) add("游戏闪回")
+    }
+    val liveSummary = if (activeLive.isEmpty()) "取餐、出行、快递、排号与游戏闪回"
+    else "已开启：${activeLive.joinToString(" · ")}"
     val wifiSummary = if (state.effectiveWifiAutoEnabled) "已开启 · 自动同步与批量导入"
     else "自动同步新连接与批量导入"
 
@@ -462,7 +488,7 @@ private fun CalendarReminderCard(
         !state.canToggleCalendar -> "请先启用模块或打开系统日历"
         needsScope -> "需授权「系统日历」作用域"
         needsLaunch -> "请打开或重启系统日历生效"
-        else -> "强提醒同步手表，支持表端操作"
+        else -> "日程与待办强提醒，支持表端操作"
     }
 
     Card(Modifier.fillMaxWidth()) {
@@ -483,33 +509,88 @@ private fun CalendarReminderCard(
     }
 }
 
-@Composable
-private fun LiveWindowSyncCard(
+private fun LazyListScope.livePage(
     state: WatchLinkUiState,
-    onEnable: (Boolean) -> Unit,
+    onLiveWindowEnable: (Boolean) -> Unit,
+    onGameFlashbackEnable: (Boolean) -> Unit,
+    onGameFlashbackLeadSec: (Int) -> Unit,
     onRequestUmsScope: () -> Unit,
 ) {
-    val enabled = state.effectiveLiveWindowEnabled
+    val liveEnabled = state.effectiveLiveWindowEnabled
+    val gameEnabled = state.effectiveGameFlashbackEnabled
+    val leadSec = state.effectiveGameFlashbackLeadSec
     val scope = state.scope
     val checks = state.checks
     val umsTrusted = checks == null || checks.umsTrusted
-    val needsUmsScope = enabled && umsTrusted && scope?.frameworkConnected() == true && !scope.umsGranted()
+    val needsUmsScope = (liveEnabled || gameEnabled) && umsTrusted && scope?.frameworkConnected() == true && !scope.umsGranted()
 
-    val summary = when {
+    val liveSummary = when {
         state.liveWindowSaving -> "正在保存…"
         !state.canToggleLiveWindow -> "请先启用模块或打开运动健康"
         needsUmsScope -> "需授权「智慧服务」以同步流体云"
-        else -> "同步取餐、打车、配送与排号"
+        else -> "取餐、外卖、打车、出行、快递与排号"
+    }
+    val gameSummary = when {
+        state.gameFlashbackSaving -> "正在保存…"
+        !state.canToggleGameFlashback -> "请先启用模块或打开运动健康"
+        else -> "独立同步游戏复活与起飞倒计时"
     }
 
-    Card(Modifier.fillMaxWidth()) {
-        SwitchRow("同步流体云与实况通知", summary, enabled, state.canToggleLiveWindow, onEnable)
-        if (needsUmsScope) {
-            HorizontalDivider()
-            if (scope.requestPending()) {
-                BasicComponent(title = "等待 LSPosed 授权", summary = "请在弹窗中同意「智慧服务」")
-            } else {
-                Menu("申请智慧服务作用域", "用于读取 ColorOS 流体云进度", onRequestUmsScope)
+    item("live-regular-title") { SectionTitle("流体云与实况通知") }
+    item("live-regular-card") {
+        Card(Modifier.fillMaxWidth()) {
+            SwitchRow("同步流体云与实况通知", liveSummary, liveEnabled, state.canToggleLiveWindow, onLiveWindowEnable)
+            if (needsUmsScope) {
+                HorizontalDivider()
+                if (scope.requestPending()) {
+                    BasicComponent(title = "等待 LSPosed 授权", summary = "请在弹窗中同意「智慧服务」")
+                } else {
+                    Menu("申请智慧服务作用域", "用于读取 ColorOS 流体云进度", onRequestUmsScope)
+                }
+            }
+        }
+    }
+
+    item("live-game-title") { SectionTitle("游戏闪回") }
+    item("live-game-card") {
+        Card(Modifier.fillMaxWidth()) {
+            SwitchRow("同步游戏闪回", gameSummary, gameEnabled, state.canToggleGameFlashback, onGameFlashbackEnable)
+            if (gameEnabled) {
+                HorizontalDivider()
+                val leadLabel = if (leadSec == 0) "复活瞬间（0 秒）" else "复活前 $leadSec 秒"
+                BasicComponent(
+                    title = "复活提前震动",
+                    summary = leadLabel,
+                    endActions = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
+                                text = "-1秒",
+                                onClick = { onGameFlashbackLeadSec(leadSec - 1) },
+                                enabled = state.canToggleGameFlashback && leadSec > WatchLinkPrefs.MIN_GAME_FLASHBACK_LEAD_SEC,
+                            )
+                            TextButton(
+                                text = "+1秒",
+                                onClick = { onGameFlashbackLeadSec(leadSec + 1) },
+                                enabled = state.canToggleGameFlashback && leadSec < WatchLinkPrefs.MAX_GAME_FLASHBACK_LEAD_SEC,
+                            )
+                        }
+                    }
+                )
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf(0, 3, 5, 10, 15).forEach { sec ->
+                        val label = if (sec == leadSec) "[$sec 秒]" else "${sec}秒"
+                        TextButton(
+                            text = label,
+                            onClick = { onGameFlashbackLeadSec(sec) },
+                            enabled = state.canToggleGameFlashback && sec != leadSec,
+                        )
+                    }
+                }
             }
         }
     }
@@ -1014,12 +1095,13 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
             HorizontalDivider()
             BasicComponent(
                 title = "日历强提醒（需勾选系统日历）",
-                summary = "需额外勾选「系统日历」。仅同步 ColorOS 日历中明确设为「强提醒」的日程，支持表端停止与延后 5 分钟；普通通知日程仍走运动健康原有通知渠道。"
+                summary = "需额外勾选「系统日历」。同步 ColorOS 日历中明确设为「强提醒」的日程与待办，支持表端停止与延后 5 分钟；普通通知日程与普通待办仍走运动健康原有通知渠道。"
             )
             HorizontalDivider()
             BasicComponent(
-                title = "实况窗同步（建议勾选智慧服务）",
-                summary = "可将取餐码、外卖配送、打车行程与排号进度同步到支持原生实况窗的手表，进度更新时保持静默不重复打扰。\n" +
+                title = "实况窗与游戏闪回（建议勾选智慧服务）",
+                summary = "可将取餐码、外卖配送、打车行程、航班/高铁出行、快递物流（含驿站取件码）、电影票与排号进度同步到支持原生实况窗的手表，自动适配 10 格弦月窗宽度并保护核心码值，进度更新时保持静默。\n" +
+                    "「同步游戏闪回」为独立开关，可同步游戏复活/起飞倒计时，并支持自定义在复活前 0–30 秒触发一次额外震动提醒（0 秒为复活瞬间）；后续搭配游戏静默通知时会自动穿透放行。\n" +
                     "同步 Android 实况通知依赖运动健康已有的通知监听；同步 ColorOS 流体云需额外勾选「智慧服务（com.oplus.pantanal.ums）」。"
             )
             HorizontalDivider()

@@ -610,6 +610,14 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 settings.setLocalLiveWindowFallback(false);
                 if (liveBridge != null) liveBridge.onSettingsFallbackChanged(false);
             }
+            case HealthHostControl.ENABLE_GAME_FLASHBACK -> {
+                settings.setLocalGameFlashbackFallback(true);
+                if (liveBridge != null) liveBridge.onGameFlashbackFallbackChanged(true);
+            }
+            case HealthHostControl.DISABLE_GAME_FLASHBACK -> {
+                settings.setLocalGameFlashbackFallback(false);
+                if (liveBridge != null) liveBridge.onGameFlashbackFallbackChanged(false);
+            }
             case HealthHostControl.TEST_LIVE_WINDOW -> {
                 if (liveBridge != null) liveBridge.startLiveTest();
             }
@@ -626,7 +634,13 @@ final class HealthAlarmBridge extends BroadcastReceiver {
             }
             case HealthHostControl.TEST -> startManualTestLocked();
             case HealthHostControl.CANCEL_TEST -> cancelTestLocked(true);
-            default -> {}
+            default -> {
+                int leadSec = HealthHostControl.parseGameFlashbackLeadSecCommand(command);
+                if (leadSec >= 0) {
+                    settings.setLocalGameFlashbackLeadSecFallback(leadSec);
+                    if (liveBridge != null) liveBridge.onGameFlashbackLeadSecChanged(leadSec);
+                }
+            }
         }
         WatchCheck watch = checkWatch();
         HealthWifiBridge.StatusSnapshot wifi = wifiBridge != null
@@ -663,7 +677,9 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 live.lastSource(),
                 live.dispatchMode(),
                 live.testState(),
-                settings.isRawCommandDebugEnabled());
+                settings.isRawCommandDebugEnabled(),
+                settings.isGameFlashbackEnabled(),
+                settings.gameFlashbackLeadSec());
     }
 
     private void startManualTestLocked() {

@@ -29,6 +29,7 @@ public record LiveWindowPayload(
     public static final String SOURCE_DAEMON = "DAEMON";
     public static final String SOURCE_CLOCK_TIMER = "CLOCK_TIMER";
     public static final String CLOCK_TIMER_KEY_PREFIX = "clock-timer:";
+    public static final String GAME_FLASHBACK_KEY_PREFIX = "game-fb:";
     public static final String SOURCE_TEST = "TEST";
 
     // Verified against Huawei Health 17.0.10.330 Lctp.b & live WATCH 6 Pro testing (OTHER is dropped!).
@@ -79,6 +80,10 @@ public record LiveWindowPayload(
         return !stableKey.isEmpty() && (!title.isEmpty() || !text.isEmpty());
     }
 
+    public boolean isGameFlashback() {
+        return stableKey.startsWith(GAME_FLASHBACK_KEY_PREFIX);
+    }
+
     public LiveWindowPayload withOperation(int newOp) {
         return new LiveWindowPayload(
                 source, stableKey, packageName, title, text,
@@ -108,6 +113,11 @@ public record LiveWindowPayload(
 
     /** Encodes the verified SmartEdge JSON consumed by Huawei Health HandleIntentService / HwNotificationLiveMgr. */
     public String toSmartEdgeJson() {
+        return toSmartEdgeJson(operation == OP_CREATE && !SOURCE_CLOCK_TIMER.equals(source));
+    }
+
+    /** Encodes SmartEdge JSON with an explicit {@code capsuleRemind} flag (used for game revive vibration alerts). */
+    public String toSmartEdgeJson(boolean capsuleRemind) {
         int nativeId = notificationId();
         String key = notificationKey();
         boolean hasProgress = progress >= 0;
@@ -150,7 +160,7 @@ public record LiveWindowPayload(
         fieldInt(sb, "notification.live.capsuleType", 1); sb.append(',');
         field(sb, "notification.live.capsuleTitle", capsuleTitle); sb.append(',');
         field(sb, "notification.live.capsuleContent", capsuleContent); sb.append(',');
-        fieldBool(sb, "notification.live.capsuleRemind", operation == OP_CREATE && !SOURCE_CLOCK_TIMER.equals(source));
+        fieldBool(sb, "notification.live.capsuleRemind", operation != OP_CLOSE && capsuleRemind);
         sb.append("}}");
         return sb.toString();
     }

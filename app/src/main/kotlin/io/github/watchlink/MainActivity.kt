@@ -57,6 +57,8 @@ class MainActivity : ComponentActivity() {
                 onCalendarEnable = ::setCalendarEnabled,
                 onTimerOption = ::setTimerOption,
                 onLiveWindowEnable = ::setLiveWindowEnabled,
+                onGameFlashbackEnable = ::setGameFlashbackEnabled,
+                onGameFlashbackLeadSec = ::setGameFlashbackLeadSec,
                 onWifiAutoEnable = ::setWifiAutoEnabled,
                 onRawCommandDebugEnable = ::setRawCommandDebugEnabled,
                 onDismissMessage = { ui = ui.copy(message = null) },
@@ -166,6 +168,20 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private suspend fun writeRemoteGameFlashbackEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteGameFlashbackEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteGameFlashbackLeadSec(leadSec: Int): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteGameFlashbackLeadSec(leadSec) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
     private suspend fun writeRemoteRawCommandDebugEnabled(enabled: Boolean): Boolean =
         suspendCancellableCoroutine { continuation ->
             ModuleScope.writeRemoteRawCommandDebugEnabled(enabled) { ok ->
@@ -188,7 +204,8 @@ class MainActivity : ComponentActivity() {
         }
 
     private suspend fun queryHosts() {
-        if (ui.saving || ui.calendarSaving || ui.wifiAutoSaving || ui.liveWindowSaving || ui.rawCommandDebugSaving) return
+        if (ui.saving || ui.calendarSaving || ui.wifiAutoSaving || ui.liveWindowSaving
+            || ui.gameFlashbackSaving || ui.rawCommandDebugSaving) return
         val revision = ++switchRevision
         val (clockReply, calendarReply, healthReply) = coroutineScope {
             val clockJob = async { clockCommand(ClockHostControl.QUERY) }
@@ -306,6 +323,51 @@ class MainActivity : ComponentActivity() {
                         "已开启实况窗同步（支持 Android 实况通知）。如需同步小程序取餐码、美团/饿了么等 ColorOS 流体云，请点击下方「申请智慧服务作用域」。"
                     else -> null
                 },
+            )
+            readChecks()
+        }
+    }
+
+    private fun setGameFlashbackEnabled(enable: Boolean) {
+        if (ui.gameFlashbackSaving) return
+        ++switchRevision
+        ui = ui.copy(gameFlashbackSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteGameFlashbackEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_GAME_FLASHBACK else HealthHostControl.DISABLE_GAME_FLASHBACK
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.gameFlashbackEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                gameFlashbackSaving = false,
+                message = when {
+                    !saved -> "未能保存游戏闪回开关状态。请确认 LSPosed 已启用或运动健康在线后再试。"
+                    enable && scopeNow.frameworkConnected() && !scopeNow.umsGranted() ->
+                        "已开启游戏闪回同步。建议点击下方「申请智慧服务作用域」以完整读取 ColorOS 流体云闪回。"
+                    else -> null
+                },
+            )
+            readChecks()
+        }
+    }
+
+    private fun setGameFlashbackLeadSec(leadSec: Int) {
+        if (ui.gameFlashbackSaving) return
+        val clamped = io.github.watchlink.setup.WatchLinkPrefs.clampGameFlashbackLeadSec(leadSec)
+        ++switchRevision
+        ui = ui.copy(gameFlashbackSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteGameFlashbackLeadSec(clamped)
+            val healthReply = healthCommand(HealthHostControl.setGameFlashbackLeadSecCommand(clamped))
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.gameFlashbackLeadSec() == clamped)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                gameFlashbackSaving = false,
+                message = if (!saved) "未能保存复活提前震动秒数。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
             )
             readChecks()
         }

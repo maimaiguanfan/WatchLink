@@ -15,6 +15,7 @@ import java.util.Set;
 public final class LiveWindowTracker {
     public static final int MAX_ACTIVE = 8;
     public static final long MIN_UPDATE_INTERVAL_MS = 2_500L;
+    public static final long GAME_UPDATE_INTERVAL_MS = 900L;
     public static final long DEFAULT_ORPHAN_TIMEOUT_MS = 30 * 60_000L;
 
     private static final class Entry {
@@ -59,12 +60,14 @@ public final class LiveWindowTracker {
             existing.lastSentElapsedMs = Math.max(existing.lastSentElapsedMs, nowElapsedMs);
             return null;
         }
+        boolean gameFlashback = incoming.isGameFlashback();
         boolean majorChange = LiveWindowPayload.SOURCE_CLOCK_TIMER.equals(incoming.source())
                 || !incoming.eventType().equals(existing.payload.eventType())
                 || !incoming.title().equals(existing.payload.title())
                 || Math.abs(incoming.progress() - existing.payload.progress()) >= 5
                 || (incoming.progress() == 100 && existing.payload.progress() != 100);
-        if (!majorChange && nowElapsedMs - existing.lastSentElapsedMs < MIN_UPDATE_INTERVAL_MS) {
+        long minInterval = gameFlashback ? GAME_UPDATE_INTERVAL_MS : MIN_UPDATE_INTERVAL_MS;
+        if (!majorChange && nowElapsedMs - existing.lastSentElapsedMs < minInterval) {
             return null;
         }
         LiveWindowPayload updated = incoming.withOperation(LiveWindowPayload.OP_UPDATE);
@@ -113,7 +116,24 @@ public final class LiveWindowTracker {
     public synchronized List<LiveWindowPayload> closeSourceGroup(boolean timers) {
         List<LiveWindowPayload> closures = new ArrayList<>();
         active.values().removeIf(entry -> {
-            if (LiveWindowPayload.SOURCE_CLOCK_TIMER.equals(entry.payload.source()) != timers) return false;
+            LiveWindowPayload p = entry.payload;
+            boolean isTimer = LiveWindowPayload.SOURCE_CLOCK_TIMER.equals(p.source());
+            if (timers) {
+                if (!isTimer) return false;
+            } else {
+                if (isTimer || p.isGameFlashback()) return false;
+            }
+            closures.add(p.withOperation(LiveWindowPayload.OP_CLOSE));
+            return true;
+        });
+        return closures;
+    }
+
+    /** Closes and removes only active game-flashback live windows. */
+    public synchronized List<LiveWindowPayload> closeGameFlashback() {
+        List<LiveWindowPayload> closures = new ArrayList<>();
+        active.values().removeIf(entry -> {
+            if (!entry.payload.isGameFlashback()) return false;
             closures.add(entry.payload.withOperation(LiveWindowPayload.OP_CLOSE));
             return true;
         });

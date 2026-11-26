@@ -16,6 +16,7 @@ import io.github.watchlink.BuildConfig;
 import io.github.watchlink.alarm.probe.ProbeLog;
 import io.github.watchlink.alarm.probe.SenderVerifier;
 import io.github.watchlink.alarm.probe.TargetProfile;
+import io.github.watchlink.setup.WatchLinkPrefs;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -30,9 +31,28 @@ public final class HealthHostControl {
             ENABLE_WIFI_AUTO = "ENABLE_WIFI_AUTO", DISABLE_WIFI_AUTO = "DISABLE_WIFI_AUTO",
             SYNC_CURRENT_WIFI = "SYNC_CURRENT_WIFI",
             ENABLE_LIVE_WINDOW = "ENABLE_LIVE_WINDOW", DISABLE_LIVE_WINDOW = "DISABLE_LIVE_WINDOW",
+            ENABLE_GAME_FLASHBACK = "ENABLE_GAME_FLASHBACK", DISABLE_GAME_FLASHBACK = "DISABLE_GAME_FLASHBACK",
+            SET_GAME_FLASHBACK_LEAD_PREFIX = "SET_GAME_FLASHBACK_LEAD:",
             TEST_LIVE_WINDOW = "TEST_LIVE_WINDOW", CANCEL_LIVE_WINDOW = "CANCEL_LIVE_WINDOW",
             ENABLE_RAW_DEBUG = "ENABLE_RAW_DEBUG", DISABLE_RAW_DEBUG = "DISABLE_RAW_DEBUG",
             TEST = "TEST", CANCEL_TEST = "CANCEL_TEST";
+
+    public static String setGameFlashbackLeadSecCommand(int leadSec) {
+        return SET_GAME_FLASHBACK_LEAD_PREFIX + WatchLinkPrefs.clampGameFlashbackLeadSec(leadSec);
+    }
+
+    public static int parseGameFlashbackLeadSecCommand(String command) {
+        if (command == null || !command.startsWith(SET_GAME_FLASHBACK_LEAD_PREFIX)) return -1;
+        String tail = command.substring(SET_GAME_FLASHBACK_LEAD_PREFIX.length());
+        if (!tail.matches("\\d{1,2}")) return -1;
+        try {
+            int v = Integer.parseInt(tail);
+            return (v >= WatchLinkPrefs.MIN_GAME_FLASHBACK_LEAD_SEC && v <= WatchLinkPrefs.MAX_GAME_FLASHBACK_LEAD_SEC)
+                    ? v : -1;
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+    }
     private static final String ACTION = BuildConfig.APPLICATION_ID + ".cooperative.HEALTH_CONTROL_V1";
     private static final int ACK = 1;
     private static final long TIMEOUT = 5_000L;
@@ -74,7 +94,25 @@ public final class HealthHostControl {
                         int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
                         boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
                         String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
-                        boolean rawCommandDebugEnabled) {
+                        boolean rawCommandDebugEnabled,
+                        boolean gameFlashbackEnabled, int gameFlashbackLeadSec) {
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                     boolean rawCommandDebugEnabled) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, rawCommandDebugEnabled,
+                    false, WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC);
+        }
         public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
                      boolean serviceWitness, boolean sdkObserver, String symbolSource,
                      String watchState, String lastDispatchMode, String lastActionSource,
@@ -152,6 +190,10 @@ public final class HealthHostControl {
             liveDispatchMode = pick(reachable, DISPATCH_MODES, liveDispatchMode, "NONE");
             liveTestState = pick(reachable, LIVE_TEST_STATES, liveTestState, "IDLE");
             rawCommandDebugEnabled = reachable && rawCommandDebugEnabled;
+            gameFlashbackEnabled = reachable && gameFlashbackEnabled;
+            gameFlashbackLeadSec = reachable
+                    ? WatchLinkPrefs.clampGameFlashbackLeadSec(gameFlashbackLeadSec)
+                    : WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC;
         }
 
         private static String pick(boolean reachable, Set<String> allowed, String value, String fallback) {
@@ -167,6 +209,8 @@ public final class HealthHostControl {
                 || ENABLE_WIFI_AUTO.equals(value) || DISABLE_WIFI_AUTO.equals(value)
                 || SYNC_CURRENT_WIFI.equals(value)
                 || ENABLE_LIVE_WINDOW.equals(value) || DISABLE_LIVE_WINDOW.equals(value)
+                || ENABLE_GAME_FLASHBACK.equals(value) || DISABLE_GAME_FLASHBACK.equals(value)
+                || parseGameFlashbackLeadSecCommand(value) >= 0
                 || TEST_LIVE_WINDOW.equals(value) || CANCEL_LIVE_WINDOW.equals(value)
                 || ENABLE_RAW_DEBUG.equals(value) || DISABLE_RAW_DEBUG.equals(value)
                 || TEST.equals(value) || CANCEL_TEST.equals(value);
@@ -229,6 +273,8 @@ public final class HealthHostControl {
                             details.putString("liveDispatchMode", reply.liveDispatchMode());
                             details.putString("liveTestState", reply.liveTestState());
                             details.putBoolean("rawCommandDebugEnabled", reply.rawCommandDebugEnabled());
+                            details.putBoolean("gameFlashbackEnabled", reply.gameFlashbackEnabled());
+                            details.putInt("gameFlashbackLeadSec", reply.gameFlashbackLeadSec());
                             pending.setResult(ACK, null, details);
                         } catch (RuntimeException e) {
                             ProbeLog.failure("HEALTH_HOST_CONTROL_FAILED", e);
@@ -302,7 +348,9 @@ public final class HealthHostControl {
                                         data.getString("liveLastSource"),
                                         data.getString("liveDispatchMode"),
                                         data.getString("liveTestState"),
-                                        data.getBoolean("rawCommandDebugEnabled", false)));
+                                        data.getBoolean("rawCommandDebugEnabled", false),
+                                        data.getBoolean("gameFlashbackEnabled", false),
+                                        data.getInt("gameFlashbackLeadSec", WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC)));
                             } else callback.accept(unavailable());
                         }
                     }, main, 0, null, null);

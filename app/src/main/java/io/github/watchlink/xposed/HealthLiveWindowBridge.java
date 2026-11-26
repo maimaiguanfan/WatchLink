@@ -14,14 +14,17 @@ import io.github.watchlink.BuildConfig;
 import io.github.watchlink.alarm.probe.ProbeLog;
 import io.github.watchlink.alarm.probe.SenderVerifier;
 import io.github.watchlink.alarm.probe.TargetProfile;
+import io.github.watchlink.live.GameReviveCoordinator;
 import io.github.watchlink.live.LiveWindowPayload;
 import io.github.watchlink.live.LiveWindowTracker;
 import io.github.watchlink.live.LiveWindowWire;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import io.github.watchlink.timer.TimerCards;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -48,6 +51,7 @@ final class HealthLiveWindowBridge {
     private static final long CLEANUP_INTERVAL_MS = 5 * 60_000L;
     private static final long TEST_UPDATE_DELAY_MS = 6_000L;
     private static final long TEST_CLOSE_DELAY_MS = 14_000L;
+    private static final long GAME_DONE_ALERT_CLOSE_MS = 3_500L;
 
     record StatusSnapshot(
             String watchSupport,
@@ -65,6 +69,9 @@ final class HealthLiveWindowBridge {
     private final SharedPreferences timerLedger;
     private static final String PUBLISHED = "publishedKeys";
     private final LiveWindowTracker tracker = new LiveWindowTracker();
+    private final GameReviveCoordinator gameRevive = new GameReviveCoordinator();
+    private final Map<String, ScheduledFuture<?>> reviveTimers = new HashMap<>();
+    private final Map<String, ScheduledFuture<?>> doneCloseTimers = new HashMap<>();
 
     private BroadcastReceiver wireReceiver;
     private Method liveMgrSingleton;
@@ -131,9 +138,20 @@ final class HealthLiveWindowBridge {
         wireReceiver = r;
 
         settings.onLiveWindowChanged(enabled -> worker.execute(() -> {
-            notifyDaemonState(Boolean.TRUE.equals(enabled), isWatchCapableOrUnknown());
+            notifyDaemonState(Boolean.TRUE.equals(enabled), settings.isGameFlashbackEnabled(), isWatchCapableOrUnknown());
             if (!Boolean.TRUE.equals(enabled)) {
                 closeGroupLocked(false);
+            }
+        }));
+        settings.onGameFlashbackChanged(enabled -> worker.execute(() -> {
+            notifyDaemonState(settings.isLiveWindowEnabled(), Boolean.TRUE.equals(enabled), isWatchCapableOrUnknown());
+            if (!Boolean.TRUE.equals(enabled)) {
+                closeGameFlashbackLocked();
+            }
+        }));
+        settings.onGameFlashbackLeadSecChanged(leadSec -> worker.execute(() -> {
+            if (installed && settings.isGameFlashbackEnabled() && leadSec != null) {
+                rescheduleGameReviveLocked(leadSec);
             }
         }));
 
@@ -141,7 +159,7 @@ final class HealthLiveWindowBridge {
                 this::expireOrphansLocked, CLEANUP_INTERVAL_MS, CLEANUP_INTERVAL_MS, TimeUnit.MILLISECONDS);
         installed = true;
         worker.execute(this::closeForgottenTimers);
-        notifyDaemonState(settings.isLiveWindowEnabled(), isWatchCapableOrUnknown());
+        notifyDaemonState(settings.isLiveWindowEnabled(), settings.isGameFlashbackEnabled(), isWatchCapableOrUnknown());
         ProbeLog.info("HEALTH_LIVE_READY source=HEALTH");
     }
 
@@ -150,16 +168,33 @@ final class HealthLiveWindowBridge {
     }
 
     void onSettingsFallbackChanged(boolean enabled) {
-        notifyDaemonState(enabled, isWatchCapableOrUnknown());
+        notifyDaemonState(enabled, settings.isGameFlashbackEnabled(), isWatchCapableOrUnknown());
         if (!enabled) {
             closeGroupLocked(false);
+        }
+    }
+
+    void onGameFlashbackFallbackChanged(boolean enabled) {
+        notifyDaemonState(settings.isLiveWindowEnabled(), enabled, isWatchCapableOrUnknown());
+        if (!enabled) {
+            closeGameFlashbackLocked();
+        }
+    }
+
+    void onGameFlashbackLeadSecChanged(int leadSec) {
+        if (installed && settings.isGameFlashbackEnabled()) {
+            rescheduleGameReviveLocked(leadSec);
         }
     }
 
     void close() {
         installed = false;
         settings.onLiveWindowChanged(null);
+        settings.onGameFlashbackChanged(null);
+        settings.onGameFlashbackLeadSecChanged(null);
         cancelTestFutures();
+        cancelAllReviveTimersLocked();
+        gameRevive.clear();
         activeTestPayload = null;
         if (cleanupFuture != null) {
             cleanupFuture.cancel(false);
@@ -278,14 +313,33 @@ final class HealthLiveWindowBridge {
 
     private void handleIncomingLocked(LiveWindowPayload incoming) {
         boolean timer = LiveWindowPayload.SOURCE_CLOCK_TIMER.equals(incoming.source());
-        if (incoming.operation() != LiveWindowPayload.OP_CLOSE && !(timer
-                ? settings.isTimerEnabled() && settings.isTimerLiveWindowEnabled() : settings.isLiveWindowEnabled())) {
+        boolean gameFlashback = incoming.isGameFlashback();
+        boolean featureEnabled = timer
+                ? (settings.isTimerEnabled() && settings.isTimerLiveWindowEnabled())
+                : (gameFlashback ? settings.isGameFlashbackEnabled() : settings.isLiveWindowEnabled());
+        if (incoming.operation() != LiveWindowPayload.OP_CLOSE && !featureEnabled) {
             lastResult = "DISABLED";
             lastSource = incoming.source();
             return;
         }
         if (incoming.operation() == LiveWindowPayload.OP_CLOSE) {
             LiveWindowPayload closed = tracker.onRemove(incoming.stableKey());
+            if (gameFlashback) {
+                cancelReviveTimerLocked(incoming.stableKey());
+                GameReviveCoordinator.AlertAction edgeAlert = gameRevive.onRemove(
+                        incoming.stableKey(), SystemClock.elapsedRealtime(), settings.gameFlashbackLeadSec());
+                if (closed != null) {
+                    String mode = dispatchCard(closed);
+                    lastDispatchMode = mode;
+                    lastSource = closed.source();
+                    lastResult = isDispatchSuccess(mode) ? "CLOSED" : ("BG_RESTRICTED".equals(mode) ? "BG_RESTRICTED" : "FAILED");
+                    ProbeLog.info("HEALTH_LIVE_DISPATCH source=" + closed.source() + " live_op=CLOSE mode=" + mode);
+                }
+                if (edgeAlert != null && settings.isGameFlashbackEnabled()) {
+                    fireGameReviveAlertLocked(edgeAlert, closed != null ? closed.source() : incoming.source(), true);
+                }
+                return;
+            }
             if (closed == null) {
                 if (!timer || !publishedTimerKeys().contains(incoming.stableKey())) return;
                 closed = TimerCards.close(incoming.stableKey());
@@ -300,7 +354,7 @@ final class HealthLiveWindowBridge {
 
         String support = readWatchSupport();
         boolean supported = !"UNSUPPORTED".equals(support);
-        if (!timer) notifyDaemonState(true, supported);
+        if (!timer) notifyDaemonState(settings.isLiveWindowEnabled(), settings.isGameFlashbackEnabled(), supported);
         if ("WATCH_DISCONNECTED".equals(support)) {
             lastResult = "WATCH_DISCONNECTED";
             lastSource = incoming.source();
@@ -319,24 +373,31 @@ final class HealthLiveWindowBridge {
             return;
         }
 
-        LiveWindowPayload toSend = tracker.onUpsert(incoming, SystemClock.elapsedRealtime());
-        if (toSend == null) return;
-
-        String mode = dispatchCard(toSend);
-        lastDispatchMode = mode;
-        lastSource = toSend.source();
-        if (isDispatchSuccess(mode)) {
-            lastResult = toSend.operation() == LiveWindowPayload.OP_CREATE ? "OPENED" : "UPDATED";
-            ProbeLog.info("HEALTH_LIVE_DISPATCH source=" + toSend.source()
-                    + " live_op=" + LiveWindowPayload.opName(toSend.operation())
-                    + " live_event=" + toSend.eventType()
-                    + " mode=" + mode);
-        } else {
-            if (toSend.operation() == LiveWindowPayload.OP_CREATE) {
-                tracker.onRemove(toSend.stableKey());
+        long nowElapsed = SystemClock.elapsedRealtime();
+        LiveWindowPayload toSend = tracker.onUpsert(incoming, nowElapsed);
+        if (toSend != null) {
+            String mode = dispatchCard(toSend);
+            lastDispatchMode = mode;
+            lastSource = toSend.source();
+            if (isDispatchSuccess(mode)) {
+                lastResult = toSend.operation() == LiveWindowPayload.OP_CREATE ? "OPENED" : "UPDATED";
+                ProbeLog.info("HEALTH_LIVE_DISPATCH source=" + toSend.source()
+                        + " live_op=" + LiveWindowPayload.opName(toSend.operation())
+                        + " live_event=" + toSend.eventType()
+                        + " mode=" + mode);
+            } else {
+                if (toSend.operation() == LiveWindowPayload.OP_CREATE) {
+                    tracker.onRemove(toSend.stableKey());
+                }
+                lastResult = "BG_RESTRICTED".equals(mode) ? "BG_RESTRICTED" : "FAILED";
+                ProbeLog.info("HEALTH_LIVE_DISPATCH source=" + toSend.source() + " result=" + lastResult);
+                return;
             }
-            lastResult = "BG_RESTRICTED".equals(mode) ? "BG_RESTRICTED" : "FAILED";
-            ProbeLog.info("HEALTH_LIVE_DISPATCH source=" + toSend.source() + " result=" + lastResult);
+        }
+        if (gameFlashback) {
+            GameReviveCoordinator.UpsertPlan plan = gameRevive.onUpsert(
+                    incoming, nowElapsed, settings.gameFlashbackLeadSec());
+            applyRevivePlanLocked(incoming.stableKey(), incoming.source(), plan, nowElapsed);
         }
     }
 
@@ -351,11 +412,107 @@ final class HealthLiveWindowBridge {
         }
     }
 
+    void closeGameFlashbackLocked() {
+        cancelAllReviveTimersLocked();
+        gameRevive.clear();
+        List<LiveWindowPayload> closures = tracker.closeGameFlashback();
+        for (LiveWindowPayload close : closures) {
+            String mode = dispatchCard(close);
+            lastDispatchMode = mode;
+        }
+        if (!closures.isEmpty()) {
+            lastResult = "DISABLED";
+        }
+    }
+
+    private void rescheduleGameReviveLocked(int leadSec) {
+        long nowElapsed = SystemClock.elapsedRealtime();
+        Map<String, GameReviveCoordinator.UpsertPlan> plans = gameRevive.onLeadSecChanged(nowElapsed, leadSec);
+        for (Map.Entry<String, GameReviveCoordinator.UpsertPlan> entry : plans.entrySet()) {
+            applyRevivePlanLocked(entry.getKey(), LiveWindowPayload.SOURCE_UMS, entry.getValue(), nowElapsed);
+        }
+    }
+
+    private void applyRevivePlanLocked(
+            String stableKey, String source, GameReviveCoordinator.UpsertPlan plan, long nowElapsed) {
+        if (plan == null) return;
+        cancelReviveTimerLocked(stableKey);
+        if (plan.immediateAlert() != null) {
+            fireGameReviveAlertLocked(plan.immediateAlert(), source, false);
+            return;
+        }
+        if (plan.scheduleAtElapsedMs() != null) {
+            long delayMs = Math.max(0L, plan.scheduleAtElapsedMs() - nowElapsed);
+            long generation = plan.generation();
+            ScheduledFuture<?> future = worker.schedule(() -> {
+                if (!installed || !settings.isGameFlashbackEnabled()) return;
+                reviveTimers.remove(stableKey);
+                GameReviveCoordinator.AlertAction alert = gameRevive.onTimerFired(
+                        stableKey, generation, SystemClock.elapsedRealtime(), settings.gameFlashbackLeadSec());
+                if (alert != null) {
+                    fireGameReviveAlertLocked(alert, source, false);
+                }
+            }, delayMs, TimeUnit.MILLISECONDS);
+            reviveTimers.put(stableKey, future);
+        }
+    }
+
+    private void fireGameReviveAlertLocked(
+            GameReviveCoordinator.AlertAction alert, String source, boolean cardAlreadyClosed) {
+        if (alert == null || !installed) return;
+        String support = readWatchSupport();
+        if ("WATCH_DISCONNECTED".equals(support) || "UNSUPPORTED".equals(support)) return;
+
+        boolean useStandalone = cardAlreadyClosed || alert.completionAlert();
+        LiveWindowPayload payload = useStandalone
+                ? alert.toStandaloneCompletionPayload(source)
+                : alert.toInPlaceRemindPayload(source);
+        String mode = dispatchJson(payload.toSmartEdgeJson(true));
+        lastDispatchMode = mode;
+        lastSource = source;
+        ProbeLog.info("HEALTH_GAME_REVIVE_ALERT lead_sec=" + settings.gameFlashbackLeadSec()
+                + " remaining_sec=" + alert.remainingSec()
+                + " standalone=" + useStandalone
+                + " mode=" + mode);
+
+        if (useStandalone && isDispatchSuccess(mode)) {
+            String doneKey = payload.stableKey();
+            ScheduledFuture<?> oldDone = doneCloseTimers.remove(doneKey);
+            if (oldDone != null) oldDone.cancel(false);
+            ScheduledFuture<?> closeDone = worker.schedule(() -> {
+                doneCloseTimers.remove(doneKey);
+                if (!installed) return;
+                dispatchJson(payload.withOperation(LiveWindowPayload.OP_CLOSE).toSmartEdgeJson(false));
+            }, GAME_DONE_ALERT_CLOSE_MS, TimeUnit.MILLISECONDS);
+            doneCloseTimers.put(doneKey, closeDone);
+        }
+    }
+
+    private void cancelReviveTimerLocked(String stableKey) {
+        ScheduledFuture<?> future = reviveTimers.remove(stableKey);
+        if (future != null) future.cancel(false);
+    }
+
+    private void cancelAllReviveTimersLocked() {
+        for (ScheduledFuture<?> future : reviveTimers.values()) {
+            future.cancel(false);
+        }
+        reviveTimers.clear();
+        for (ScheduledFuture<?> future : doneCloseTimers.values()) {
+            future.cancel(false);
+        }
+        doneCloseTimers.clear();
+    }
+
     private void expireOrphansLocked() {
         if (!installed) return;
         List<LiveWindowPayload> stale = tracker.expireStale(
                 SystemClock.elapsedRealtime(), LiveWindowTracker.DEFAULT_ORPHAN_TIMEOUT_MS);
         for (LiveWindowPayload close : stale) {
+            if (close.isGameFlashback()) {
+                cancelReviveTimerLocked(close.stableKey());
+                gameRevive.onRemove(close.stableKey(), 0L, settings.gameFlashbackLeadSec());
+            }
             dispatchCard(close);
         }
         closeForgottenTimers();
@@ -483,12 +640,13 @@ final class HealthLiveWindowBridge {
     }
 
     /** Same-package non-exported notification to Health :DaemonService for local fallback sync. */
-    private void notifyDaemonState(boolean enabled, boolean watchSupported) {
+    private void notifyDaemonState(boolean enabled, boolean gameFlashbackEnabled, boolean watchSupported) {
         try {
             Intent sync = new Intent(DAEMON_SYNC_ACTION)
                     .setPackage(TargetProfile.HEALTH.packageName)
                     .addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY)
                     .putExtra("enabled", enabled)
+                    .putExtra("gameFlashbackEnabled", gameFlashbackEnabled)
                     .putExtra("watchSupported", watchSupported);
             app.sendBroadcast(sync);
         } catch (RuntimeException ignored) {}

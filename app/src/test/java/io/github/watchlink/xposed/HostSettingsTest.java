@@ -204,4 +204,34 @@ public class HostSettingsTest {
         assertTrue(settings.isRawCommandDebugEnabled());
         assertEquals(1, onCount.get());
     }
+
+    @Test public void gameFlashbackToggleAndLeadSecDefaultSafelyAndNotifyChanges() {
+        MemoryPrefs remote = new MemoryPrefs();
+        MemoryPrefs local = new MemoryPrefs();
+        HostSettings settings = new HostSettings(remote, local);
+        AtomicInteger toggleChanges = new AtomicInteger();
+        AtomicInteger lastLeadSec = new AtomicInteger(-1);
+        settings.onGameFlashbackChanged(on -> toggleChanges.incrementAndGet());
+        settings.onGameFlashbackLeadSecChanged(lastLeadSec::set);
+
+        assertFalse(settings.isGameFlashbackEnabled());
+        assertEquals(WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC, settings.gameFlashbackLeadSec());
+
+        assertTrue(settings.setLocalGameFlashbackFallback(true));
+        assertTrue(settings.setLocalGameFlashbackLeadSecFallback(12));
+        assertTrue(settings.isGameFlashbackEnabled());
+        assertEquals(12, settings.gameFlashbackLeadSec());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_GAME_FLASHBACK_ENABLED, false).commit();
+        remote.edit().putInt(WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC, 8).commit();
+        assertFalse(settings.isGameFlashbackEnabled());
+        assertEquals(8, settings.gameFlashbackLeadSec());
+        assertEquals(1, toggleChanges.get());
+        assertEquals(8, lastLeadSec.get());
+
+        // Clamping out-of-range values protects against corrupt prefs.
+        remote.edit().putInt(WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC, 99).commit();
+        assertEquals(WatchLinkPrefs.MAX_GAME_FLASHBACK_LEAD_SEC, settings.gameFlashbackLeadSec());
+        assertEquals(WatchLinkPrefs.MAX_GAME_FLASHBACK_LEAD_SEC, lastLeadSec.get());
+    }
 }

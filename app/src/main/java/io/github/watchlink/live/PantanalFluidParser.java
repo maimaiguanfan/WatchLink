@@ -47,13 +47,37 @@ public final class PantanalFluidParser {
             "com.oplus.cardservice"
     );
 
+    private static final Set<String> GAME_FLASHBACK_PACKAGES = Set.of(
+            "com.oplus.games",
+            "com.coloros.gamespace",
+            "com.coloros.gamespaceui",
+            "com.nearme.gamecenter",
+            "com.tencent.tmgp.sgame",
+            "com.tencent.tmgp.pubgmhd",
+            "com.tencent.af"
+    );
+
     // Match complete scene tokens, including names such as "eleme_takeout_card".
-    private static final Pattern PICKUP_SCENE = scenePattern("pickup|pick_up|meal_pickup");
+    private static final Pattern PICKUP_SCENE = scenePattern("pickup|pick_up|meal_pickup|parcel_pickup");
     private static final Pattern TAXI_SCENE = scenePattern("taxi|ride_hailing|ridehailing");
-    private static final Pattern DELIVERY_SCENE = scenePattern("takeout|takeaway|delivery");
+    private static final Pattern DELIVERY_SCENE = scenePattern("takeout|takeaway|delivery|express|parcel|logistics");
     private static final Pattern QUEUE_SCENE = scenePattern("queue|queuing");
+    private static final Pattern FLIGHT_SCENE = scenePattern("flight|aviation|airport|boarding|baggage");
+    private static final Pattern TRAIN_SCENE = scenePattern("train|railway|highspeed|high_speed_rail");
+    private static final Pattern MOVIE_SCENE = scenePattern("movie|cinema|film");
+    private static final Pattern GAME_FLASHBACK_SCENE = scenePattern(
+            "game_flashback|game_revive|game_assistant|gamespace|flashback_game");
     private static final Pattern LOCAL_SCENE = scenePattern(
             "ringer|silent_mode|vibrate_mode|do_not_disturb|dnd|bookmark|favorite|collection");
+
+    private static final Pattern FLIGHT_NO_PATTERN = Pattern.compile("\\b([A-Z0-9]{2}\\d{3,4})\\b");
+    private static final Pattern TRAIN_NO_PATTERN = Pattern.compile("\\b([GDCZTKSY]\\d{1,4})\\b");
+    private static final Pattern GATE_PATTERN = Pattern.compile(
+            "(?:登机口|检票口|行李转盘|行李盘)\\s*[:：]?\\s*([A-Za-z0-9\\u4e00-\\u9fa5]{1,6})");
+
+    private enum SceneKind {
+        PICK_UP, TAXI, QUEUE, DELIVERY, FLIGHT, TRAIN, MOVIE, GAME_FLASHBACK
+    }
 
     private static Pattern scenePattern(String terms) {
         return Pattern.compile("(?:^|[^a-z0-9])(?:" + terms + ")(?:$|[^a-z0-9])", Pattern.CASE_INSENSITIVE);
@@ -158,7 +182,9 @@ public final class PantanalFluidParser {
 
         boolean isProgressStyle = templateClass != null && templateClass.endsWith("ProgressStyle");
         boolean hasOplusLive = oplusLiveAlertConfig != null && oplusLiveAlertConfig.trim().startsWith("{");
-        if (!promotedOngoing && ((flags & FLAG_ONGOING_EVENT) == 0 || (!isProgressStyle && !hasOplusLive))) {
+        boolean isGamePkg = GAME_FLASHBACK_PACKAGES.contains(packageName.trim().toLowerCase(Locale.US));
+        boolean ongoing = (flags & FLAG_ONGOING_EVENT) != 0;
+        if (!promotedOngoing && (!ongoing || (!isProgressStyle && !hasOplusLive && !isGamePkg))) {
             return null;
         }
 
@@ -184,18 +210,47 @@ public final class PantanalFluidParser {
 
         // App labels and progress bars describe the presentation, not the event.
         String evidence = String.join(" ", safe(title), safe(text), safe(bigText), safe(subText), safe(shortCriticalText));
-        String eventType = classifyEvent("", evidence, Map.of());
-        if (eventType == null) return null;
-        String stableKey = "daemon:" + sbnKey.trim();
+        SceneKind kind = classifyScene("", packageName, evidence, Map.of());
+        if (kind == null) return null;
+        if (kind != SceneKind.GAME_FLASHBACK && !promotedOngoing && !isProgressStyle && !hasOplusLive) {
+            return null;
+        }
+        String baseKey = "daemon:" + sbnKey.trim();
+        if (kind == SceneKind.GAME_FLASHBACK) {
+            return buildGameFlashbackPayload(
+                    LiveWindowPayload.SOURCE_DAEMON,
+                    withGameFlashbackPrefix(baseKey),
+                    packageName,
+                    cleanTitle,
+                    cleanText,
+                    capsuleTitle,
+                    capsuleContent,
+                    pct);
+        }
+        if (kind == SceneKind.FLIGHT) {
+            return buildFlightPayload(
+                    LiveWindowPayload.SOURCE_DAEMON, baseKey, packageName,
+                    Map.of(), cleanTitle, cleanText, pct);
+        }
+        if (kind == SceneKind.TRAIN) {
+            return buildTrainPayload(
+                    LiveWindowPayload.SOURCE_DAEMON, baseKey, packageName,
+                    Map.of(), cleanTitle, cleanText, pct);
+        }
+        if (kind == SceneKind.MOVIE) {
+            return buildMoviePayload(
+                    LiveWindowPayload.SOURCE_DAEMON, baseKey, packageName,
+                    Map.of(), cleanTitle, cleanText);
+        }
         LiveWindowPayload payload = new LiveWindowPayload(
                 LiveWindowPayload.SOURCE_DAEMON,
-                stableKey,
+                baseKey,
                 packageName,
                 cleanTitle,
                 cleanText,
                 capsuleTitle,
                 capsuleContent,
-                eventType,
+                toSmartEdgeEvent(kind),
                 pct,
                 LiveWindowPayload.OP_CREATE);
         return payload.isValidForOpenOrUpdate() ? payload : null;
@@ -243,11 +298,51 @@ public final class PantanalFluidParser {
         for (String key : DISPLAY_FIELDS) {
             if (flat.get(key) instanceof String value) evidence.append(value).append(' ');
         }
-        String event = classifyEvent(scene, evidence.toString(), flat);
-        if (event == null) return null;
+        SceneKind kind = classifyScene(scene, packageName, evidence.toString(), flat);
+        if (kind == null) return null;
+        String event = toSmartEdgeEvent(kind);
 
-        // 1. MiniProgram / Store Pickup Code (verified live: Cotti Coffee 268451931 -> appName, pickupCode, waitTime)
-        String pickupCode = identifier(flat, "pickupCode", "pickUpCode", "takeCode", "mealCode", "orderCode");
+        // 0. Game Flashback (King of Glory revive / Peacekeeper Elite takeoff countdowns)
+        if (kind == SceneKind.GAME_FLASHBACK) {
+            String gTitle = firstNonEmpty(flat, "extra_title", "fluidTitle", "bigCardTitle", "smallCardTitle", "title", "appName");
+            String gText = firstNonEmpty(flat, "extra_content", "fluidContent", "bigCardDescription", "smallCardDescription",
+                    "subContent", "content", "text", "statusText", "desc");
+            String gCapTitle = firstNonEmpty(flat, "capsuleTitle", "capsuleTextLeft", "capsuleContent1", "extra_title");
+            String gCapContent = firstNonEmpty(flat, "capsuleContent", "capsuleTextRight", "capsuleContent2", "extra_content");
+            int secFromField = extractCountdownSecondsField(flat);
+            if (secFromField >= 0 && GameReviveCoordinator.parseRemainingSeconds(gText, gCapContent, gTitle) < 0) {
+                String action = GameReviveCoordinator.inferActionLabel(gTitle, gText, gCapTitle, gCapContent);
+                gText = WatchLiveTextFormatter.compactGameFlashback(action, secFromField, gText);
+                if (gCapContent.isEmpty()) gCapContent = secFromField > 0 ? (secFromField + "秒") : ("已" + action);
+            }
+            return buildGameFlashbackPayload(
+                    source, withGameFlashbackPrefix(stableKey), packageName,
+                    gTitle, gText, gCapTitle, gCapContent, -1);
+        }
+
+        // 0b. Flight / Train / Movie structured travel & ticket cards (10-cell watch compaction)
+        if (kind == SceneKind.FLIGHT) {
+            String fTitle = firstNonEmpty(flat, "fluidTitle", "bigCardTitle", "smallCardTitle", "mainTitle", "title", "mainContent");
+            String fText = firstNonEmpty(flat, "fluidContent", "bigCardDescription", "smallCardDescription", "subTitle", "subContent", "statusText", "content", "text");
+            int pct = extractProgress(flat, "currentProgress", "totalProgress");
+            if (pct < 0) pct = extractProgress(flat, "progress", "progressCount");
+            return buildFlightPayload(source, stableKey, packageName, flat, fTitle, fText, pct);
+        }
+        if (kind == SceneKind.TRAIN) {
+            String tTitle = firstNonEmpty(flat, "fluidTitle", "bigCardTitle", "smallCardTitle", "mainTitle", "title", "mainContent");
+            String tText = firstNonEmpty(flat, "fluidContent", "bigCardDescription", "smallCardDescription", "subTitle", "subContent", "statusText", "content", "text");
+            int pct = extractProgress(flat, "currentProgress", "totalProgress");
+            if (pct < 0) pct = extractProgress(flat, "progress", "progressCount");
+            return buildTrainPayload(source, stableKey, packageName, flat, tTitle, tText, pct);
+        }
+        if (kind == SceneKind.MOVIE) {
+            String mTitle = firstNonEmpty(flat, "movieName", "filmName", "fluidTitle", "bigCardTitle", "smallCardTitle", "title", "mainContent");
+            String mText = firstNonEmpty(flat, "fluidContent", "bigCardDescription", "smallCardDescription", "subTitle", "subContent", "content", "text");
+            return buildMoviePayload(source, stableKey, packageName, flat, mTitle, mText);
+        }
+
+        // 1. MiniProgram / Store / Parcel Pickup Code (verified live: Cotti Coffee 268451931 -> appName, pickupCode, waitTime)
+        String pickupCode = identifier(flat, "pickupCode", "pickUpCode", "takeCode", "mealCode", "orderCode", "parcelCode", "verifyCode");
         if (LiveWindowPayload.EVENT_PICK_UP.equals(event) && !pickupCode.isEmpty()) {
             String appName = firstNonEmpty(flat, "appName", "merchantName", "shopName", "brandName", "title", "fluidTitle");
             String itemName = firstNonEmpty(flat, "goodsName", "productName", "dishName", "itemName");
@@ -355,21 +450,56 @@ public final class PantanalFluidParser {
             "mainTitle", "subTitle", "mainContent", "subContent", "primaryText", "secondaryText",
             "fluidTitle", "fluidContent", "bigCardTitle", "smallCardTitle", "cardTitle",
             "bigCardDescription", "smallCardDescription", "cardDescription", "capsuleTitle",
-            "capsuleContent", "capsuleContent1", "capsuleContent2", "capsuleTextLeft", "capsuleTextRight");
+            "capsuleContent", "capsuleContent1", "capsuleContent2", "capsuleTextLeft", "capsuleTextRight",
+            "extra_title", "extra_content", "flightNo", "flightNumber", "trainNo", "trainNumber",
+            "gate", "boardingGate", "checkPort", "ticketGate", "baggageBelt", "movieName", "filmName");
 
     /** Returns null for an unrecognized scene, before the SmartEdge encoder normalizes its event. */
-    private static String classifyEvent(String scene, String text, Map<String, Object> flat) {
+    private static SceneKind classifyScene(String scene, String packageName, String text, Map<String, Object> flat) {
         String context = (scene + " " + text).toLowerCase(Locale.ROOT);
         if (LOCAL_SCENE.matcher(scene).find() || containsAny(context,
                 "响铃模式", "振动模式", "震动模式", "静音模式", "免打扰", "勿扰模式",
                 "收藏", "摘录", "剪藏", "识屏", "小布助手", "优惠券", "领券", "红包活动",
                 "do not disturb", "ringer mode", "saved post", "bookmark")) return null;
 
-        if (!identifier(flat, "pickupCode", "pickUpCode", "takeCode", "mealCode").isEmpty()
+        String pkgLow = packageName == null ? "" : packageName.trim().toLowerCase(Locale.US);
+        boolean isGamePkg = GAME_FLASHBACK_PACKAGES.contains(pkgLow);
+        if (GAME_FLASHBACK_SCENE.matcher(scene).find()
+                || containsAny(context, "复活倒计时", "即将复活", "已复活", "复活完成", "复活还有",
+                        "起飞倒计时", "航线准备", "准备跳伞")
+                || (isGamePkg && (containsAny(context, "复活", "起飞", "跳伞", "匹配成功", "英雄选择", "倒计时")
+                        || extractCountdownSecondsField(flat) >= 0))) {
+            return SceneKind.GAME_FLASHBACK;
+        }
+
+        boolean hasFlightId = !firstNonEmpty(flat, "flightNo", "flightNumber").isEmpty()
+                || FLIGHT_NO_PATTERN.matcher(text).find();
+        if (FLIGHT_SCENE.matcher(scene).find()
+                || (hasFlightId && containsAny(context, "航班", "登机", "登机口", "值机", "航站楼", "行李转盘", "行李盘", "起飞"))
+                || containsAny(context, "登机口", "行李转盘", "正在登机", "即将登机", "航班值机", "航班延误", "航班起飞")) {
+            return SceneKind.FLIGHT;
+        }
+
+        boolean hasTrainId = !firstNonEmpty(flat, "trainNo", "trainNumber").isEmpty()
+                || TRAIN_NO_PATTERN.matcher(text).find();
+        if (TRAIN_SCENE.matcher(scene).find()
+                || (hasTrainId && containsAny(context, "检票", "检票口", "候车", "发车", "站台", "高铁", "动车", "列车", "车次"))
+                || containsAny(context, "检票口", "正在检票", "停止检票", "候车室", "列车发车")) {
+            return SceneKind.TRAIN;
+        }
+
+        if (MOVIE_SCENE.matcher(scene).find()
+                || !firstNonEmpty(flat, "movieName", "filmName", "ticketCode").isEmpty()
+                || containsAny(context, "取票码", "电影票", "影院取票", "即将开场", "放映厅")) {
+            return SceneKind.MOVIE;
+        }
+
+        if (!identifier(flat, "pickupCode", "pickUpCode", "takeCode", "mealCode", "parcelCode").isEmpty()
                 || PICKUP_SCENE.matcher(scene).find()
                 || containsAny(context, "取餐码", "取餐号", "请取餐", "等待取餐", "待取餐", "可取餐",
+                        "取件码", "驿站取件", "快递柜", "待取件", "请取件", "凭码取件", "丰巢",
                         "pickup code", "pickup number", "ready for pickup")) {
-            return LiveWindowPayload.EVENT_PICK_UP;
+            return SceneKind.PICK_UP;
         }
         boolean hasJourneyProgress = containsAny(context, "分钟", "公里", "已接单", "即将到达", "已到达");
         if (TAXI_SCENE.matcher(scene).find()
@@ -379,21 +509,147 @@ public final class PantanalFluidParser {
                         "driver is arriving", "driver has arrived", "driver is on the way")
                 || (!firstNonEmpty(flat, "plateNumber", "licensePlate", "carNo", "carNumber", "plateNo").isEmpty()
                         && containsAny(context, "司机", "接驾", "上车", "网约车"))) {
-            return LiveWindowPayload.EVENT_TAXI;
+            return SceneKind.TAXI;
         }
         if (QUEUE_SCENE.matcher(scene).find() || !identifier(flat, "queueNo", "waitNo", "queueNumber").isEmpty()
                 || containsAny(context, "排队中", "排队进度", "排队号", "排号", "等位", "等待叫号",
                         "queue number", "in the queue")) {
-            return LiveWindowPayload.EVENT_QUEUE;
+            return SceneKind.QUEUE;
         }
         if (DELIVERY_SCENE.matcher(scene).find()
-                || (hasJourneyProgress && containsAny(context, "外卖", "骑手", "配送"))
+                || (hasJourneyProgress && containsAny(context, "外卖", "骑手", "配送", "快递", "派件"))
                 || containsAny(context, "骑手已", "骑手正", "骑手距", "骑手即将", "骑手接单", "骑手取餐",
                         "配送中", "正在配送", "外卖配送", "预计送达", "已送达", "正在派送", "正在备餐", "商家已接单",
+                        "正在派件", "派件中", "快递派送", "快件正在派送", "快递员正", "快递员已", "快递即将送达",
                         "out for delivery", "order is on the way", "order is being prepared")) {
-            return LiveWindowPayload.EVENT_DELIVERY;
+            return SceneKind.DELIVERY;
         }
         return null;
+    }
+
+    private static String toSmartEdgeEvent(SceneKind kind) {
+        return switch (kind) {
+            case DELIVERY -> LiveWindowPayload.EVENT_DELIVERY;
+            case TAXI, FLIGHT, TRAIN -> LiveWindowPayload.EVENT_TAXI;
+            case QUEUE, GAME_FLASHBACK -> LiveWindowPayload.EVENT_QUEUE;
+            case PICK_UP, MOVIE -> LiveWindowPayload.EVENT_PICK_UP;
+        };
+    }
+
+    private static String withGameFlashbackPrefix(String stableKey) {
+        if (stableKey == null || stableKey.isEmpty()) return "";
+        return stableKey.startsWith(LiveWindowPayload.GAME_FLASHBACK_KEY_PREFIX)
+                ? stableKey
+                : LiveWindowPayload.GAME_FLASHBACK_KEY_PREFIX + stableKey;
+    }
+
+    private static int extractCountdownSecondsField(Map<String, Object> flat) {
+        if (flat == null || flat.isEmpty()) return -1;
+        for (String key : List.of("reviveTime", "reviveSeconds", "countdown", "countdownSeconds", "remainTime", "leftTime", "remainSec")) {
+            Double val = readNumber(flat, key);
+            if (val != null && val >= 0 && val <= 600) return (int) Math.round(val);
+        }
+        return -1;
+    }
+
+    private static LiveWindowPayload buildGameFlashbackPayload(
+            String source, String stableKey, String packageName,
+            String rawTitle, String rawText, String rawCapTitle, String rawCapContent, int progress) {
+        int remainingSec = GameReviveCoordinator.parseRemainingSeconds(rawCapContent, rawText, rawTitle);
+        boolean completed = GameReviveCoordinator.isCompletionText(rawCapContent, rawText, rawTitle);
+        String action = GameReviveCoordinator.inferActionLabel(rawTitle, rawText, rawCapTitle, rawCapContent);
+        String fallback = firstNonEmptyStr(rawText, rawTitle, rawCapContent, rawCapTitle);
+        String line = completed
+                ? WatchLiveTextFormatter.compactGameFlashback(action, 0, fallback)
+                : WatchLiveTextFormatter.compactGameFlashback(action, remainingSec, fallback);
+        String title = line;
+        String text = line;
+        String capTitle = remainingSec > 0 ? action : WatchLiveTextFormatter.fitWithEllipsis(firstNonEmptyStr(rawCapTitle, action), 10);
+        String capContent = remainingSec > 0 ? (remainingSec + "秒") : (completed ? ("已" + action) : line);
+        LiveWindowPayload payload = new LiveWindowPayload(
+                source, stableKey, packageName, title, text, capTitle, capContent,
+                LiveWindowPayload.EVENT_QUEUE, progress, LiveWindowPayload.OP_CREATE);
+        return payload.isValidForOpenOrUpdate() ? payload : null;
+    }
+
+    private static LiveWindowPayload buildFlightPayload(
+            String source, String stableKey, String packageName,
+            Map<String, Object> flat, String rawTitle, String rawText, int progress) {
+        String combined = safe(rawTitle) + " " + safe(rawText);
+        String flightNo = firstNonEmpty(flat, "flightNo", "flightNumber");
+        if (flightNo.isEmpty()) {
+            var m = FLIGHT_NO_PATTERN.matcher(combined.toUpperCase(Locale.US));
+            if (m.find()) flightNo = m.group(1);
+        }
+        String gate = firstNonEmpty(flat, "boardingGate", "gate", "baggageBelt", "carousel", "luggageCarousel");
+        if (gate.isEmpty()) {
+            var m = GATE_PATTERN.matcher(combined);
+            if (m.find()) gate = m.group(1);
+        }
+        String status = firstNonEmpty(flat, "statusText", "subTitle", "fluidContent", "subContent");
+        if (status.isEmpty()) status = firstNonEmptyStr(rawText, rawTitle);
+        String compact = WatchLiveTextFormatter.compactFlightLine(flightNo, gate, status);
+        String title = !flightNo.isEmpty() ? flightNo : compact;
+        String capTitle = !flightNo.isEmpty() ? flightNo : WatchLiveTextFormatter.fitWithEllipsis(compact, 10);
+        String capContent = !gate.isEmpty() ? WatchLiveTextFormatter.fitWithEllipsis(gate, 12) : compact;
+        LiveWindowPayload payload = new LiveWindowPayload(
+                source, stableKey, packageName, title, compact, capTitle, capContent,
+                LiveWindowPayload.EVENT_TAXI, progress, LiveWindowPayload.OP_CREATE);
+        return payload.isValidForOpenOrUpdate() ? payload : null;
+    }
+
+    private static LiveWindowPayload buildTrainPayload(
+            String source, String stableKey, String packageName,
+            Map<String, Object> flat, String rawTitle, String rawText, int progress) {
+        String combined = safe(rawTitle) + " " + safe(rawText);
+        String trainNo = firstNonEmpty(flat, "trainNo", "trainNumber");
+        if (trainNo.isEmpty()) {
+            var m = TRAIN_NO_PATTERN.matcher(combined.toUpperCase(Locale.US));
+            if (m.find()) trainNo = m.group(1);
+        }
+        String gate = firstNonEmpty(flat, "checkPort", "ticketGate", "gate", "platform");
+        if (gate.isEmpty()) {
+            var m = GATE_PATTERN.matcher(combined);
+            if (m.find()) gate = m.group(1);
+        }
+        String status = firstNonEmpty(flat, "statusText", "subTitle", "fluidContent", "subContent");
+        if (status.isEmpty()) status = firstNonEmptyStr(rawText, rawTitle);
+        String compact = WatchLiveTextFormatter.compactTrainLine(trainNo, gate, status);
+        String title = !trainNo.isEmpty() ? trainNo : compact;
+        String capTitle = !trainNo.isEmpty() ? trainNo : WatchLiveTextFormatter.fitWithEllipsis(compact, 10);
+        String capContent = !gate.isEmpty() ? WatchLiveTextFormatter.fitWithEllipsis(gate, 12) : compact;
+        LiveWindowPayload payload = new LiveWindowPayload(
+                source, stableKey, packageName, title, compact, capTitle, capContent,
+                LiveWindowPayload.EVENT_TAXI, progress, LiveWindowPayload.OP_CREATE);
+        return payload.isValidForOpenOrUpdate() ? payload : null;
+    }
+
+    private static LiveWindowPayload buildMoviePayload(
+            String source, String stableKey, String packageName,
+            Map<String, Object> flat, String rawTitle, String rawText) {
+        String movieName = firstNonEmpty(flat, "movieName", "filmName", "title");
+        if (movieName.isEmpty()) movieName = rawTitle;
+        String ticketCode = identifier(flat, "ticketCode", "verifyCode", "pickupCode", "pickUpCode");
+        String showTime = firstNonEmpty(flat, "showTime", "startTime", "statusText", "subTitle");
+        if (ticketCode.isEmpty() && showTime.isEmpty()) {
+            String compact = WatchLiveTextFormatter.compactPickupLine(firstNonEmptyStr(rawText, rawTitle));
+            LiveWindowPayload p = new LiveWindowPayload(
+                    source, stableKey, packageName,
+                    firstNonEmptyStr(movieName, compact), compact,
+                    firstNonEmptyStr(movieName, compact), compact,
+                    LiveWindowPayload.EVENT_PICK_UP, -1, LiveWindowPayload.OP_CREATE);
+            return p.isValidForOpenOrUpdate() ? p : null;
+        }
+        String compact = WatchLiveTextFormatter.compactMovieLine(movieName, ticketCode, showTime);
+        String capTitle = WatchLiveTextFormatter.fitWithEllipsis(firstNonEmptyStr(movieName, "电影票"), 10);
+        String capContent = !ticketCode.isEmpty()
+                ? WatchLiveTextFormatter.cleanPickupCode(ticketCode)
+                : WatchLiveTextFormatter.fitWithEllipsis(firstNonEmptyStr(showTime, compact), 12);
+        LiveWindowPayload p = new LiveWindowPayload(
+                source, stableKey, packageName,
+                firstNonEmptyStr(movieName, compact), compact, capTitle, capContent,
+                LiveWindowPayload.EVENT_PICK_UP, -1, LiveWindowPayload.OP_CREATE);
+        return p.isValidForOpenOrUpdate() ? p : null;
     }
 
     private static boolean containsAny(String text, String... phrases) {

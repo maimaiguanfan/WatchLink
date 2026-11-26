@@ -117,6 +117,33 @@ public class LiveWindowPayloadTest {
         WatchLiveTextFormatter.Pair longCodePair = WatchLiveTextFormatter.compactPickupCapsule("卡布奇诺", "取餐码 ABCD12345");
         assertEquals("", longCodePair.title());
         assertEquals("ABCD12345", longCodePair.content());
+
+        // Express parcel pickup code & travel/movie/game 10-cell formatters.
+        // "菜鸟驿站 1-2-34" would be 10.5 cells (21 half-cells) -> ellipsizes prefix to protect full code "1-2-34"!
+        String parcel = WatchLiveTextFormatter.compactPickupLine("菜鸟驿站 驿站取件码 1-2-34");
+        assertEquals("菜鸟… 1-2-34", parcel);
+        assertTrue(WatchLiveTextFormatter.halfCells(parcel) <= 20);
+        assertEquals("驿站 1-2-34", WatchLiveTextFormatter.compactPickupLine("驿站 驿站取件码 1-2-34"));
+        assertTrue(WatchLiveTextFormatter.halfCells(WatchLiveTextFormatter.compactFlightLine("CA1234", "B12", "登机中")) <= 20);
+        assertTrue(WatchLiveTextFormatter.halfCells(WatchLiveTextFormatter.compactTrainLine("G123", "检5B", "检票中")) <= 20);
+        assertTrue(WatchLiveTextFormatter.halfCells(WatchLiveTextFormatter.compactMovieLine("流浪地球3超长副标题", "842190", "")) <= 20);
+        assertEquals("复活 28秒", WatchLiveTextFormatter.compactGameFlashback("复活", 28, ""));
+    }
+
+    @Test public void explicitRemindOverrideAllowsUpdateVibrationButNeverOnClose() {
+        LiveWindowPayload update = new LiveWindowPayload(
+                LiveWindowPayload.SOURCE_UMS, LiveWindowPayload.GAME_FLASHBACK_KEY_PREFIX + "ums:g", "com.tencent.tmgp.sgame",
+                "即将复活 5秒", "还有5秒复活", "即将复活", "5秒",
+                LiveWindowPayload.EVENT_QUEUE, -1, LiveWindowPayload.OP_UPDATE);
+        assertTrue(update.isGameFlashback());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> cap = (Map<String, Object>) SimpleJson.parseObject(update.toSmartEdgeJson(true)).get("notification.live.capsule");
+        assertEquals(Boolean.TRUE, cap.get("notification.live.capsuleRemind"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> closeCap = (Map<String, Object>) SimpleJson.parseObject(
+                update.withOperation(LiveWindowPayload.OP_CLOSE).toSmartEdgeJson(true)).get("notification.live.capsule");
+        assertEquals(Boolean.FALSE, closeCap.get("notification.live.capsuleRemind"));
     }
 
     @Test public void deterministicIdAndRedactedToString() {

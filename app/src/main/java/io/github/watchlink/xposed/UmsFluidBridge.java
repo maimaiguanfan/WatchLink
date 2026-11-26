@@ -41,6 +41,7 @@ final class UmsFluidBridge {
     private static final Uri DECISION_SYSUI_URI =
             Uri.parse("content://com.oplus.pantanal.ums.decision/systemui/services");
     private static final String DECISION_KEY_PREFIX = "ums:";
+    private static final String GAME_DECISION_KEY_PREFIX = LiveWindowPayload.GAME_FLASHBACK_KEY_PREFIX + DECISION_KEY_PREFIX;
     private static final int MAX_PROTO_BYTES = 65_536;
     private static final long DEBOUNCE_SYNC_MS = 280L;
 
@@ -85,22 +86,42 @@ final class UmsFluidBridge {
                 scheduleDecisionSync(100L);
             } else {
                 worker.execute(() -> {
-                    tracker.closeAll();
-                    cardTypeToStableKey.clear();
+                    tracker.closeSourceGroup(false);
+                    cardTypeToStableKey.values().removeIf(k -> !k.startsWith(LiveWindowPayload.GAME_FLASHBACK_KEY_PREFIX));
+                });
+            }
+        });
+        settings.onGameFlashbackChanged(enabled -> {
+            if (Boolean.TRUE.equals(enabled)) {
+                scheduleDecisionSync(100L);
+            } else {
+                worker.execute(() -> {
+                    tracker.closeGameFlashback();
+                    cardTypeToStableKey.values().removeIf(k -> k.startsWith(LiveWindowPayload.GAME_FLASHBACK_KEY_PREFIX));
                 });
             }
         });
 
         installed = true;
         ProbeLog.info("UMS_LIVE_READY source=UMS resolver=" + (strategyHooked ? resolverSource : "DEGRADED"));
-        if (settings.isLiveWindowEnabled()) {
+        if (anyLiveFeatureEnabled()) {
             scheduleDecisionSync(1_000L);
         }
+    }
+
+    private boolean anyLiveFeatureEnabled() {
+        return settings.isLiveWindowEnabled() || settings.isGameFlashbackEnabled();
+    }
+
+    private boolean isPayloadEnabled(LiveWindowPayload payload) {
+        if (payload == null) return false;
+        return payload.isGameFlashback() ? settings.isGameFlashbackEnabled() : settings.isLiveWindowEnabled();
     }
 
     void close() {
         installed = false;
         settings.onLiveWindowChanged(null);
+        settings.onGameFlashbackChanged(null);
         if (pendingDecisionSync != null) {
             pendingDecisionSync.cancel(false);
             pendingDecisionSync = null;
@@ -144,7 +165,7 @@ final class UmsFluidBridge {
             if (pushMethod == null || removeMethod == null) return false;
 
             installer.observe("ums.fluid.push", pushMethod, (chain, result) -> {
-                if (!installed || !settings.isLiveWindowEnabled()) return;
+                if (!installed || !anyLiveFeatureEnabled()) return;
                 Object cardIdObj = chain.getArg(0);
                 Object rawArg = chain.getArg(1);
                 if (cardIdObj == null || !(rawArg instanceof byte[] bytes) || bytes.length == 0 || bytes.length > MAX_PROTO_BYTES) {
@@ -157,7 +178,7 @@ final class UmsFluidBridge {
             });
 
             installer.observe("ums.fluid.remove", removeMethod, (chain, result) -> {
-                if (!installed || !settings.isLiveWindowEnabled()) return;
+                if (!installed || !anyLiveFeatureEnabled()) return;
                 Object cardIdObj = chain.getArg(0);
                 int cardType = cardIdObj == null ? -1 : callInt(cardIdObj, "getCardType", -1);
                 worker.execute(() -> handleRemoveOnWorker(cardType));
@@ -174,7 +195,7 @@ final class UmsFluidBridge {
             Class<?> policyCls = installer.target("com.oplus.pantanal.ums.cardservice.valueobject.policy.UiDataChannelPolicy");
             Method unObserve = policyCls.getDeclaredMethod("unObserve", String.class);
             installer.observe("ums.fluid.unobserve", unObserve, (chain, result) -> {
-                if (installed && settings.isLiveWindowEnabled()) {
+                if (installed && anyLiveFeatureEnabled()) {
                     scheduleDecisionSync(DEBOUNCE_SYNC_MS);
                 }
             });
@@ -185,7 +206,7 @@ final class UmsFluidBridge {
         try {
             ContentObserver observer = new ContentObserver(new Handler(Looper.getMainLooper())) {
                 @Override public void onChange(boolean selfChange) {
-                    if (installed && settings.isLiveWindowEnabled()) {
+                    if (installed && anyLiveFeatureEnabled()) {
                         scheduleDecisionSync(DEBOUNCE_SYNC_MS);
                     }
                 }
@@ -208,7 +229,7 @@ final class UmsFluidBridge {
     }
 
     private void syncDecisionSnapshotOnWorker() {
-        if (!installed || !settings.isLiveWindowEnabled()) return;
+        if (!installed || !anyLiveFeatureEnabled()) return;
         Set<String> presentKeys = new HashSet<>();
         long nowElapsed = SystemClock.elapsedRealtime();
         try (Cursor c = app.getContentResolver().query(DECISION_SYSUI_URI, null, null, null, null)) {
@@ -237,7 +258,7 @@ final class UmsFluidBridge {
 
                 LiveWindowPayload parsed = PantanalFluidParser.parseDecisionRow(
                         serviceId, instanceId, hostPkg, domain, subDomain, bizData, param);
-                if (parsed == null) continue;
+                if (!isPayloadEnabled(parsed)) continue;
                 presentKeys.add(parsed.stableKey());
                 LiveWindowPayload outbound = tracker.onUpsert(parsed, nowElapsed);
                 if (outbound != null) {
@@ -253,10 +274,14 @@ final class UmsFluidBridge {
         for (LiveWindowPayload close : removed) {
             sendToHealth(close, true);
         }
+        List<LiveWindowPayload> removedGames = tracker.reconcilePrefix(GAME_DECISION_KEY_PREFIX, presentKeys);
+        for (LiveWindowPayload close : removedGames) {
+            sendToHealth(close, true);
+        }
     }
 
     private void handlePushOnWorker(int cardType, String widgetCode, byte[] raw) {
-        if (!installed || !settings.isLiveWindowEnabled()) return;
+        if (!installed || !anyLiveFeatureEnabled()) return;
         DecodedProto decoded = decodeUiBytes(raw);
         if (decoded == null || decoded.json == null || decoded.json.isEmpty()) return;
 
@@ -264,7 +289,7 @@ final class UmsFluidBridge {
         LiveWindowPayload parsed = PantanalFluidParser.parsePushData(
                 cardType, decoded.cardId, widgetCode, decoded.layoutName, decoded.cardName,
                 decoded.json, "", existingKey);
-        if (parsed == null) return;
+        if (!isPayloadEnabled(parsed)) return;
         if (cardType > 0) {
             cardTypeToStableKey.put(cardType, parsed.stableKey());
         }

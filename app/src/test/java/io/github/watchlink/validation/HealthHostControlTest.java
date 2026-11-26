@@ -99,4 +99,26 @@ public class HealthHostControlTest {
         assertEquals("NONE", poisoned.liveDispatchMode());
         assertEquals("IDLE", poisoned.liveTestState());
     }
+
+    @Test public void parsesAndClampsGameFlashbackLeadSecCommandsAndReplies() {
+        assertEquals("SET_GAME_FLASHBACK_LEAD:0", HealthHostControl.setGameFlashbackLeadSecCommand(-5));
+        assertEquals("SET_GAME_FLASHBACK_LEAD:7", HealthHostControl.setGameFlashbackLeadSecCommand(7));
+        assertEquals("SET_GAME_FLASHBACK_LEAD:30", HealthHostControl.setGameFlashbackLeadSecCommand(99));
+
+        assertEquals(0, HealthHostControl.parseGameFlashbackLeadSecCommand("SET_GAME_FLASHBACK_LEAD:0"));
+        assertEquals(15, HealthHostControl.parseGameFlashbackLeadSecCommand("SET_GAME_FLASHBACK_LEAD:15"));
+        assertEquals(-1, HealthHostControl.parseGameFlashbackLeadSecCommand("SET_GAME_FLASHBACK_LEAD:31"));
+        assertEquals(-1, HealthHostControl.parseGameFlashbackLeadSecCommand("SET_GAME_FLASHBACK_LEAD:abc"));
+        assertEquals(-1, HealthHostControl.parseGameFlashbackLeadSecCommand("QUERY"));
+
+        var reply = new HealthHostControl.Reply(
+                true, true, false, true, true, true, "CACHE",
+                "READY_SUPPORTED_ON", "START_SERVICE", "SDK_AND_INTENT",
+                "IDLE", "NONE", "NONE",
+                false, "UNKNOWN", false, 0, "NONE", "NONE", 0L,
+                false, "SUPPORTED_LIVE_LEVEL", 1, "OPENED", "UMS", "START_SERVICE", "IDLE",
+                false, true, 99);
+        assertTrue(reply.gameFlashbackEnabled());
+        assertEquals(30, reply.gameFlashbackLeadSec());
+    }
 }

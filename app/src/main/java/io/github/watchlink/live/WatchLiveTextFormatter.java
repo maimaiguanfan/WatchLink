@@ -18,13 +18,14 @@ public final class WatchLiveTextFormatter {
     private static final int CHAR_HALF_CELLS = 2;
 
     private static final Pattern LABELED_CODE = Pattern.compile(
-            "(?:凭码取餐|取餐凭证|取餐码|取餐号|取单码|取货码|取件码)\\s*[:：#]?\\s*([A-Za-z]{0,4}[-·]?\\d{1,8}[A-Za-z]?)");
+            "(?:驿站取件码|快递柜取件码|凭码取餐|凭码取件|取餐凭证|取餐码|取餐号|取单码|取货码|取件码|取票码|提取码)\\s*[:：#]?\\s*([A-Za-z0-9]{1,4}(?:[-·][A-Za-z0-9]{1,6}){1,3}|[A-Za-z]{0,4}[-·]?\\d{1,8}[A-Za-z]?)");
     private static final Pattern BARE_LABEL = Pattern.compile(
-            "(?:凭码取餐|取餐凭证|取餐码|取餐号|取单码|取货码|取件码)\\s*[:：#]?");
+            "(?:驿站取件码|快递柜取件码|凭码取餐|凭码取件|取餐凭证|取餐码|取餐号|取单码|取货码|取件码|取票码|提取码)\\s*[:：#]?");
     private static final Pattern STANDALONE_CODE = Pattern.compile(
-            "^[A-Za-z]{0,4}[-·]?\\d{1,8}[A-Za-z]?$");
+            "^(?:[A-Za-z0-9]{1,4}(?:[-·][A-Za-z0-9]{1,6}){1,3}|[A-Za-z]{0,4}[-·]?\\d{1,8}[A-Za-z]?)$");
     private static final Pattern TRAILING_CODE = Pattern.compile(
-            "^(.*?)\\s+([A-Za-z]{0,4}[-·]?\\d{1,8}[A-Za-z]?)$");
+            "^(.*?)\\s+([A-Za-z0-9]{1,4}(?:[-·][A-Za-z0-9]{1,6}){1,3}|[A-Za-z]{0,4}[-·]?\\d{1,8}[A-Za-z]?)$");
+    private static final Pattern HAS_DIGIT = Pattern.compile(".*\\d.*");
 
     public record Pair(String title, String content) {}
 
@@ -77,7 +78,7 @@ public final class WatchLiveTextFormatter {
         if (trailing.matches()) {
             String prefix = trimEdgeSeparators(trailing.group(1));
             String code = trailing.group(2).trim();
-            if (!prefix.isEmpty() && !code.isEmpty()) {
+            if (!prefix.isEmpty() && !code.isEmpty() && HAS_DIGIT.matcher(code).matches()) {
                 return assembleWithProtectedCode(prefix, code, "", maxHalfCells);
             }
         }
@@ -110,11 +111,11 @@ public final class WatchLiveTextFormatter {
             suffix = trimEdgeSeparators(content.substring(contentLabeled.end()));
         } else {
             String cleanedContent = trimEdgeSeparators(BARE_LABEL.matcher(content).replaceAll(" "));
-            if (STANDALONE_CODE.matcher(cleanedContent).matches()) {
+            if (STANDALONE_CODE.matcher(cleanedContent).matches() && HAS_DIGIT.matcher(cleanedContent).matches()) {
                 code = cleanedContent;
             } else {
                 Matcher contentTrailing = TRAILING_CODE.matcher(cleanedContent);
-                if (contentTrailing.matches()) {
+                if (contentTrailing.matches() && HAS_DIGIT.matcher(contentTrailing.group(2)).matches()) {
                     extractedItem = trimEdgeSeparators(contentTrailing.group(1));
                     code = contentTrailing.group(2).trim();
                 } else {
@@ -179,35 +180,90 @@ public final class WatchLiveTextFormatter {
         return assembleWithProtectedCode(trimEdgeSeparators(item), code, trimEdgeSeparators(waitTime), MAX_WATCH_HALF_CELLS);
     }
 
+    /** Formats a flight line prioritizing flight number + gate/baggage belt within 10.0 watch cells. */
+    public static String compactFlightLine(String flightNo, String gateOrBelt, String status) {
+        String fn = trimEdgeSeparators(flightNo);
+        String detail = trimEdgeSeparators(gateOrBelt);
+        if (detail.isEmpty()) detail = trimEdgeSeparators(status);
+        if (fn.isEmpty()) return fitWithEllipsis(detail, MAX_WATCH_HALF_CELLS);
+        if (detail.isEmpty()) return fitWithEllipsis(fn, MAX_WATCH_HALF_CELLS);
+        return assembleWithProtectedCode(detail, fn, "", MAX_WATCH_HALF_CELLS, true);
+    }
+
+    /** Formats a train line prioritizing train number + check-in gate within 10.0 watch cells. */
+    public static String compactTrainLine(String trainNo, String gate, String status) {
+        String tn = trimEdgeSeparators(trainNo);
+        String detail = trimEdgeSeparators(gate);
+        if (detail.isEmpty()) detail = trimEdgeSeparators(status);
+        if (tn.isEmpty()) return fitWithEllipsis(detail, MAX_WATCH_HALF_CELLS);
+        if (detail.isEmpty()) return fitWithEllipsis(tn, MAX_WATCH_HALF_CELLS);
+        return assembleWithProtectedCode(detail, tn, "", MAX_WATCH_HALF_CELLS, true);
+    }
+
+    /** Formats a movie ticket line stripping boilerplate and protecting ticket code or show time within 10.0 cells. */
+    public static String compactMovieLine(String movieName, String ticketCode, String showTime) {
+        String code = cleanPickupCode(ticketCode);
+        String title = trimEdgeSeparators(BARE_LABEL.matcher(collapseSpaces(movieName)).replaceAll(" "));
+        if (!code.isEmpty()) {
+            return assembleWithProtectedCode(title, code, trimEdgeSeparators(showTime), MAX_WATCH_HALF_CELLS);
+        }
+        String time = trimEdgeSeparators(showTime);
+        if (!time.isEmpty() && !title.isEmpty()) {
+            return assembleWithProtectedCode(title, time, "", MAX_WATCH_HALF_CELLS);
+        }
+        return fitWithEllipsis(!title.isEmpty() ? title : time, MAX_WATCH_HALF_CELLS);
+    }
+
+    /** Formats a game flashback countdown line prioritizing action + remaining seconds within 10.0 cells. */
+    public static String compactGameFlashback(String actionLabel, int remainingSec, String fallbackText) {
+        String label = trimEdgeSeparators(actionLabel);
+        if (remainingSec > 0) {
+            String secText = remainingSec + "秒";
+            if (label.isEmpty()) label = "复活";
+            return assembleWithProtectedCode(label, secText, "", MAX_WATCH_HALF_CELLS);
+        }
+        if (remainingSec == 0) {
+            if (label.isEmpty()) return "已复活";
+            return fitWithEllipsis(label.startsWith("已") ? label : ("已" + label), MAX_WATCH_HALF_CELLS);
+        }
+        String cleanFallback = trimEdgeSeparators(fallbackText);
+        return fitWithEllipsis(!cleanFallback.isEmpty() ? cleanFallback : label, MAX_WATCH_HALF_CELLS);
+    }
+
     private static String assembleWithProtectedCode(String prefix, String code, String suffix, int maxHalfCells) {
-        if (code.isEmpty()) {
-            String combined = !prefix.isEmpty() ? prefix : suffix;
+        return assembleWithProtectedCode(prefix, code, suffix, maxHalfCells, false);
+    }
+
+    private static String assembleWithProtectedCode(
+            String other, String protectedToken, String suffix, int maxHalfCells, boolean tokenFirst) {
+        if (protectedToken.isEmpty()) {
+            String combined = !other.isEmpty() ? other : suffix;
             return fitWithEllipsis(combined, maxHalfCells);
         }
-        int codeWidth = halfCells(code);
-        if (codeWidth >= maxHalfCells) return code;
+        int tokenWidth = halfCells(protectedToken);
+        if (tokenWidth >= maxHalfCells) return protectedToken;
 
-        if (!prefix.isEmpty()) {
-            int budget = maxHalfCells - SPACE_HALF_CELLS - codeWidth;
+        if (!other.isEmpty()) {
+            int budget = maxHalfCells - SPACE_HALF_CELLS - tokenWidth;
             if (budget >= CHAR_HALF_CELLS * 2) {
-                String fittedPrefix = fitWithEllipsis(prefix, budget);
-                if (!fittedPrefix.isEmpty()) {
-                    return fittedPrefix + " " + code;
+                String fittedOther = fitWithEllipsis(other, budget);
+                if (!fittedOther.isEmpty()) {
+                    return tokenFirst ? (protectedToken + " " + fittedOther) : (fittedOther + " " + protectedToken);
                 }
             }
-            return code;
+            return protectedToken;
         }
 
         if (!suffix.isEmpty()) {
-            int budget = maxHalfCells - SPACE_HALF_CELLS - codeWidth;
+            int budget = maxHalfCells - SPACE_HALF_CELLS - tokenWidth;
             if (budget >= CHAR_HALF_CELLS * 2) {
                 String fittedSuffix = fitWithEllipsis(suffix, budget);
                 if (!fittedSuffix.isEmpty()) {
-                    return code + " " + fittedSuffix;
+                    return protectedToken + " " + fittedSuffix;
                 }
             }
         }
-        return code;
+        return protectedToken;
     }
 
     static String fitWithEllipsis(String text, int maxHalfCells) {

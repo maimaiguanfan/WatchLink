@@ -46,6 +46,7 @@ final class HealthDaemonLiveBridge {
     private final SharedPreferences remotePrefs;
     private final List<XposedInterface.HookHandle> handles = new ArrayList<>();
     private final Set<String> activeKeys = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final Set<String> activeGameKeys = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final Map<String, String> appLabelCache = new ConcurrentHashMap<>();
     private final ScheduledThreadPoolExecutor worker = new ScheduledThreadPoolExecutor(1, r -> {
         Thread t = new Thread(r, "WatchLink-daemon-live");
@@ -88,16 +89,28 @@ final class HealthDaemonLiveBridge {
             Method onRemoved = listenerCls.getDeclaredMethod("onNotificationRemoved", StatusBarNotification.class);
 
             handles.add(buildHook(onPosted, "health.daemon.live.posted").intercept(chain -> {
-                if (active && watchSupported && hostSettings.isLiveWindowEnabled()) {
+                boolean regularEnabled = hostSettings.isLiveWindowEnabled();
+                boolean gameEnabled = hostSettings.isGameFlashbackEnabled();
+                if (active && watchSupported && (regularEnabled || gameEnabled)) {
                     Object arg = chain.getArg(0);
                     if (arg instanceof StatusBarNotification sbn) {
                         LiveWindowPayload payload = extractLivePayload(sbn);
                         if (payload != null) {
-                            if (activeKeys.size() < MAX_TRACKED_KEYS || activeKeys.contains(sbn.getKey())) {
-                                activeKeys.add(sbn.getKey());
-                                forwardAsync(payload, false);
-                                // Suppress duplicate ordinary watch notification in-place.
-                                return null;
+                            boolean allowed = payload.isGameFlashback() ? gameEnabled : regularEnabled;
+                            if (allowed) {
+                                if (activeKeys.size() < MAX_TRACKED_KEYS || activeKeys.contains(sbn.getKey())) {
+                                    activeKeys.add(sbn.getKey());
+                                    if (payload.isGameFlashback()) {
+                                        activeGameKeys.add(sbn.getKey());
+                                    } else {
+                                        activeGameKeys.remove(sbn.getKey());
+                                    }
+                                    forwardAsync(payload, false);
+                                    // Suppress duplicate ordinary watch notification in-place.
+                                    return null;
+                                }
+                            } else {
+                                closeIfTracked(sbn);
                             }
                         } else {
                             // A notification ID can be reused for an unrelated card.
@@ -119,7 +132,13 @@ final class HealthDaemonLiveBridge {
             }));
 
             hostSettings.onLiveWindowChanged(enabled -> {
-                if (!Boolean.TRUE.equals(enabled)) activeKeys.clear();
+                if (!Boolean.TRUE.equals(enabled)) activeKeys.removeIf(k -> !activeGameKeys.contains(k));
+            });
+            hostSettings.onGameFlashbackChanged(enabled -> {
+                if (!Boolean.TRUE.equals(enabled)) {
+                    activeKeys.removeAll(activeGameKeys);
+                    activeGameKeys.clear();
+                }
             });
 
             active = true;
@@ -134,6 +153,7 @@ final class HealthDaemonLiveBridge {
         if (!closed.compareAndSet(false, true)) return;
         active = false;
         activeKeys.clear();
+        activeGameKeys.clear();
         if (syncReceiver != null) {
             try { app.unregisterReceiver(syncReceiver); } catch (RuntimeException ignored) {}
             syncReceiver = null;
@@ -154,9 +174,15 @@ final class HealthDaemonLiveBridge {
             @Override public void onReceive(Context context, Intent intent) {
                 if (!HealthLiveWindowBridge.DAEMON_SYNC_ACTION.equals(intent.getAction())) return;
                 boolean enabled = intent.getBooleanExtra("enabled", false);
+                boolean gameEnabled = intent.getBooleanExtra("gameFlashbackEnabled", false);
                 watchSupported = intent.getBooleanExtra("watchSupported", true);
                 hostSettings.setLocalLiveWindowFallback(enabled);
-                if (!enabled) activeKeys.clear();
+                hostSettings.setLocalGameFlashbackFallback(gameEnabled);
+                if (!enabled) activeKeys.removeIf(k -> !activeGameKeys.contains(k));
+                if (!gameEnabled) {
+                    activeKeys.removeAll(activeGameKeys);
+                    activeGameKeys.clear();
+                }
             }
         };
         app.registerReceiver(r, new IntentFilter(HealthLiveWindowBridge.DAEMON_SYNC_ACTION), Context.RECEIVER_NOT_EXPORTED);
@@ -180,12 +206,14 @@ final class HealthDaemonLiveBridge {
             String template = extras == null ? null : extras.getString(Notification.EXTRA_TEMPLATE);
             Object rawOplus = extras == null ? null : extras.get("oplusLiveAlertAppConfig");
             String oplusConfig = rawOplus instanceof String s ? s : null;
+            boolean ongoing = (n.flags & Notification.FLAG_ONGOING_EVENT) != 0;
+            String pkg = sbn.getPackageName();
             if (!promoted
                     && (template == null || !template.endsWith("ProgressStyle"))
-                    && (oplusConfig == null || oplusConfig.isEmpty())) {
+                    && (oplusConfig == null || oplusConfig.isEmpty())
+                    && !ongoing) {
                 return null;
             }
-            String pkg = sbn.getPackageName();
             String label = cachedAppLabel(pkg);
             String title = charSeq(extras, Notification.EXTRA_TITLE);
             String text = charSeq(extras, Notification.EXTRA_TEXT);
@@ -206,8 +234,11 @@ final class HealthDaemonLiveBridge {
     private void closeIfTracked(StatusBarNotification sbn) {
         String key = sbn.getKey();
         if (key == null || !activeKeys.remove(key)) return;
-        forwardAsync(new LiveWindowPayload(LiveWindowPayload.SOURCE_DAEMON, "daemon:" + key.trim(),
-                sbn.getPackageName(), "", "", "", "", LiveWindowPayload.EVENT_PICK_UP,
+        boolean game = activeGameKeys.remove(key);
+        String stableKey = (game ? LiveWindowPayload.GAME_FLASHBACK_KEY_PREFIX : "") + "daemon:" + key.trim();
+        forwardAsync(new LiveWindowPayload(LiveWindowPayload.SOURCE_DAEMON, stableKey,
+                sbn.getPackageName(), "", "", "", "",
+                game ? LiveWindowPayload.EVENT_QUEUE : LiveWindowPayload.EVENT_PICK_UP,
                 -1, LiveWindowPayload.OP_CLOSE), true);
     }
 

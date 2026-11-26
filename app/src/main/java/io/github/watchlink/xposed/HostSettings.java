@@ -20,6 +20,8 @@ final class HostSettings {
     private volatile Runnable calendarDisabledCallback;
     private volatile Consumer<Boolean> wifiAutoSyncChangedCallback;
     private volatile Consumer<Boolean> liveWindowChangedCallback;
+    private volatile Consumer<Boolean> gameFlashbackChangedCallback;
+    private volatile Consumer<Integer> gameFlashbackLeadSecChangedCallback;
     private volatile Consumer<Boolean> rawCommandDebugChangedCallback;
 
     HostSettings(SharedPreferences remote, SharedPreferences local) {
@@ -47,6 +49,19 @@ final class HostSettings {
                     Consumer<Boolean> callback = liveWindowChangedCallback;
                     if (callback != null) {
                         callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_GAME_FLASHBACK_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = gameFlashbackChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_GAME_FLASHBACK_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC.equals(key)) {
+                    Consumer<Integer> callback = gameFlashbackLeadSecChangedCallback;
+                    if (callback != null) {
+                        int sec = WatchLinkPrefs.clampGameFlashbackLeadSec(
+                                prefs.getInt(WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC,
+                                        WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC));
+                        callback.accept(sec);
                     }
                 } else if (WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG.equals(key)) {
                     Consumer<Boolean> callback = rawCommandDebugChangedCallback;
@@ -105,6 +120,25 @@ final class HostSettings {
         return readBoolean(WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED);
     }
 
+    boolean isGameFlashbackEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_GAME_FLASHBACK_ENABLED);
+    }
+
+    int gameFlashbackLeadSec() {
+        if (remote != null) {
+            try {
+                if (remote.contains(WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC)) {
+                    return WatchLinkPrefs.clampGameFlashbackLeadSec(
+                            remote.getInt(WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC,
+                                    WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC));
+                }
+            } catch (RuntimeException ignored) { /* Fall back to host-local preference. */ }
+        }
+        return WatchLinkPrefs.clampGameFlashbackLeadSec(
+                local.getInt(WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC,
+                        WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC));
+    }
+
     boolean isRawCommandDebugEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG);
     }
@@ -147,6 +181,15 @@ final class HostSettings {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED, enabled).commit();
     }
 
+    boolean setLocalGameFlashbackFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_GAME_FLASHBACK_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalGameFlashbackLeadSecFallback(int leadSec) {
+        return local.edit().putInt(WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC,
+                WatchLinkPrefs.clampGameFlashbackLeadSec(leadSec)).commit();
+    }
+
     boolean setLocalRawCommandDebugFallback(boolean enabled) {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, enabled).commit();
     }
@@ -167,6 +210,14 @@ final class HostSettings {
         liveWindowChangedCallback = callback;
     }
 
+    void onGameFlashbackChanged(Consumer<Boolean> callback) {
+        gameFlashbackChangedCallback = callback;
+    }
+
+    void onGameFlashbackLeadSecChanged(Consumer<Integer> callback) {
+        gameFlashbackLeadSecChangedCallback = callback;
+    }
+
     void onRawCommandDebugChanged(Consumer<Boolean> callback) {
         rawCommandDebugChangedCallback = callback;
     }
@@ -177,6 +228,8 @@ final class HostSettings {
         calendarDisabledCallback = null;
         wifiAutoSyncChangedCallback = null;
         liveWindowChangedCallback = null;
+        gameFlashbackChangedCallback = null;
+        gameFlashbackLeadSecChangedCallback = null;
         rawCommandDebugChangedCallback = null;
         if (remote != null && remoteListener != null) {
             try { remote.unregisterOnSharedPreferenceChangeListener(remoteListener); }
