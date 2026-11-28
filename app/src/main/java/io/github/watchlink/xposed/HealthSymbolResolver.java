@@ -27,7 +27,7 @@ import java.util.zip.ZipFile;
  * structurally by interfaces, superclass, and log markers ONCE and caches by APK fingerprint.
  */
 final class HealthSymbolResolver {
-    static final String SCHEMA = "health-v6";
+    static final String SCHEMA = "health-v7";
     private static final String D_PLUGIN_PROXY = "Lcom/huawei/haf/bundle/AppBundlePluginProxy;";
     private static final String D_DEVICE_MGR_API = "Lcom/huawei/health/devicemgr/api/DeviceMgrApi;";
     private static final String D_SAMPLE_CMD_API = "Lcom/huawei/health/devicemgr/api/outofprocess/SendSampleCommandApi;";
@@ -56,39 +56,49 @@ final class HealthSymbolResolver {
             String sleepStatusMgrClass,
             String notifySendDataClass,
             String notifyReminderMethod,
+            String batteryInfoClass,
             String source) {
+
+        Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
+                String deviceMgrFactoryClass, String wifiSyncMgrClass, String liveNotifyMgrClass,
+                String sampleCommandApiClass, String sleepStatusMgrClass, String notifySendDataClass,
+                String notifyReminderMethod, String source) {
+            this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
+                    wifiSyncMgrClass, liveNotifyMgrClass, sampleCommandApiClass, sleepStatusMgrClass,
+                    notifySendDataClass, notifyReminderMethod, "", source);
+        }
 
         Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
                 String deviceMgrFactoryClass, String wifiSyncMgrClass, String liveNotifyMgrClass,
                 String sampleCommandApiClass, String sleepStatusMgrClass, String source) {
             this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
                     wifiSyncMgrClass, liveNotifyMgrClass, sampleCommandApiClass, sleepStatusMgrClass,
-                    "", "", source);
+                    "", "", "", source);
         }
 
         Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
                 String deviceMgrFactoryClass, String wifiSyncMgrClass, String liveNotifyMgrClass,
                 String sampleCommandApiClass, String source) {
             this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
-                    wifiSyncMgrClass, liveNotifyMgrClass, sampleCommandApiClass, "", "", "", source);
+                    wifiSyncMgrClass, liveNotifyMgrClass, sampleCommandApiClass, "", "", "", "", source);
         }
 
         Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
                 String deviceMgrFactoryClass, String wifiSyncMgrClass, String liveNotifyMgrClass, String source) {
             this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
-                    wifiSyncMgrClass, liveNotifyMgrClass, "", "", "", "", source);
+                    wifiSyncMgrClass, liveNotifyMgrClass, "", "", "", "", "", source);
         }
 
         Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
                 String deviceMgrFactoryClass, String wifiSyncMgrClass, String source) {
             this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
-                    wifiSyncMgrClass, "", "", "", "", "", source);
+                    wifiSyncMgrClass, "", "", "", "", "", "", source);
         }
 
         Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
                 String deviceMgrFactoryClass, String source) {
             this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
-                    "", "", "", "", "", "", source);
+                    "", "", "", "", "", "", "", source);
         }
 
         boolean completeSdk() {
@@ -107,6 +117,7 @@ final class HealthSymbolResolver {
             map.put("sleepStatusMgrClass", empty(sleepStatusMgrClass));
             map.put("notifySendDataClass", empty(notifySendDataClass));
             map.put("notifyReminderMethod", empty(notifyReminderMethod));
+            map.put("batteryInfoClass", empty(batteryInfoClass));
             return map;
         }
 
@@ -122,11 +133,13 @@ final class HealthSymbolResolver {
             String sleepMgr = map.getOrDefault("sleepStatusMgrClass", "");
             String notifySend = map.getOrDefault("notifySendDataClass", "");
             String notifyRem = map.getOrDefault("notifyReminderMethod", "");
+            String batteryInfo = map.getOrDefault("batteryInfoClass", "");
             if (catalog.isEmpty() && send.isEmpty() && recv.isEmpty()
                     && mgr.isEmpty() && wifi.isEmpty() && live.isEmpty()
-                    && sampleCmd.isEmpty() && sleepMgr.isEmpty() && notifySend.isEmpty()) return null;
+                    && sampleCmd.isEmpty() && sleepMgr.isEmpty() && notifySend.isEmpty()
+                    && batteryInfo.isEmpty()) return null;
             return new Symbols(catalog, send, recv, mgr, wifi, live, sampleCmd, sleepMgr,
-                    notifySend, notifyRem, "CACHE");
+                    notifySend, notifyRem, batteryInfo, "CACHE");
         }
 
         private static boolean notEmpty(String s) { return s != null && !s.isEmpty(); }
@@ -143,7 +156,8 @@ final class HealthSymbolResolver {
         if (fast != null && fast.completeSdk() && !fast.deviceMgrFactoryClass().isEmpty()
                 && !fast.wifiSyncMgrClass().isEmpty() && !fast.liveNotifyMgrClass().isEmpty()
                 && !fast.sampleCommandApiClass().isEmpty() && !fast.sleepStatusMgrClass().isEmpty()
-                && !fast.notifySendDataClass().isEmpty() && !fast.notifyReminderMethod().isEmpty()) {
+                && !fast.notifySendDataClass().isEmpty() && !fast.notifyReminderMethod().isEmpty()
+                && !fast.batteryInfoClass().isEmpty()) {
             if (cache != null) cache.write(fp, fast.toMap());
             return fast;
         }
@@ -217,11 +231,40 @@ final class HealthSymbolResolver {
                     if (j.getReturnType() == String.class) notifyRem = "j";
                 } catch (NoSuchMethodException ignored) {}
             }
+            String batteryInfo = "";
+            Class<?> ncd = opt(installer, "ncd");
+            if (ncd != null && hasBatteryInfoShape(ncd)) {
+                batteryInfo = ncd.getName();
+            }
             return new Symbols(catalog.getName(), send.getName(), recv.getName(), mgr, wifiMgr, liveMgr,
-                    sampleCmd, sleepMgr, notifySend, notifyRem, "FAST_PATH");
+                    sampleCmd, sleepMgr, notifySend, notifyRem, batteryInfo, "FAST_PATH");
         } catch (ReflectiveOperationException | RuntimeException | LinkageError miss) {
             return null;
         }
+    }
+
+    private static boolean hasBatteryInfoShape(Class<?> cls) {
+        boolean hasReadInt = false;
+        boolean hasWriteInt = false;
+        boolean hasStaticMap = false;
+        for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
+            if (java.lang.reflect.Modifier.isStatic(f.getModifiers())
+                    && Map.class.isAssignableFrom(f.getType())) {
+                hasStaticMap = true;
+            }
+        }
+        for (java.lang.reflect.Method m : cls.getDeclaredMethods()) {
+            int mod = m.getModifiers();
+            if (!java.lang.reflect.Modifier.isStatic(mod) || m.isSynthetic()) continue;
+            Class<?>[] p = m.getParameterTypes();
+            if (m.getReturnType() == int.class && p.length == 1 && p[0] == String.class) {
+                hasReadInt = true;
+            } else if (m.getReturnType() == void.class && p.length == 2
+                    && p[0] == String.class && p[1] == int.class) {
+                hasWriteInt = true;
+            }
+        }
+        return hasStaticMap && hasReadInt && hasWriteInt;
     }
 
     private static boolean hasNotifySendDataShape(Class<?> cls, Class<?> deviceCommandCls) {
@@ -301,6 +344,7 @@ final class HealthSymbolResolver {
         Set<String> sleepStatusMgrs = new HashSet<>();
         Set<String> notifySendDatas = new HashSet<>();
         Set<String> notifyReminderMethods = new HashSet<>();
+        Set<String> batteryInfos = new HashSet<>();
         try {
             for (String source : sources) {
                 if (source == null) continue;
@@ -314,7 +358,7 @@ final class HealthSymbolResolver {
                             for (ClassDef type : dex.getClasses()) {
                                 inspectClass(type, catalogs, sendFacades, recvCallbacks,
                                         mgrFactories, wifiSyncMgrs, liveNotifyMgrs, sampleCmdApis,
-                                        sleepStatusMgrs, notifySendDatas, notifyReminderMethods);
+                                        sleepStatusMgrs, notifySendDatas, notifyReminderMethods, batteryInfos);
                             }
                         }
                     }
@@ -334,6 +378,7 @@ final class HealthSymbolResolver {
                 unique(sleepStatusMgrs),
                 unique(notifySendDatas),
                 unique(notifyReminderMethods),
+                unique(batteryInfos),
                 "DEX_SCAN");
     }
 
@@ -341,7 +386,8 @@ final class HealthSymbolResolver {
                                      Set<String> recvCallbacks, Set<String> mgrFactories,
                                      Set<String> wifiSyncMgrs, Set<String> liveNotifyMgrs,
                                      Set<String> sampleCmdApis, Set<String> sleepStatusMgrs,
-                                     Set<String> notifySendDatas, Set<String> notifyReminderMethods) {
+                                     Set<String> notifySendDatas, Set<String> notifyReminderMethods,
+                                     Set<String> batteryInfos) {
         String desc = type.getType();
         List<String> ifaces = type.getInterfaces();
         if (D_PLUGIN_PROXY.equals(type.getSuperclass()) && ifaces.contains(D_DEVICE_MGR_API)) {
@@ -372,6 +418,9 @@ final class HealthSymbolResolver {
             notifySendDatas.add(toClassName(desc));
             if (!reminderMethod.isEmpty()) notifyReminderMethods.add(reminderMethod);
         }
+        if (isDeviceBatteryInfo(type)) {
+            batteryInfos.add(toClassName(desc));
+        }
         for (Method m : type.getDirectMethods()) {
             int flags = m.getAccessFlags();
             if (!AccessFlags.PUBLIC.isSet(flags) || !AccessFlags.STATIC.isSet(flags)
@@ -382,6 +431,26 @@ final class HealthSymbolResolver {
                 mgrFactories.add(toClassName(desc));
             }
         }
+    }
+
+    /** Identifies DeviceBatteryInfo (ncd) via log markers and static battery lookup/config methods. */
+    private static boolean isDeviceBatteryInfo(ClassDef type) {
+        boolean hasTag = false;
+        boolean hasFetchEmpty = false;
+        boolean hasConfigEmpty = false;
+        for (Method m : type.getDirectMethods()) {
+            if (m.getImplementation() == null) continue;
+            for (Instruction insn : m.getImplementation().getInstructions()) {
+                if (insn instanceof ReferenceInstruction ref && ref.getReference() instanceof StringReference str) {
+                    String s = str.getString();
+                    if ("DeviceBatteryInfo".equals(s)) hasTag = true;
+                    else if ("fetchDeviceBattery id is empty".equals(s)) hasFetchEmpty = true;
+                    else if ("configBattery id is empty".equals(s)) hasConfigEmpty = true;
+                }
+            }
+            if (hasTag && hasFetchEmpty && hasConfigEmpty) return true;
+        }
+        return false;
     }
 
     /**

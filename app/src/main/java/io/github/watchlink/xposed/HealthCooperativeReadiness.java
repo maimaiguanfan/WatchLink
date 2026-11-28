@@ -40,7 +40,15 @@ final class HealthCooperativeReadiness {
             return "ConnectedDevice(present=" + (deviceInfo != null && rawMac != null && !rawMac.isEmpty()) + ")";
         }
     }
-    private final Method manager, connected, identify, expand;
+
+    record WatchDeviceInfo(boolean connected, String rawMac, String deviceName) {
+        static final WatchDeviceInfo DISCONNECTED = new WatchDeviceInfo(false, "", "");
+
+        @Override public String toString() {
+            return "WatchDeviceInfo(connected=" + connected + ")";
+        }
+    }
+    private final Method manager, connected, identify, expand, deviceNameMethod;
     private final Object mainDevices;
 
     @RequiresApi(34)
@@ -59,6 +67,10 @@ final class HealthCooperativeReadiness {
                 installer.target("com.huawei.health.devicemgr.business.entity.HwGetDevicesParameter"), String.class);
         identify = installer.method(device, "getDeviceIdentify", String.class, false);
         expand = installer.method(device, "getExpandCapability", String.class, false);
+        Method nameM = null;
+        try { nameM = installer.method(device, "getDeviceName", String.class, false); }
+        catch (ReflectiveOperationException ignored) {}
+        deviceNameMethod = nameM;
     }
 
     @RequiresApi(34)
@@ -112,6 +124,34 @@ final class HealthCooperativeReadiness {
         } catch (Exception unavailable) {
             return null;
         }
+    }
+
+    /** Returns primary wearable connection state, raw MAC, and display name for status & device-card sync. */
+    WatchDeviceInfo readWatchDeviceInfo() {
+        try {
+            List<?> devices = connectedDevices(mainDevices);
+            if (devices == null || devices.isEmpty()) return WatchDeviceInfo.DISCONNECTED;
+            for (Object device : devices) {
+                if (device == null) continue;
+                String key = (String) identify.invoke(device);
+                if (key == null || key.isEmpty()) continue;
+                String name = "";
+                if (deviceNameMethod != null) {
+                    Object rawName = deviceNameMethod.invoke(device);
+                    if (rawName instanceof String s) name = sanitizeWatchName(s);
+                }
+                return new WatchDeviceInfo(true, key, name);
+            }
+            return WatchDeviceInfo.DISCONNECTED;
+        } catch (Exception unavailable) {
+            return WatchDeviceInfo.DISCONNECTED;
+        }
+    }
+
+    static String sanitizeWatchName(String raw) {
+        if (raw == null) return "";
+        String cleaned = raw.replace('\n', ' ').replace('\r', ' ').trim();
+        return cleaned.length() > 40 ? cleaned.substring(0, 40).trim() : cleaned;
     }
 
     /** Returns the connected primary wearable snapshot for Wi-Fi sync (including ExpandCapability bit 241). */

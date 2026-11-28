@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">WatchLink</string>
+    <string name="qs_tile_label">WatchLink 手表状态</string>
     <string name="module_description">连接一加系统时钟、日历强提醒、无线设置与华为运动健康，在华为手表上原生同步闹钟响铃、双向控铃及 Wi-Fi 配置</string>
 </resources>

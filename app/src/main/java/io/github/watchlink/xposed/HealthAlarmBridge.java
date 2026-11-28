@@ -53,6 +53,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     private HealthLiveWindowBridge liveBridge;
     private HealthRawCommandBridge rawCommandBridge;
     private HealthSleepDndBridge sleepDndBridge;
+    private HealthWatchStatusCollector watchStatusCollector;
     private BroadcastReceiver controlReceiver;
     private boolean registered;
     private volatile boolean installed;
@@ -144,6 +145,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         HealthSleepDndBridge sleepDnd = new HealthSleepDndBridge(app, settings, worker, readiness);
         sleepDnd.install(installer, symbols);
         sleepDndBridge = sleepDnd;
+
+        HealthWatchStatusCollector watchStatus = new HealthWatchStatusCollector(app, worker, readiness);
+        watchStatus.install(installer, symbols);
+        watchStatusCollector = watchStatus;
         settings.onTimerChanged(() -> worker.execute(() -> {
             if (!settings.isTimerEnabled()) cancelActiveDailyFor(TargetProfile.CLOCK, true);
             if (!settings.isTimerEnabled() || !settings.isTimerLiveWindowEnabled()) live.closeGroupLocked(true);
@@ -248,6 +253,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         settings.onTimerChanged(null);
         settings.onCalendarDisabled(null);
         daily.stop();
+        if (watchStatusCollector != null) {
+            try { watchStatusCollector.close(); } catch (RuntimeException ignored) {}
+            watchStatusCollector = null;
+        }
         if (sleepDndBridge != null) {
             try { sleepDndBridge.close(); } catch (RuntimeException ignored) {}
             sleepDndBridge = null;
@@ -707,6 +716,9 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         HealthSleepDndBridge.StatusSnapshot sleep = sleepDndBridge != null
                 ? sleepDndBridge.statusSnapshot()
                 : new HealthSleepDndBridge.StatusSnapshot("UNKNOWN", false, false, "NONE", 0L, 0L, 0L);
+        HealthWatchStatusCollector.WatchStatusSnapshot watchStatus = watchStatusCollector != null
+                ? watchStatusCollector.snapshot()
+                : HealthWatchStatusCollector.WatchStatusSnapshot.DISCONNECTED;
         return new HealthHostControl.Reply(
                 true,
                 settings.isEnabled(),
@@ -753,7 +765,12 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 settings.isNotifySilentScreenOnEnabled(),
                 settings.isNotifySilentFocusEnabled(),
                 settings.isNotifySilentGameEnabled(),
-                settings.isSleepPauseMediaEnabled());
+                settings.isSleepPauseMediaEnabled(),
+                watchStatus.connected(),
+                watchStatus.watchName(),
+                watchStatus.batteryPercent(),
+                watchStatus.charging(),
+                watchStatus.updatedAtMs());
     }
 
     private void startManualTestLocked() {

@@ -9,14 +9,14 @@ public class HealthSymbolResolverTest {
         HealthSymbolResolver.Symbols scanned = new HealthSymbolResolver.Symbols(
                 "eqd", "zcj",
                 "com.huawei.devicesdk.service.DevicesManagementService$8",
-                "nfz", "oai", "oca", "eqe", "nhp", "ocp", "j", "DEX_SCAN");
+                "nfz", "oai", "oca", "eqe", "nhp", "ocp", "j", "ncd", "DEX_SCAN");
         assertTrue(scanned.completeSdk());
 
         ApkSymbolCache cache = new ApkSymbolCache(new ClockSymbolResolverTest.MemoryPrefs());
-        cache.write("health-v6|/health.apk:900:1000", scanned.toMap());
+        cache.write("health-v7|/health.apk:900:1000", scanned.toMap());
 
         HealthSymbolResolver.Symbols cached = HealthSymbolResolver.Symbols.fromCache(
-                cache.read("health-v6|/health.apk:900:1000"));
+                cache.read("health-v7|/health.apk:900:1000"));
         assertNotNull(cached);
         assertEquals("CACHE", cached.source());
         assertEquals("eqd", cached.deviceCatalogClass());
@@ -29,9 +29,10 @@ public class HealthSymbolResolverTest {
         assertEquals("nhp", cached.sleepStatusMgrClass());
         assertEquals("ocp", cached.notifySendDataClass());
         assertEquals("j", cached.notifyReminderMethod());
+        assertEquals("ncd", cached.batteryInfoClass());
         assertTrue(cached.completeSdk());
 
-        assertNull(HealthSymbolResolver.Symbols.fromCache(cache.read("health-v6|/health.apk:901:1000")));
+        assertNull(HealthSymbolResolver.Symbols.fromCache(cache.read("health-v7|/health.apk:901:1000")));
     }
 
     @Test public void scansRealPulledHealthApkWhenAvailableLocally() {
@@ -57,6 +58,7 @@ public class HealthSymbolResolverTest {
         assertEquals("nhp", scanned.sleepStatusMgrClass());
         assertEquals("ocp", scanned.notifySendDataClass());
         assertEquals("j", scanned.notifyReminderMethod());
+        assertEquals("ncd", scanned.batteryInfoClass());
 
         // Second call returns cached symbols with zero DEX parsing.
         HealthSymbolResolver.Symbols cached = HealthSymbolResolver.resolve(null, cache, healthApk.getAbsolutePath());
@@ -72,5 +74,6 @@ public class HealthSymbolResolverTest {
         assertEquals(scanned.sleepStatusMgrClass(), cached.sleepStatusMgrClass());
         assertEquals(scanned.notifySendDataClass(), cached.notifySendDataClass());
         assertEquals(scanned.notifyReminderMethod(), cached.notifyReminderMethod());
+        assertEquals(scanned.batteryInfoClass(), cached.batteryInfoClass());
     }
 }

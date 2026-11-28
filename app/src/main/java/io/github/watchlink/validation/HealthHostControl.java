@@ -119,7 +119,40 @@ public final class HealthHostControl {
                         boolean wakeExitDndEnabled, boolean notifySilentPushEnabled,
                         String silentPushWatchSupport,
                         boolean notifySilentScreenOnEnabled, boolean notifySilentFocusEnabled,
-                        boolean notifySilentGameEnabled, boolean sleepPauseMediaEnabled) {
+                        boolean notifySilentGameEnabled, boolean sleepPauseMediaEnabled,
+                        boolean watchConnected, String watchName, int watchBattery,
+                        boolean watchCharging, long watchBatteryAt) {
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                     boolean rawCommandDebugEnabled,
+                     boolean gameFlashbackEnabled, int gameFlashbackLeadSec,
+                     boolean notifyMuteDndEnabled, boolean sleepAutoDndEnabled,
+                     String sleepWatchSupport, boolean sleepHookReady, boolean dndPolicyAccess,
+                     String sleepLastEvent, long sleepLastAt,
+                     long sleepLastFallAsleepAt, long sleepLastWakeUpAt,
+                     boolean wakeExitDndEnabled, boolean notifySilentPushEnabled,
+                     String silentPushWatchSupport,
+                     boolean notifySilentScreenOnEnabled, boolean notifySilentFocusEnabled,
+                     boolean notifySilentGameEnabled, boolean sleepPauseMediaEnabled) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, rawCommandDebugEnabled,
+                    gameFlashbackEnabled, gameFlashbackLeadSec,
+                    notifyMuteDndEnabled, sleepAutoDndEnabled, sleepWatchSupport, sleepHookReady,
+                    dndPolicyAccess, sleepLastEvent, sleepLastAt, sleepLastFallAsleepAt, sleepLastWakeUpAt,
+                    wakeExitDndEnabled, notifySilentPushEnabled, silentPushWatchSupport,
+                    notifySilentScreenOnEnabled, notifySilentFocusEnabled, notifySilentGameEnabled,
+                    sleepPauseMediaEnabled, false, "", -1, false, 0L);
+        }
         public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
                      boolean serviceWitness, boolean sdkObserver, String symbolSource,
                      String watchState, String lastDispatchMode, String lastActionSource,
@@ -354,6 +387,16 @@ public final class HealthHostControl {
             notifySilentFocusEnabled = reachable && notifySilentFocusEnabled;
             notifySilentGameEnabled = reachable && notifySilentGameEnabled;
             sleepPauseMediaEnabled = reachable && sleepPauseMediaEnabled;
+            watchConnected = reachable && watchConnected;
+            watchName = reachable && watchName != null ? sanitizeWatchName(watchName) : "";
+            watchBattery = (reachable && watchBattery >= 0 && watchBattery <= 100) ? watchBattery : -1;
+            watchCharging = reachable && watchConnected && watchCharging;
+            watchBatteryAt = reachable ? Math.max(0L, watchBatteryAt) : 0L;
+        }
+
+        private static String sanitizeWatchName(String raw) {
+            String cleaned = raw.replace('\n', ' ').replace('\r', ' ').trim();
+            return cleaned.length() > 40 ? cleaned.substring(0, 40).trim() : cleaned;
         }
 
         private static String pick(boolean reachable, Set<String> allowed, String value, String fallback) {
@@ -459,6 +502,11 @@ public final class HealthHostControl {
                             details.putBoolean("notifySilentFocusEnabled", reply.notifySilentFocusEnabled());
                             details.putBoolean("notifySilentGameEnabled", reply.notifySilentGameEnabled());
                             details.putBoolean("sleepPauseMediaEnabled", reply.sleepPauseMediaEnabled());
+                            details.putBoolean("watchConnected", reply.watchConnected());
+                            details.putString("watchName", reply.watchName());
+                            details.putInt("watchBattery", reply.watchBattery());
+                            details.putBoolean("watchCharging", reply.watchCharging());
+                            details.putLong("watchBatteryAt", reply.watchBatteryAt());
                             pending.setResult(ACK, null, details);
                         } catch (RuntimeException e) {
                             ProbeLog.failure("HEALTH_HOST_CONTROL_FAILED", e);
@@ -550,7 +598,12 @@ public final class HealthHostControl {
                                         data.getBoolean("notifySilentScreenOnEnabled", false),
                                         data.getBoolean("notifySilentFocusEnabled", false),
                                         data.getBoolean("notifySilentGameEnabled", false),
-                                        data.getBoolean("sleepPauseMediaEnabled", false)));
+                                        data.getBoolean("sleepPauseMediaEnabled", false),
+                                        data.getBoolean("watchConnected", false),
+                                        data.getString("watchName", ""),
+                                        data.getInt("watchBattery", -1),
+                                        data.getBoolean("watchCharging", false),
+                                        data.getLong("watchBatteryAt", 0L)));
                             } else callback.accept(unavailable());
                         }
                     }, main, 0, null, null);

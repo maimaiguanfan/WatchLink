@@ -483,9 +483,12 @@ private fun StatusCard(
             else -> "等待宿主响应"
         }
     }
+    val watchBatterySuffix = state.healthHost?.takeIf { it.reachable() && it.watchConnected() && it.watchBattery() >= 0 }
+        ?.let { h -> if (h.watchCharging()) " · 充电中 ${h.watchBattery()}%" else " · 电量 ${h.watchBattery()}%" }
+        ?: ""
     val summary = when (level) {
-        SetupLevel.READY -> if (enabledCount > 0) "已开启 $enabledCount 项同步 · 手表已连接"
-        else "模块与手表已连接，可按需开启"
+        SetupLevel.READY -> if (enabledCount > 0) "已开启 $enabledCount 项同步 · 手表已连接$watchBatterySuffix"
+        else "模块与手表已连接$watchBatterySuffix，可按需开启"
         SetupLevel.ATTENTION -> "轻触查看处理建议"
         SetupLevel.MISSING_SCOPE -> "轻触配置模块作用域"
         SetupLevel.PENDING -> when {
@@ -1385,6 +1388,11 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
             )
             HorizontalDivider()
             BasicComponent(
+                title = "快捷设置磁贴（基础作用域）",
+                summary = "可在系统下拉控制中心编辑页添加「WatchLink 手表状态」磁贴，下拉实时查看手表连接状态、电量与充电态；单击磁贴手动刷新，长按磁贴进入 WatchLink。磁贴采用被动模式，不常驻后台。"
+            )
+            HorizontalDivider()
+            BasicComponent(
                 title = "Wi-Fi 同步（自动同步需勾选无线设置）",
                 summary = "自动同步新连接需额外勾选「无线设置（com.oplus.wirelesssettings）」，无需 Root 也无需开启定位服务，连入新网络时自动下发手表。\n" +
                     "首次导入已保存网络可使用「批量同步」：仅在点击读取时临时调用 Root 于内存中解析系统配置，不显示也不保存明文密码，离开页面即清空内存，完成后可随时收回 Root；支持开放与 WPA2/WPA3/WEP 网络，暂不支持企业认证（EAP）。"
@@ -1603,9 +1611,9 @@ private fun wifiDiagnosticsText(health: HealthHostControl.Reply?): String {
     }
 }
 
-private fun watchStateSimple(health: HealthHostControl.Reply?): String = when {
-    health == null || !health.reachable() -> "待运动健康上线"
-    else -> when (health.watchState()) {
+private fun watchStateSimple(health: HealthHostControl.Reply?): String {
+    if (health == null || !health.reachable()) return "待运动健康上线"
+    val base = when (health.watchState()) {
         "READY_SUPPORTED_ON" -> "已连接，支持协同"
         "READY_SUPPORTED_UNSET" -> "已连接，首次响铃自动启用"
         "READY_SUPPORTED_OFF" -> "已连接，协同开关已关闭"
@@ -1615,6 +1623,17 @@ private fun watchStateSimple(health: HealthHostControl.Reply?): String = when {
         "DEGRADED" -> "兼容模式"
         else -> "待确认"
     }
+    if (!health.watchConnected()) return base
+    val parts = buildList {
+        if (health.watchName().isNotEmpty()) add(health.watchName())
+        add(base)
+        if (health.watchBattery() >= 0) {
+            add(if (health.watchCharging()) "充电中 ${health.watchBattery()}%" else "电量 ${health.watchBattery()}%")
+        } else if (health.watchCharging()) {
+            add("充电中")
+        }
+    }
+    return parts.joinToString(" · ")
 }
 
 private fun frameworkSummaryText(scope: ModuleScope.View?): String {
