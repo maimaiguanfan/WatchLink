@@ -82,7 +82,45 @@ public final class ModuleScope {
                        Boolean remoteNotifySilentScreenOnEnabled, Boolean remoteNotifySilentFocusEnabled,
                        Boolean remoteNotifySilentGameEnabled, Boolean remoteSleepPauseMediaEnabled,
                        boolean myDevicesGranted, boolean myDevicesActive, TargetRuntime myDevicesRuntime,
-                       Boolean remoteMyDevicesCardEnabled, String remoteMyDevicesTapTarget) {
+                       Boolean remoteMyDevicesCardEnabled, String remoteMyDevicesTapTarget,
+                       Boolean remoteSleepStopVideoEnabled, String remoteSleepStopVideoCustomPkgs) {
+        public View(boolean frameworkConnected,
+                    String frameworkName,
+                    String frameworkVersion,
+                    int frameworkApiVersion,
+                    boolean clockGranted, boolean healthGranted, boolean calendarGranted,
+                    boolean wirelessGranted, boolean umsGranted,
+                    boolean clockActive, boolean healthActive, boolean calendarActive,
+                    boolean wirelessActive, boolean umsActive,
+                    TargetRuntime clockRuntime, TargetRuntime healthRuntime,
+                    TargetRuntime calendarRuntime, TargetRuntime wirelessRuntime,
+                    TargetRuntime umsRuntime, TargetRuntime daemonRuntime,
+                    boolean checking,
+                    boolean requestPending, String requestResult,
+                    boolean remotePrefsSupported,
+                    Boolean remoteEnabled, Boolean remoteCalendarEnabled,
+                    Boolean remoteWifiAutoSyncEnabled, Boolean remoteLiveWindowEnabled,
+                    TimerOptions timerOptions, Boolean remoteRawCommandDebugEnabled,
+                    Boolean remoteGameFlashbackEnabled, Integer remoteGameFlashbackLeadSec,
+                    Boolean remoteNotifyMuteDndEnabled, Boolean remoteSleepAutoDndEnabled,
+                    Boolean remoteWakeExitDndEnabled, Boolean remoteNotifySilentPushEnabled,
+                    Boolean remoteNotifySilentScreenOnEnabled, Boolean remoteNotifySilentFocusEnabled,
+                    Boolean remoteNotifySilentGameEnabled, Boolean remoteSleepPauseMediaEnabled,
+                    boolean myDevicesGranted, boolean myDevicesActive, TargetRuntime myDevicesRuntime,
+                    Boolean remoteMyDevicesCardEnabled, String remoteMyDevicesTapTarget) {
+            this(frameworkConnected, frameworkName, frameworkVersion, frameworkApiVersion, clockGranted,
+                    healthGranted, calendarGranted, wirelessGranted, umsGranted, clockActive, healthActive,
+                    calendarActive, wirelessActive, umsActive, clockRuntime, healthRuntime, calendarRuntime,
+                    wirelessRuntime, umsRuntime, daemonRuntime, checking, requestPending, requestResult,
+                    remotePrefsSupported, remoteEnabled, remoteCalendarEnabled, remoteWifiAutoSyncEnabled,
+                    remoteLiveWindowEnabled, timerOptions, remoteRawCommandDebugEnabled,
+                    remoteGameFlashbackEnabled, remoteGameFlashbackLeadSec,
+                    remoteNotifyMuteDndEnabled, remoteSleepAutoDndEnabled, remoteWakeExitDndEnabled,
+                    remoteNotifySilentPushEnabled, remoteNotifySilentScreenOnEnabled,
+                    remoteNotifySilentFocusEnabled, remoteNotifySilentGameEnabled, remoteSleepPauseMediaEnabled,
+                    myDevicesGranted, myDevicesActive, myDevicesRuntime,
+                    remoteMyDevicesCardEnabled, remoteMyDevicesTapTarget, null, null);
+        }
         public View(boolean frameworkConnected,
                     String frameworkName,
                     String frameworkVersion,
@@ -431,6 +469,8 @@ public final class ModuleScope {
     private static Boolean remoteSleepAutoDndEnabled;
     private static Boolean remoteWakeExitDndEnabled;
     private static Boolean remoteSleepPauseMediaEnabled;
+    private static Boolean remoteSleepStopVideoEnabled;
+    private static String remoteSleepStopVideoCustomPkgs;
     private static Boolean remoteMyDevicesCardEnabled;
     private static String remoteMyDevicesTapTarget;
     private static Boolean remoteRawCommandDebugEnabled;
@@ -563,6 +603,41 @@ public final class ModuleScope {
         writeRemoteBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, enabled, callback);
     }
 
+    /** Persists the watch-sleep auto stop short-video/live apps toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteSleepStopVideoEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_ENABLED, enabled, callback);
+    }
+
+    /** Persists user-added custom short-video/live app package names to LSPosed RemotePreferences. */
+    public static void writeRemoteSleepStopVideoCustomPkgs(String raw, Consumer<Boolean> callback) {
+        String normalized = io.github.watchlink.notify.SleepVideoStopPolicy.serializeCustomPackages(
+                io.github.watchlink.notify.SleepVideoStopPolicy.parseCustomPackages(raw));
+        worker.execute(() -> {
+            listen();
+            boolean written = false;
+            XposedService service = framework;
+            if (service != null && supportsRemote(service)) {
+                try {
+                    SharedPreferences prefs = service.getRemotePreferences(WatchLinkPrefs.GROUP);
+                    written = prefs.edit()
+                            .putString(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_CUSTOM_PKGS, normalized)
+                            .putLong(WatchLinkPrefs.KEY_UPDATED_AT, System.currentTimeMillis())
+                            .commit();
+                    if (written) {
+                        remotePrefsSupported = true;
+                        remoteSleepStopVideoCustomPkgs = normalized;
+                        ProbeLog.info("REMOTE_PREFS_SAVED");
+                        publish();
+                    }
+                } catch (RuntimeException error) {
+                    ProbeLog.failure("REMOTE_PREFS_WRITE_FAILED", error);
+                }
+            }
+            boolean ok = written;
+            new Handler(Looper.getMainLooper()).post(() -> callback.accept(ok));
+        });
+    }
+
     /** Persists the ColorOS MyDevices native card toggle to LSPosed RemotePreferences. */
     public static void writeRemoteMyDevicesCardEnabled(boolean enabled, Consumer<Boolean> callback) {
         writeRemoteBoolean(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED, enabled, callback);
@@ -664,6 +739,7 @@ public final class ModuleScope {
                         else if (WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED.equals(key)) remoteSleepAutoDndEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED.equals(key)) remoteWakeExitDndEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED.equals(key)) remoteSleepPauseMediaEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_ENABLED.equals(key)) remoteSleepStopVideoEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED.equals(key)) remoteMyDevicesCardEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG.equals(key)) remoteRawCommandDebugEnabled = enabled;
                         ProbeLog.info("REMOTE_PREFS_SAVED");
@@ -1001,6 +1077,12 @@ public final class ModuleScope {
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, false) : null;
                 remoteSleepPauseMediaEnabled = prefs.contains(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, false) : null;
+                remoteSleepStopVideoEnabled = prefs.contains(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_ENABLED, false) : null;
+                remoteSleepStopVideoCustomPkgs = prefs.contains(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_CUSTOM_PKGS)
+                        ? io.github.watchlink.notify.SleepVideoStopPolicy.serializeCustomPackages(
+                                io.github.watchlink.notify.SleepVideoStopPolicy.parseCustomPackages(
+                                        prefs.getString(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_CUSTOM_PKGS, ""))) : null;
                 remoteMyDevicesCardEnabled = prefs.contains(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED, false) : null;
                 remoteMyDevicesTapTarget = prefs.contains(WatchLinkPrefs.KEY_MYDEVICES_TAP_TARGET)
@@ -1145,7 +1227,8 @@ public final class ModuleScope {
                 remoteNotifySilentFocusEnabled, remoteNotifySilentGameEnabled, remoteSleepPauseMediaEnabled,
                 grants != null && grants.contains(TargetProfile.MY_DEVICES.packageName),
                 myDevicesActive, myDevicesRuntime,
-                remoteMyDevicesCardEnabled, remoteMyDevicesTapTarget);
+                remoteMyDevicesCardEnabled, remoteMyDevicesTapTarget,
+                remoteSleepStopVideoEnabled, remoteSleepStopVideoCustomPkgs);
     }
 
     private ModuleScope() {}

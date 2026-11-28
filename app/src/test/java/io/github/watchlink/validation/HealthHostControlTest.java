@@ -103,11 +103,12 @@ public class HealthHostControlTest {
     @Test public void parsesAndClampsGameFlashbackLeadSecCommandsAndReplies() {
         assertEquals("SET_GAME_FLASHBACK_LEAD:0", HealthHostControl.setGameFlashbackLeadSecCommand(-5));
         assertEquals("SET_GAME_FLASHBACK_LEAD:7", HealthHostControl.setGameFlashbackLeadSecCommand(7));
-        assertEquals("SET_GAME_FLASHBACK_LEAD:30", HealthHostControl.setGameFlashbackLeadSecCommand(99));
+        assertEquals("SET_GAME_FLASHBACK_LEAD:300", HealthHostControl.setGameFlashbackLeadSecCommand(999));
 
         assertEquals(0, HealthHostControl.parseGameFlashbackLeadSecCommand("SET_GAME_FLASHBACK_LEAD:0"));
         assertEquals(15, HealthHostControl.parseGameFlashbackLeadSecCommand("SET_GAME_FLASHBACK_LEAD:15"));
-        assertEquals(-1, HealthHostControl.parseGameFlashbackLeadSecCommand("SET_GAME_FLASHBACK_LEAD:31"));
+        assertEquals(300, HealthHostControl.parseGameFlashbackLeadSecCommand("SET_GAME_FLASHBACK_LEAD:300"));
+        assertEquals(-1, HealthHostControl.parseGameFlashbackLeadSecCommand("SET_GAME_FLASHBACK_LEAD:301"));
         assertEquals(-1, HealthHostControl.parseGameFlashbackLeadSecCommand("SET_GAME_FLASHBACK_LEAD:abc"));
         assertEquals(-1, HealthHostControl.parseGameFlashbackLeadSecCommand("QUERY"));
 
@@ -117,9 +118,9 @@ public class HealthHostControlTest {
                 "IDLE", "NONE", "NONE",
                 false, "UNKNOWN", false, 0, "NONE", "NONE", 0L,
                 false, "SUPPORTED_LIVE_LEVEL", 1, "OPENED", "UMS", "START_SERVICE", "IDLE",
-                false, true, 99);
+                false, true, 999);
         assertTrue(reply.gameFlashbackEnabled());
-        assertEquals(30, reply.gameFlashbackLeadSec());
+        assertEquals(300, reply.gameFlashbackLeadSec());
     }
 
     @Test public void sanitizesNotifyAndSleepDndTelemetryAllowlists() {

@@ -15,7 +15,7 @@ import java.util.regex.Pattern;
 public final class GameReviveCoordinator {
     public static final int DEFAULT_LEAD_SEC = 5;
     public static final int MIN_LEAD_SEC = 0;
-    public static final int MAX_LEAD_SEC = 30;
+    public static final int MAX_LEAD_SEC = 300;
 
     static final long EDGE_CLOSE_EARLY_TOLERANCE_MS = 2_500L;
     static final long EDGE_CLOSE_LATE_TOLERANCE_MS = 2_000L;
@@ -174,16 +174,16 @@ public final class GameReviveCoordinator {
                 // Static game flashback card without countdown seconds -> do not arm revive timer.
                 return new UpsertPlan(null, null, 0L);
             }
-            // If total revive time is already <= leadSec (e.g. 4s early-game revive with 5s lead),
-            // OP_CREATE already vibrated; fall back to firing once at completion (0s) unless <= 1s.
-            boolean shortFallback = leadSec > 0 && remainingSec <= leadSec;
             long endMs = nowElapsedMs + remainingSec * 1_000L;
             session = new Session(key, payload.source(), payload.packageName(), payload.eventType(),
-                    actionLabel, remainingSec, endMs, shortFallback);
-            if (shortFallback && remainingSec <= 1) {
-                session.alertFired = true;
-            }
+                    actionLabel, remainingSec, endMs, false);
             sessions.put(key, session);
+            // If user's configured lead seconds >= total revive seconds, vibrate immediately once.
+            if (leadSec > 0 && remainingSec <= leadSec) {
+                session.alertFired = true;
+                session.generation++;
+                return new UpsertPlan(buildAlert(session, remainingSec, false), null, session.generation);
+            }
             return scheduleNextLocked(session, nowElapsedMs, leadSec);
         }
 

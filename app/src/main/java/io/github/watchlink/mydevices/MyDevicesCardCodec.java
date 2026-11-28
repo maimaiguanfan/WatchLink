@@ -61,36 +61,40 @@ public final class MyDevicesCardCodec {
      * DeviceAppScannerImpl / DeviceAppProviderQuery (verified against MyDevices 17.25.15).
      */
     public static String toDeviceDataJson(CardSnapshot snap, String associatedPackage) {
+        return toDeviceDataJson(snap, associatedPackage, null);
+    }
+
+    public static String toDeviceDataJson(CardSnapshot snap, String associatedPackage, String customIconUri) {
         if (snap == null || !snap.valid()) return "";
         String connectState = snap.connected() ? "CONNECTED" : "DISCONNECTED";
         long ts = snap.updatedAtMs() > 0L ? snap.updatedAtMs() : System.currentTimeMillis();
         String name = sanitizeDisplayName(snap.watchName());
         String mac = snap.macAddress() == null ? "" : snap.macAddress().trim();
+        String iconUri = (customIconUri != null && !customIconUri.isEmpty())
+                ? customIconUri : DEFAULT_WATCH_ICON_URI;
 
-        StringBuilder bat = new StringBuilder("[");
+        StringBuilder batInfo = new StringBuilder("[");
+        StringBuilder batInts = new StringBuilder("[");
         if (snap.batteryPercent() >= 0 && snap.batteryPercent() <= 100) {
-            bat.append("{\"batteryType\":\"SINGLE\",\"value\":")
+            batInfo.append("{\"batteryType\":\"SINGLE\",\"value\":")
                     .append(snap.batteryPercent())
                     .append(",\"charge\":")
                     .append(snap.charging())
                     .append('}');
+            batInts.append(snap.batteryPercent());
         }
-        bat.append(']');
-        String batteryJson = bat.toString();
+        batInfo.append(']');
+        batInts.append(']');
 
         StringBuilder sb = new StringBuilder(512);
         sb.append('{');
         appendStringField(sb, "mDeviceId", snap.deviceId(), false);
-        appendStringField(sb, "deviceId", snap.deviceId(), true);
         appendStringField(sb, "mDeviceName", name, true);
-        appendStringField(sb, "name", name, true);
         appendStringField(sb, "mMacAddress", mac, true);
-        appendStringField(sb, "macAddress", mac, true);
         appendStringField(sb, "modelId", "OW19W3", true);
         appendStringField(sb, "mDeviceType", "WATCH", true);
-        appendStringField(sb, "type", "WATCH", true);
-        appendStringField(sb, "iconUrl", DEFAULT_WATCH_ICON_URI, true);
-        appendStringField(sb, "mIconUrl", DEFAULT_WATCH_ICON_URI, true);
+        appendStringField(sb, "iconUrl", iconUri, true);
+        appendStringField(sb, "mIconUrl", iconUri, true);
         appendStringField(sb, "mConnectState", connectState, true);
         appendStringField(sb, "mAuthority", VIRTUAL_AUTHORITY, true);
         if (associatedPackage != null && !associatedPackage.isEmpty()) {
@@ -103,14 +107,15 @@ public final class MyDevicesCardCodec {
         sb.append(",\"feature\":0");
         sb.append(",\"linkageVersion\":1");
         sb.append(",\"autoSwitch\":false");
+        sb.append(",\"revision\":").append(ts);
         sb.append(",\"connection\":{");
         appendStringField(sb, "connectState", connectState, false);
         appendStringField(sb, "coordinationState", "DEFAULT", true);
         sb.append(",\"lastConnectTime\":").append(snap.connected() ? ts : 0L);
         sb.append(",\"lastDisconnectTime\":").append(snap.connected() ? 0L : ts);
         sb.append('}');
-        sb.append(",\"mBatteryInfoList\":").append(batteryJson);
-        sb.append(",\"mBatteryList\":").append(batteryJson);
+        sb.append(",\"mBatteryInfoList\":").append(batInfo);
+        sb.append(",\"mBatteryList\":").append(batInts);
         sb.append('}');
         return sb.toString();
     }

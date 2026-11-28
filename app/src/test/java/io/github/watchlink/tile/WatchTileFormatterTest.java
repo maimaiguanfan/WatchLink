@@ -4,43 +4,44 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class WatchTileFormatterTest {
-    @Test public void formatsConnectedBatteryAndChargingStates() {
-        WatchTileFormatter.TilePresentation normal = WatchTileFormatter.format(
-                false, true, true, "HUAWEI WATCH 6 Pro", 82, false);
-        assertEquals("HUAWEI WATCH 6 Pro", normal.label());
-        assertEquals("已连接 · 82%", normal.subtitle());
-        assertEquals(WatchTileFormatter.STATE_ACTIVE, normal.state());
+    @Test public void showsBatteryDirectlyInTitleWithInactiveStateAndNoWatchName() {
+        var normal = WatchTileFormatter.format(false, true, true, "HUAWEI WATCH 6 Pro", 86, false);
+        assertEquals("86%", normal.label());
+        assertEquals("已连接", normal.subtitle());
+        assertEquals(WatchTileFormatter.STATE_INACTIVE, normal.state());
+        assertFalse(normal.label().contains("HUAWEI"));
+        assertFalse(normal.subtitle().contains("HUAWEI"));
 
-        WatchTileFormatter.TilePresentation charging = WatchTileFormatter.format(
-                false, true, true, "WATCH 6 Pro", 65, true);
-        assertEquals("WATCH 6 Pro", charging.label());
-        assertEquals("充电中 · 65%", charging.subtitle());
-        assertEquals(WatchTileFormatter.STATE_ACTIVE, charging.state());
-
-        WatchTileFormatter.TilePresentation unknownBattery = WatchTileFormatter.format(
-                false, true, true, "", -1, false);
-        assertEquals("WatchLink", unknownBattery.label());
-        assertEquals("已连接", unknownBattery.subtitle());
-        assertEquals(WatchTileFormatter.STATE_ACTIVE, unknownBattery.state());
+        var charging = WatchTileFormatter.format(false, true, true, "HUAWEI WATCH 6 Pro", 52, true);
+        assertEquals("⚡52%", charging.label());
+        assertEquals("充电中", charging.subtitle());
+        assertEquals(WatchTileFormatter.STATE_INACTIVE, charging.state());
     }
 
-    @Test public void formatsDisconnectedUnreachableAndRefreshingStates() {
-        WatchTileFormatter.TilePresentation disconnected = WatchTileFormatter.format(
-                false, true, false, "WATCH 6 Pro", 50, false);
-        assertEquals("WATCH 6 Pro", disconnected.label());
+    @Test public void handlesDisconnectedUnreachableRefreshingAndUnknownBattery() {
+        var unknownBat = WatchTileFormatter.format(false, true, true, "HUAWEI WATCH 6 Pro", -1, false);
+        assertEquals("已连接", unknownBat.label());
+        assertEquals("电量待同步", unknownBat.subtitle());
+        assertEquals(WatchTileFormatter.STATE_INACTIVE, unknownBat.state());
+
+        var disconnected = WatchTileFormatter.format(false, true, false, "HUAWEI WATCH 6 Pro", 80, false);
+        assertEquals("手表", disconnected.label());
         assertEquals("未连接", disconnected.subtitle());
         assertEquals(WatchTileFormatter.STATE_INACTIVE, disconnected.state());
 
-        WatchTileFormatter.TilePresentation unreachable = WatchTileFormatter.format(
-                false, false, false, "", -1, false);
-        assertEquals("WatchLink", unreachable.label());
+        var unreachable = WatchTileFormatter.format(false, false, false, "", -1, false);
+        assertEquals("手表", unreachable.label());
         assertEquals("等待运动健康", unreachable.subtitle());
         assertEquals(WatchTileFormatter.STATE_INACTIVE, unreachable.state());
 
-        WatchTileFormatter.TilePresentation refreshing = WatchTileFormatter.format(
-                true, true, true, "WATCH 6 Pro", 82, false);
-        assertEquals("WATCH 6 Pro", refreshing.label());
-        assertEquals("刷新中…", refreshing.subtitle());
-        assertEquals(WatchTileFormatter.STATE_ACTIVE, refreshing.state());
+        var refreshingWithBat = WatchTileFormatter.format(true, true, true, "HUAWEI WATCH 6 Pro", 75, false);
+        assertEquals("75%", refreshingWithBat.label());
+        assertEquals("刷新中…", refreshingWithBat.subtitle());
+        assertEquals(WatchTileFormatter.STATE_INACTIVE, refreshingWithBat.state());
+
+        var refreshingCold = WatchTileFormatter.format(true, false, false, "", -1, false);
+        assertEquals("手表", refreshingCold.label());
+        assertEquals("刷新中…", refreshingCold.subtitle());
+        assertEquals(WatchTileFormatter.STATE_INACTIVE, refreshingCold.state());
     }
 }

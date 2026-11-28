@@ -49,18 +49,20 @@ final class AlarmObserverInstaller {
 
     AlarmObserverInstaller(XposedInterface module, TargetProfile profile, ClassLoader loader,
                            int ownerUid, SharedPreferences remotePrefs) {
-        this(module, profile, loader, ownerUid, remotePrefs, null);
+        this(module, profile, loader, ownerUid, remotePrefs, null, null);
     }
 
     AlarmObserverInstaller(XposedInterface module, TargetProfile profile, ClassLoader loader,
                            int ownerUid, SharedPreferences remotePrefs,
-                           WirelessSettingsBridge preInstalledWireless) {
+                           WirelessSettingsBridge preInstalledWireless,
+                           MyDevicesBridge preInstalledMyDevices) {
         this.module = module;
         this.ownerUid = ownerUid;
         this.profile = profile;
         this.loader = loader;
         this.remotePrefs = remotePrefs;
         this.wirelessBridge = preInstalledWireless;
+        this.myDevicesBridge = preInstalledMyDevices;
     }
 
     @RequiresApi(34)
@@ -177,9 +179,12 @@ final class AlarmObserverInstaller {
                 umsBridge = bridge;
                 bridge.install(this);
             } else if (profile == TargetProfile.MY_DEVICES) {
-                MyDevicesBridge bridge = new MyDevicesBridge(hostContext, settings, sources);
-                myDevicesBridge = bridge;
-                bridge.install(this);
+                MyDevicesBridge bridge = myDevicesBridge;
+                if (bridge == null) {
+                    bridge = MyDevicesBridge.installEarlyHook(module, loader, remotePrefs);
+                    myDevicesBridge = bridge;
+                }
+                bridge.attachContext(hostContext, settings, this, sources);
             } else {
                 HealthAlarmBridge bridge = new HealthAlarmBridge(hostContext, ownerUid, settings, sources);
                 healthBridge = bridge;

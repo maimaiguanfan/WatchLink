@@ -4,22 +4,29 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.os.SystemClock;
 import androidx.annotation.RequiresApi;
 import io.github.watchlink.alarm.probe.ProbeLog;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
  * Collects live watch connection state, display name, battery percentage (0..100), and charging
  * state inside Huawei Health :PhoneService using:
- * 1) HealthCooperativeReadiness.readWatchDeviceInfo() (connected state + DeviceInfo.getDeviceName)
- * 2) Dynamically resolved DeviceBatteryInfo (Lncd) static read/write methods
- * 3) Unobfuscated com.huawei.bone.action.BATTERY_LEVEL & CONNECTION_STATE_CHANGED broadcasts
- * 4) Unobfuscated HwDeviceStatusPushManager static charge map + putChargeByIdentify hook.
+ * 1) HealthCooperativeReadiness.readWatchDeviceInfo() (connected state + DeviceInfo metadata)
+ * 2) Direct Huawei Service 1 / Command 8 (getBattery) query via HealthExternalSender + SDK 01 08
+ *    response TLV observation (since DeviceBatteryInfo Lncd lives in Health's main process, not
+ *    :PhoneService)
+ * 3) SharedPreferences cache inside :PhoneService so hot reloads retain last-known battery
+ * 4) Passive com.huawei.bone.action.BATTERY_LEVEL & CONNECTION_STATE_CHANGED broadcasts +
+ *    HwDeviceStatusPushManager static charge map + putChargeByIdentify hook.
  */
 @RequiresApi(34)
 final class HealthWatchStatusCollector {
@@ -27,6 +34,21 @@ final class HealthWatchStatusCollector {
     private static final String ACTION_CONNECTION_CHANGED = "com.huawei.bone.action.CONNECTION_STATE_CHANGED";
     private static final String CHARGE_MGR_CLASS =
             "com.huawei.hwdevice.phoneprocess.mgr.hwdevicestatusmgr.HwDeviceStatusPushManager";
+    private static final String CACHE_PREFS = "watchlink_watch_status_cache";
+    private static final String KEY_MAC = "mac";
+    private static final String KEY_NAME = "name";
+    private static final String KEY_BATTERY = "battery";
+    private static final String KEY_CHARGING = "charging";
+    private static final String KEY_UPDATED_AT = "updated_at";
+
+    static final int BATTERY_SERVICE_ID = 1;
+    static final int BATTERY_COMMAND_ID = 8;
+    /** Exact 1/8 getBattery TLV payload verified from Health Lnak.b (tag 0x01, len 0x00). */
+    static final byte[] BATTERY_QUERY_PAYLOAD = new byte[]{0x01, 0x00};
+
+    private static final long BATTERY_STALE_MS = 60_000L;
+    private static final long BATTERY_QUERY_COOLDOWN_MS = 2_500L;
+    private static final long BATTERY_QUERY_WAIT_MS = 1_200L;
 
     record WatchStatusSnapshot(
             boolean connected,
@@ -34,9 +56,13 @@ final class HealthWatchStatusCollector {
             String rawMac,
             int batteryPercent,
             boolean charging,
-            long updatedAtMs) {
+            long updatedAtMs,
+            int productType,
+            String hiLinkDeviceId,
+            String deviceModel,
+            String deviceSubModelId) {
         static final WatchStatusSnapshot DISCONNECTED =
-                new WatchStatusSnapshot(false, "", "", -1, false, 0L);
+                new WatchStatusSnapshot(false, "", "", -1, false, 0L, -1, "", "", "");
 
         @Override public String toString() {
             return "WatchStatusSnapshot(connected=" + connected
@@ -47,6 +73,7 @@ final class HealthWatchStatusCollector {
     private final Context app;
     private final Executor worker;
     private final HealthCooperativeReadiness readiness;
+    private final HealthExternalSender sender;
 
     private BroadcastReceiver statusReceiver;
     private Method batteryReadMethod;
@@ -57,12 +84,18 @@ final class HealthWatchStatusCollector {
     private volatile int cachedBattery = -1;
     private volatile boolean cachedCharging;
     private volatile long lastUpdatedAtMs;
+    private volatile long lastQueryElapsedMs;
+    private volatile CountDownLatch pendingBatteryLatch;
     private volatile Consumer<WatchStatusSnapshot> changeListener;
 
-    HealthWatchStatusCollector(Context app, Executor worker, HealthCooperativeReadiness readiness) {
+    HealthWatchStatusCollector(Context app, Executor worker,
+                               HealthCooperativeReadiness readiness,
+                               HealthExternalSender sender) {
         this.app = app;
         this.worker = worker;
         this.readiness = readiness;
+        this.sender = sender;
+        loadPersistedCache();
     }
 
     void setChangeListener(Consumer<WatchStatusSnapshot> listener) {
@@ -72,32 +105,96 @@ final class HealthWatchStatusCollector {
     void install(AlarmObserverInstaller installer, HealthSymbolResolver.Symbols symbols) {
         boolean batteryReady = installBatteryHook(installer, symbols);
         boolean chargeReady = installChargeHook(installer);
+        boolean directQueryReady = sender != null && sender.directFallbackReady();
         registerStatusReceiver();
         installed = true;
-        worker.execute(this::refreshAndNotify);
-        ProbeLog.info((batteryReady || chargeReady ? "HEALTH_WATCH_STATUS_READY" : "HEALTH_WATCH_STATUS_DEGRADED")
-                + " source=HEALTH");
+        worker.execute(() -> refreshAndNotify(true));
+        ProbeLog.info((batteryReady || chargeReady || directQueryReady
+                ? "HEALTH_WATCH_STATUS_READY" : "HEALTH_WATCH_STATUS_DEGRADED")
+                + " source=HEALTH direct_query=" + directQueryReady);
     }
 
     void close() {
         installed = false;
         changeListener = null;
+        CountDownLatch latch = pendingBatteryLatch;
+        pendingBatteryLatch = null;
+        if (latch != null) latch.countDown();
         if (statusReceiver != null) {
             try { app.unregisterReceiver(statusReceiver); } catch (RuntimeException ignored) {}
             statusReceiver = null;
         }
     }
 
-    /** Refreshes live watch connection/battery/charging state (call on worker thread). */
+    /** Fast check for Huawei Service 1 / Command 8 (getBattery) inbound frames. */
+    static boolean isBatteryResponseFrame(byte[] frame) {
+        return frame != null && frame.length >= 5 && frame[0] == BATTERY_SERVICE_ID && frame[1] == BATTERY_COMMAND_ID;
+    }
+
+    /**
+     * Parses watch battery percentage (0..100) from a Huawei Service 1 / Command 8 response frame.
+     * Matches Health Lnaf.c / Lnaf.b: returns -1 on timeout/error (frame[2] == 0x7F) or invalid data.
+     */
+    static int parseBatteryResponseFrame(byte[] frame) {
+        if (!isBatteryResponseFrame(frame)) return -1;
+        // 0x7F is Huawei error-code TLV (e.g., 7F 04 ... timeout/error).
+        if ((frame[2] & 0xFF) == 0x7F) return -1;
+        int pos = 2;
+        while (pos < frame.length) {
+            int tag = frame[pos++] & 0xFF;
+            if (pos >= frame.length) break;
+            int lenByte = frame[pos++] & 0xFF;
+            int len;
+            if ((lenByte & 0x80) == 0) {
+                len = lenByte;
+            } else {
+                if (pos >= frame.length) break;
+                int nextByte = frame[pos++] & 0xFF;
+                len = ((lenByte & 0x7F) << 7) | (nextByte & 0x7F);
+            }
+            if (len < 0 || pos + len > frame.length) break;
+            if (tag == 0x01 && len >= 1) {
+                int raw = frame[pos] & 0xFF;
+                if (raw == 0xFF) return -1;
+                return Math.min(raw, 100);
+            }
+            pos += len;
+        }
+        return -1;
+    }
+
+    /** Called from WatchIngressProbe when an inbound 01 08 battery frame arrives on SDK receive. */
+    void observeSdkFrame(String mac, byte[] frame) {
+        if (!installed || !isBatteryResponseFrame(frame)) return;
+        int level = parseBatteryResponseFrame(frame);
+        if (level >= 0 && level <= 100) {
+            onBatteryObserved(mac, level);
+        }
+    }
+
+    /** Refreshes watch status, actively querying 1/8 if battery is missing or stale. */
     WatchStatusSnapshot snapshot() {
+        return snapshot(true, false);
+    }
+
+    /** Refreshes watch status (call on worker thread). */
+    WatchStatusSnapshot snapshot(boolean allowActiveQuery, boolean forceQuery) {
         HealthCooperativeReadiness.WatchDeviceInfo info = readiness != null
                 ? readiness.readWatchDeviceInfo()
                 : HealthCooperativeReadiness.WatchDeviceInfo.DISCONNECTED;
         if (!info.connected()) {
-            return new WatchStatusSnapshot(false, lastKnownName, lastKnownMac, cachedBattery, false, lastUpdatedAtMs);
+            return new WatchStatusSnapshot(false, lastKnownName, lastKnownMac, cachedBattery, false, lastUpdatedAtMs,
+                    -1, "", "", "");
         }
         String mac = info.rawMac();
         String name = info.deviceName();
+        boolean macChanged = mac != null && !mac.isEmpty()
+                && !lastKnownMac.isEmpty() && !mac.equalsIgnoreCase(lastKnownMac);
+        if (macChanged) {
+            cachedBattery = -1;
+            cachedCharging = false;
+            lastUpdatedAtMs = 0L;
+        }
         if (mac != null && !mac.isEmpty()) lastKnownMac = mac;
         if (name != null && !name.isEmpty()) lastKnownName = name;
 
@@ -105,23 +202,66 @@ final class HealthWatchStatusCollector {
         if (battery >= 0 && battery <= 100) {
             cachedBattery = battery;
             if (lastUpdatedAtMs == 0L) lastUpdatedAtMs = System.currentTimeMillis();
+            persistCache();
         }
         Boolean charging = readChargingFromCache(mac);
         if (charging != null) {
             cachedCharging = charging;
         }
+
+        if (allowActiveQuery && mac != null && !mac.isEmpty()) {
+            long nowWall = System.currentTimeMillis();
+            boolean stale = cachedBattery < 0
+                    || lastUpdatedAtMs <= 0L
+                    || (nowWall - lastUpdatedAtMs) >= BATTERY_STALE_MS;
+            if (forceQuery || stale) {
+                queryBatteryDirectAndAwait(mac, forceQuery);
+            }
+        }
+
         return new WatchStatusSnapshot(
                 true,
                 name != null && !name.isEmpty() ? name : lastKnownName,
                 mac != null ? mac : "",
                 cachedBattery,
                 cachedCharging,
-                lastUpdatedAtMs);
+                lastUpdatedAtMs,
+                info.productType(),
+                info.hiLinkDeviceId(),
+                info.deviceModel(),
+                info.deviceSubModelId());
     }
 
-    private void refreshAndNotify() {
+    private void queryBatteryDirectAndAwait(String mac, boolean force) {
+        if (sender == null || !sender.directFallbackReady()) return;
+        long nowElapsed = SystemClock.elapsedRealtime();
+        long minGap = cachedBattery < 0 ? 1_500L : BATTERY_QUERY_COOLDOWN_MS;
+        if (!force && lastQueryElapsedMs > 0L && (nowElapsed - lastQueryElapsedMs) < minGap) {
+            return;
+        }
+        if (force && lastQueryElapsedMs > 0L && (nowElapsed - lastQueryElapsedMs) < 1_000L) {
+            return;
+        }
+        lastQueryElapsedMs = nowElapsed;
+        CountDownLatch latch = new CountDownLatch(1);
+        pendingBatteryLatch = latch;
+        try {
+            boolean sent = sender.sendDeviceCommand(mac, BATTERY_SERVICE_ID, BATTERY_COMMAND_ID, BATTERY_QUERY_PAYLOAD);
+            if (!sent) return;
+            ProbeLog.info("HEALTH_WATCH_BATTERY_QUERY_SENT source=HEALTH");
+            latch.await(BATTERY_QUERY_WAIT_MS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        } finally {
+            if (pendingBatteryLatch == latch) {
+                pendingBatteryLatch = null;
+            }
+        }
+    }
+
+    private void refreshAndNotify(boolean forceQuery) {
         if (!installed) return;
-        WatchStatusSnapshot snap = snapshot();
+        WatchStatusSnapshot snap = snapshot(true, forceQuery);
         notifyListener(snap);
     }
 
@@ -222,11 +362,11 @@ final class HealthWatchStatusCollector {
                         if (level >= 0 && level <= 100) {
                             onBatteryObserved(mac, level);
                         } else {
-                            try { worker.execute(HealthWatchStatusCollector.this::refreshAndNotify); }
+                            try { worker.execute(() -> refreshAndNotify(false)); }
                             catch (RuntimeException ignored) {}
                         }
                     } else if (ACTION_CONNECTION_CHANGED.equals(action)) {
-                        try { worker.execute(HealthWatchStatusCollector.this::refreshAndNotify); }
+                        try { worker.execute(() -> refreshAndNotify(true)); }
                         catch (RuntimeException ignored) {}
                     }
                 }
@@ -241,28 +381,67 @@ final class HealthWatchStatusCollector {
     private void onBatteryObserved(String mac, int level) {
         if (mac != null && !mac.isEmpty() && !lastKnownMac.isEmpty() && !mac.equalsIgnoreCase(lastKnownMac)) {
             // Re-verify primary device asynchronously before overwriting.
-            try { worker.execute(this::refreshAndNotify); } catch (RuntimeException ignored) {}
+            try { worker.execute(() -> refreshAndNotify(false)); } catch (RuntimeException ignored) {}
             return;
+        }
+        if (mac != null && !mac.isEmpty() && lastKnownMac.isEmpty()) {
+            lastKnownMac = mac;
         }
         boolean changed = cachedBattery != level;
         cachedBattery = level;
         lastUpdatedAtMs = System.currentTimeMillis();
+        CountDownLatch latch = pendingBatteryLatch;
+        if (latch != null) latch.countDown();
+        persistCache();
         if (changed) {
-            try { worker.execute(this::refreshAndNotify); } catch (RuntimeException ignored) {}
+            ProbeLog.info("HEALTH_WATCH_BATTERY_UPDATED battery=" + level + " charging=" + cachedCharging);
+            try { worker.execute(() -> refreshAndNotify(false)); } catch (RuntimeException ignored) {}
         }
     }
 
     private void onChargeObserved(String mac, boolean charging) {
         if (mac != null && !mac.isEmpty() && !lastKnownMac.isEmpty() && !mac.equalsIgnoreCase(lastKnownMac)) {
-            try { worker.execute(this::refreshAndNotify); } catch (RuntimeException ignored) {}
+            try { worker.execute(() -> refreshAndNotify(false)); } catch (RuntimeException ignored) {}
             return;
         }
         boolean changed = cachedCharging != charging;
         cachedCharging = charging;
         lastUpdatedAtMs = System.currentTimeMillis();
+        persistCache();
         if (changed) {
-            try { worker.execute(this::refreshAndNotify); } catch (RuntimeException ignored) {}
+            try { worker.execute(() -> refreshAndNotify(false)); } catch (RuntimeException ignored) {}
         }
+    }
+
+    private void loadPersistedCache() {
+        try {
+            SharedPreferences sp = app.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
+            String mac = sp.getString(KEY_MAC, "");
+            String name = sp.getString(KEY_NAME, "");
+            int bat = sp.getInt(KEY_BATTERY, -1);
+            boolean chg = sp.getBoolean(KEY_CHARGING, false);
+            long at = sp.getLong(KEY_UPDATED_AT, 0L);
+            if (mac != null) lastKnownMac = mac;
+            if (name != null) lastKnownName = name;
+            if (bat >= 0 && bat <= 100) {
+                cachedBattery = bat;
+                cachedCharging = chg;
+                lastUpdatedAtMs = Math.max(0L, at);
+            }
+        } catch (RuntimeException ignored) {}
+    }
+
+    private void persistCache() {
+        try {
+            SharedPreferences sp = app.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
+            sp.edit()
+                    .putString(KEY_MAC, lastKnownMac)
+                    .putString(KEY_NAME, lastKnownName)
+                    .putInt(KEY_BATTERY, cachedBattery)
+                    .putBoolean(KEY_CHARGING, cachedCharging)
+                    .putLong(KEY_UPDATED_AT, lastUpdatedAtMs)
+                    .apply();
+        } catch (RuntimeException ignored) {}
     }
 
     private int readBatteryFromCache(String mac) {

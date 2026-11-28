@@ -1,14 +1,22 @@
 package io.github.watchlink.xposed;
 
 import android.app.NotificationManager;
+import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
+import android.media.session.MediaController;
+import android.media.session.MediaSessionManager;
+import android.media.session.PlaybackState;
 import android.os.Bundle;
 import android.os.SystemClock;
+import android.provider.Settings;
 import android.view.KeyEvent;
 import androidx.annotation.RequiresApi;
 import io.github.watchlink.BuildConfig;
@@ -16,9 +24,13 @@ import io.github.watchlink.alarm.probe.ProbeLog;
 import io.github.watchlink.alarm.probe.TargetProfile;
 import io.github.watchlink.notify.NotificationDndPolicy;
 import io.github.watchlink.notify.SleepDndCoordinator;
+import io.github.watchlink.notify.SleepVideoStopPolicy;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -38,11 +50,18 @@ final class HealthSleepDndBridge {
     private static final int TLV_TAG_REMINDER = 0x13;
     private static final String TLV_SILENT_REMINDER_HEX = "13020000";
     private static final long SILENT_LOG_INTERVAL_MS = 10_000L;
-    private static final long AUDIO_FOCUS_RELEASE_DELAY_MS = 450L;
+    private static final long AUDIO_FOCUS_RELEASE_DELAY_MS = 1_500L;
+    private static final long VIDEO_STOP_COOLDOWN_MS = 60_000L;
+    private static final String HEALTH_NOTIFICATION_LISTENER =
+            "com.huawei.bone.ui.setting.NotificationPushListener";
 
     private static final String PREFS_NAME = BuildConfig.APPLICATION_ID + ".sleep_dnd_state_v1";
     private static final String KEY_LAST_FALL_ASLEEP_AT = "last_fall_asleep_at";
     private static final String KEY_LAST_WAKE_UP_AT = "last_wake_up_at";
+    private static final String KEY_SAVED_SCREEN_TIMEOUT = "pending_restore_screen_timeout";
+    private static final int SLEEP_TEMP_SCREEN_TIMEOUT_MS = 1_000;
+    private static final int MIN_RESTORE_SCREEN_TIMEOUT_MS = 15_000;
+    private static final long SCREEN_TIMEOUT_RESTORE_FALLBACK_MS = 15_000L;
     private static final String SLEEP_CALLBACK_CLASS =
             "com.huawei.hwdevice.phoneprocess.mgr.btproxy.callback.BtProxySleepCallback";
 
@@ -53,7 +72,14 @@ final class HealthSleepDndBridge {
             String lastEvent,
             long lastAt,
             long lastFallAsleepAt,
-            long lastWakeUpAt) {}
+            long lastWakeUpAt,
+            boolean writeSettingsAccess) {
+        StatusSnapshot(String watchSupport, boolean hookReady, boolean dndPolicyAccess,
+                       String lastEvent, long lastAt, long lastFallAsleepAt, long lastWakeUpAt) {
+            this(watchSupport, hookReady, dndPolicyAccess, lastEvent, lastAt,
+                    lastFallAsleepAt, lastWakeUpAt, false);
+        }
+    }
 
     private final Context app;
     private final HostSettings settings;
@@ -67,10 +93,13 @@ final class HealthSleepDndBridge {
     private volatile boolean silentPushHookReady;
     private volatile long lastSilentLogElapsedMs;
     private volatile long lastMediaPauseElapsedMs;
+    private volatile long lastVideoStopElapsedMs;
     private volatile String lastEvent = "NONE";
     private volatile long lastAt;
     private volatile long lastFallAsleepAt;
     private volatile long lastWakeUpAt;
+    private BroadcastReceiver screenOffRestoreReceiver;
+    private ScheduledFuture<?> screenOffRestoreTask;
 
     HealthSleepDndBridge(Context app, HostSettings settings, ScheduledExecutorService worker,
                          HealthCooperativeReadiness readiness) {
@@ -85,6 +114,7 @@ final class HealthSleepDndBridge {
     }
 
     void install(AlarmObserverInstaller installer, HealthSymbolResolver.Symbols symbols) {
+        restorePendingScreenTimeoutIfAny();
         modeObserver.start();
         hookReady = installSleepActionHook(installer, symbols);
         silentPushHookReady = installSilentReminderHook(installer, symbols);
@@ -97,13 +127,14 @@ final class HealthSleepDndBridge {
 
     void close() {
         installed = false;
+        restorePendingScreenTimeoutIfAny();
         modeObserver.close();
     }
 
     StatusSnapshot statusSnapshot() {
         String support = readiness == null ? "UNKNOWN" : readiness.readSleepWatchSupport();
         return new StatusSnapshot(support, hookReady, hasDirectPolicyAccess(), lastEvent, lastAt,
-                lastFallAsleepAt, lastWakeUpAt);
+                lastFallAsleepAt, lastWakeUpAt, hasWriteSettingsAccess());
     }
 
     private boolean installSleepActionHook(AlarmObserverInstaller installer, HealthSymbolResolver.Symbols symbols) {
@@ -302,10 +333,11 @@ final class HealthSleepDndBridge {
             case DISABLED, IGNORE_ACTION -> {}
         }
 
-        handleSleepPauseMediaLocked(action, nowWall, !dndUpdatedLastEvent);
+        boolean mediaUpdated = handleSleepPauseMediaLocked(action, nowWall, !dndUpdatedLastEvent);
+        handleSleepStopVideoLocked(action, nowWall, !dndUpdatedLastEvent && !mediaUpdated);
     }
 
-    private void handleSleepPauseMediaLocked(int action, long nowWall, boolean updateLastEvent) {
+    private boolean handleSleepPauseMediaLocked(int action, long nowWall, boolean updateLastEvent) {
         AudioManager am = null;
         boolean musicActive = false;
         boolean inCall = false;
@@ -323,7 +355,7 @@ final class HealthSleepDndBridge {
                 settings.isSleepPauseMediaEnabled(), action, musicActive, inCall, nowElapsed, lastMediaPauseElapsedMs);
         switch (mediaDecision) {
             case PAUSE_MEDIA -> {
-                boolean paused = pauseMediaPlayback(am);
+                boolean paused = pauseMediaPlayback(am, false);
                 if (paused) {
                     lastMediaPauseElapsedMs = nowElapsed;
                     if (updateLastEvent) {
@@ -331,6 +363,7 @@ final class HealthSleepDndBridge {
                         lastAt = nowWall;
                     }
                     ProbeLog.info("HEALTH_SLEEP_MEDIA_PAUSED source=HEALTH media_result=PAUSED");
+                    return true;
                 } else {
                     ProbeLog.info("HEALTH_SLEEP_MEDIA_PAUSED source=HEALTH media_result=FAILED");
                 }
@@ -340,13 +373,196 @@ final class HealthSleepDndBridge {
             case SKIP_COOLDOWN -> ProbeLog.info("HEALTH_SLEEP_MEDIA_PAUSED source=HEALTH media_result=SKIP_COOLDOWN");
             case DISABLED, IGNORE_ACTION -> {}
         }
+        return false;
     }
 
-    private boolean pauseMediaPlayback(AudioManager am) {
+    private void handleSleepStopVideoLocked(int action, long nowWall, boolean updateLastEvent) {
+        if (!settings.isSleepStopVideoEnabled() || action != SleepDndCoordinator.ACTION_FALL_ASLEEP) return;
+        long nowElapsed = SystemClock.elapsedRealtime();
+        if (lastVideoStopElapsedMs > 0L && nowElapsed >= lastVideoStopElapsedMs
+                && (nowElapsed - lastVideoStopElapsedMs) < VIDEO_STOP_COOLDOWN_MS) {
+            ProbeLog.info("HEALTH_SLEEP_VIDEO_STOPPED source=HEALTH video_result=SKIP_COOLDOWN");
+            return;
+        }
+        AudioManager am = null;
+        boolean musicActive = false;
+        boolean inCall = false;
+        try {
+            am = app.getSystemService(AudioManager.class);
+            if (am != null) {
+                int mode = am.getMode();
+                inCall = mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION;
+                musicActive = am.isMusicActive();
+            }
+        } catch (RuntimeException ignored) {}
+
+        Set<String> targets = SleepVideoStopPolicy.combinedTargetPackages(settings.sleepStopVideoCustomPkgs());
+        boolean matchedTargetSession = false;
+        boolean hasNonTargetActiveSession = false;
+        try {
+            MediaSessionManager msm = app.getSystemService(MediaSessionManager.class);
+            if (msm != null) {
+                ComponentName listener = new ComponentName(app.getPackageName(), HEALTH_NOTIFICATION_LISTENER);
+                List<MediaController> controllers = msm.getActiveSessions(listener);
+                if (controllers != null) {
+                    for (MediaController controller : controllers) {
+                        if (controller == null) continue;
+                        String pkg = controller.getPackageName();
+                        PlaybackState ps = controller.getPlaybackState();
+                        boolean active = ps != null && (ps.getState() == PlaybackState.STATE_PLAYING
+                                || ps.getState() == PlaybackState.STATE_BUFFERING
+                                || ps.getState() == PlaybackState.STATE_CONNECTING);
+                        if (pkg != null && targets.contains(pkg)) {
+                            if (active || musicActive) {
+                                matchedTargetSession = true;
+                                try {
+                                    controller.getTransportControls().pause();
+                                    controller.getTransportControls().stop();
+                                } catch (RuntimeException ignored) {}
+                            }
+                        } else if (active) {
+                            hasNonTargetActiveSession = true;
+                        }
+                    }
+                }
+            }
+        } catch (RuntimeException ignored) { /* Proceed with screen/audio fallback. */ }
+
+        boolean hasInstalledTarget = hasAnyInstalledPackage(targets);
+        boolean screenUnlocked = modeObserver.isScreenUnlocked();
+        SleepVideoStopPolicy.Decision decision = SleepVideoStopPolicy.evaluate(
+                true, action, inCall, matchedTargetSession, hasNonTargetActiveSession,
+                screenUnlocked, musicActive, hasInstalledTarget);
+        switch (decision) {
+            case STOP_MATCHED_SESSION, STOP_SCREEN_ON_VIDEO, STOP_ACTIVE_AUDIO_VIDEO -> {
+                boolean stoppedAudio = pauseMediaPlayback(am, true);
+                boolean returnedHome = returnToHomeScreen();
+                if (returnedHome || stoppedAudio || matchedTargetSession) {
+                    worker.schedule(this::triggerScreenOffViaTimeout, 400L, TimeUnit.MILLISECONDS);
+                }
+                if (stoppedAudio || returnedHome || matchedTargetSession) {
+                    lastVideoStopElapsedMs = nowElapsed;
+                    if (updateLastEvent) {
+                        lastEvent = "FALL_ASLEEP_VIDEO_STOPPED";
+                        lastAt = nowWall;
+                    }
+                    ProbeLog.info("HEALTH_SLEEP_VIDEO_STOPPED source=HEALTH video_result=" + decision.name());
+                } else {
+                    ProbeLog.info("HEALTH_SLEEP_VIDEO_STOPPED source=HEALTH video_result=FAILED");
+                }
+            }
+            case SKIP_IN_CALL -> ProbeLog.info("HEALTH_SLEEP_VIDEO_STOPPED source=HEALTH video_result=SKIP_IN_CALL");
+            case SKIP_NO_TARGET -> ProbeLog.info("HEALTH_SLEEP_VIDEO_STOPPED source=HEALTH video_result=SKIP_NO_TARGET");
+            case DISABLED, IGNORE_ACTION -> {}
+        }
+    }
+
+    private boolean hasAnyInstalledPackage(Set<String> packages) {
+        PackageManager pm = app.getPackageManager();
+        if (pm == null) return false;
+        for (String pkg : packages) {
+            try {
+                pm.getPackageInfo(pkg, 0);
+                return true;
+            } catch (PackageManager.NameNotFoundException | RuntimeException ignored) {}
+        }
+        return false;
+    }
+
+    private boolean returnToHomeScreen() {
+        try {
+            Intent home = new Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_HOME)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            app.startActivity(home);
+            return true;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private boolean hasWriteSettingsAccess() {
+        try {
+            return Settings.System.canWrite(app);
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Turns off the screen cleanly via Android's public SCREEN_OFF_TIMEOUT setting when Health
+     * holds WRITE_SETTINGS, then immediately restores the user's original timeout upon SCREEN_OFF
+     * (or after a bounded safety timer).
+     */
+    private synchronized void triggerScreenOffViaTimeout() {
+        if (!installed || !hasWriteSettingsAccess()) return;
+        try {
+            int saved = statePrefs.getInt(KEY_SAVED_SCREEN_TIMEOUT, -1);
+            int original = saved >= MIN_RESTORE_SCREEN_TIMEOUT_MS
+                    ? saved
+                    : Settings.System.getInt(app.getContentResolver(), Settings.System.SCREEN_OFF_TIMEOUT, 60_000);
+            if (original < MIN_RESTORE_SCREEN_TIMEOUT_MS) {
+                original = 60_000;
+            }
+            statePrefs.edit().putInt(KEY_SAVED_SCREEN_TIMEOUT, original).apply();
+            unregisterScreenOffRestoreLocked();
+            BroadcastReceiver r = new BroadcastReceiver() {
+                @Override public void onReceive(Context context, Intent intent) {
+                    if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
+                        try { worker.execute(HealthSleepDndBridge.this::restorePendingScreenTimeoutIfAny); }
+                        catch (RuntimeException ignored) { restorePendingScreenTimeoutIfAny(); }
+                    }
+                }
+            };
+            app.registerReceiver(r, new IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_EXPORTED);
+            screenOffRestoreReceiver = r;
+            screenOffRestoreTask = worker.schedule(
+                    this::restorePendingScreenTimeoutIfAny,
+                    SCREEN_TIMEOUT_RESTORE_FALLBACK_MS,
+                    TimeUnit.MILLISECONDS);
+            Settings.System.putInt(app.getContentResolver(),
+                    Settings.System.SCREEN_OFF_TIMEOUT, SLEEP_TEMP_SCREEN_TIMEOUT_MS);
+        } catch (RuntimeException ignored) {
+            restorePendingScreenTimeoutIfAny();
+        }
+    }
+
+    private synchronized void restorePendingScreenTimeoutIfAny() {
+        unregisterScreenOffRestoreLocked();
+        int saved = statePrefs.getInt(KEY_SAVED_SCREEN_TIMEOUT, -1);
+        if (saved >= MIN_RESTORE_SCREEN_TIMEOUT_MS && hasWriteSettingsAccess()) {
+            try {
+                Settings.System.putInt(app.getContentResolver(), Settings.System.SCREEN_OFF_TIMEOUT, saved);
+            } catch (RuntimeException ignored) {}
+        }
+        if (saved != -1) {
+            try { statePrefs.edit().remove(KEY_SAVED_SCREEN_TIMEOUT).apply(); }
+            catch (RuntimeException ignored) {}
+        }
+    }
+
+    private void unregisterScreenOffRestoreLocked() {
+        if (screenOffRestoreTask != null) {
+            screenOffRestoreTask.cancel(false);
+            screenOffRestoreTask = null;
+        }
+        if (screenOffRestoreReceiver != null) {
+            try { app.unregisterReceiver(screenOffRestoreReceiver); } catch (RuntimeException ignored) {}
+            screenOffRestoreReceiver = null;
+        }
+    }
+
+    private boolean pauseMediaPlayback(AudioManager am, boolean includeStopKey) {
         if (am == null) return false;
         boolean dispatched = false;
         try {
             long eventTime = SystemClock.uptimeMillis();
+            if (includeStopKey) {
+                am.dispatchMediaKeyEvent(new KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN,
+                        KeyEvent.KEYCODE_MEDIA_STOP, 0));
+                am.dispatchMediaKeyEvent(new KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP,
+                        KeyEvent.KEYCODE_MEDIA_STOP, 0));
+            }
             am.dispatchMediaKeyEvent(new KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN,
                     KeyEvent.KEYCODE_MEDIA_PAUSE, 0));
             am.dispatchMediaKeyEvent(new KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP,
@@ -354,7 +570,8 @@ final class HealthSleepDndBridge {
             dispatched = true;
         } catch (RuntimeException ignored) {}
 
-        // Brief audio-focus grab & release as a fallback for apps that ignore KEYCODE_MEDIA_PAUSE.
+        // Permanent AUDIOFOCUS_GAIN grab (held briefly then abandoned) triggers AUDIOFOCUS_LOSS so
+        // short-video / live players (Douyin, Bilibili, Hongguo, etc.) stop without auto-resuming.
         try {
             AudioAttributes attrs = new AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)

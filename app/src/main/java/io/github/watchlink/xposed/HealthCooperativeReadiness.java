@@ -41,14 +41,17 @@ final class HealthCooperativeReadiness {
         }
     }
 
-    record WatchDeviceInfo(boolean connected, String rawMac, String deviceName) {
-        static final WatchDeviceInfo DISCONNECTED = new WatchDeviceInfo(false, "", "");
+    record WatchDeviceInfo(boolean connected, String rawMac, String deviceName,
+                           int productType, String hiLinkDeviceId, String deviceModel,
+                           String deviceSubModelId) {
+        static final WatchDeviceInfo DISCONNECTED = new WatchDeviceInfo(false, "", "", -1, "", "", "");
 
         @Override public String toString() {
             return "WatchDeviceInfo(connected=" + connected + ")";
         }
     }
-    private final Method manager, connected, identify, expand, deviceNameMethod;
+    private final Method manager, connected, identify, expand, deviceNameMethod,
+            productTypeMethod, hiLinkIdMethod, deviceModelMethod, deviceSubModelIdMethod;
     private final Object mainDevices;
 
     @RequiresApi(34)
@@ -71,6 +74,22 @@ final class HealthCooperativeReadiness {
         try { nameM = installer.method(device, "getDeviceName", String.class, false); }
         catch (ReflectiveOperationException ignored) {}
         deviceNameMethod = nameM;
+        Method prodM = null;
+        try { prodM = installer.method(device, "getProductType", int.class, false); }
+        catch (ReflectiveOperationException ignored) {}
+        productTypeMethod = prodM;
+        Method hiLinkM = null;
+        try { hiLinkM = installer.method(device, "getHiLinkDeviceId", String.class, false); }
+        catch (ReflectiveOperationException ignored) {}
+        hiLinkIdMethod = hiLinkM;
+        Method modelM = null;
+        try { modelM = installer.method(device, "getDeviceModel", String.class, false); }
+        catch (ReflectiveOperationException ignored) {}
+        deviceModelMethod = modelM;
+        Method subModelM = null;
+        try { subModelM = installer.method(device, "getDeviceSubModelId", String.class, false); }
+        catch (ReflectiveOperationException ignored) {}
+        deviceSubModelIdMethod = subModelM;
     }
 
     @RequiresApi(34)
@@ -140,7 +159,27 @@ final class HealthCooperativeReadiness {
                     Object rawName = deviceNameMethod.invoke(device);
                     if (rawName instanceof String s) name = sanitizeWatchName(s);
                 }
-                return new WatchDeviceInfo(true, key, name);
+                int productType = -1;
+                if (productTypeMethod != null) {
+                    Object rawType = productTypeMethod.invoke(device);
+                    if (rawType instanceof Integer t) productType = t;
+                }
+                String hiLinkId = "";
+                if (hiLinkIdMethod != null) {
+                    Object rawHi = hiLinkIdMethod.invoke(device);
+                    if (rawHi instanceof String s) hiLinkId = s.trim();
+                }
+                String deviceModel = "";
+                if (deviceModelMethod != null) {
+                    Object rawModel = deviceModelMethod.invoke(device);
+                    if (rawModel instanceof String s) deviceModel = s.trim();
+                }
+                String deviceSubModelId = "";
+                if (deviceSubModelIdMethod != null) {
+                    Object rawSub = deviceSubModelIdMethod.invoke(device);
+                    if (rawSub instanceof String s) deviceSubModelId = s.trim();
+                }
+                return new WatchDeviceInfo(true, key, name, productType, hiLinkId, deviceModel, deviceSubModelId);
             }
             return WatchDeviceInfo.DISCONNECTED;
         } catch (Exception unavailable) {

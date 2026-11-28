@@ -1,7 +1,9 @@
 package io.github.watchlink.tile;
 
 /**
- * Pure-Java formatter for the WatchLink Quick Settings tile label, subtitle, and active state.
+ * Pure-Java formatter for the WatchLink Quick Settings tile.
+ * Always keeps the tile in inactive visual state and displays battery percentage directly
+ * in the title without showing the watch name.
  */
 public final class WatchTileFormatter {
     public static final int STATE_INACTIVE = 1;
@@ -16,22 +18,22 @@ public final class WatchTileFormatter {
             String watchName,
             int batteryPercent,
             boolean charging) {
-        String label = (watchName != null && !watchName.trim().isEmpty())
-                ? watchName.trim() : "WatchLink";
+        boolean hasBattery = batteryPercent >= 0 && batteryPercent <= 100;
+        String batteryLabel = hasBattery ? ((charging ? "⚡" : "") + batteryPercent + "%") : "";
         if (refreshing) {
-            return new TilePresentation(label, "刷新中…", watchConnected ? STATE_ACTIVE : STATE_INACTIVE);
+            String label = (watchConnected && hasBattery) ? batteryLabel : "手表";
+            return new TilePresentation(label, "刷新中…", STATE_INACTIVE);
         }
         if (!healthReachable) {
-            return new TilePresentation("WatchLink", "等待运动健康", STATE_INACTIVE);
+            return new TilePresentation("手表", "等待运动健康", STATE_INACTIVE);
         }
         if (!watchConnected) {
-            return new TilePresentation(label, "未连接", STATE_INACTIVE);
+            return new TilePresentation("手表", "未连接", STATE_INACTIVE);
         }
-        if (batteryPercent >= 0 && batteryPercent <= 100) {
-            String sub = charging ? ("充电中 · " + batteryPercent + "%") : ("已连接 · " + batteryPercent + "%");
-            return new TilePresentation(label, sub, STATE_ACTIVE);
+        if (hasBattery) {
+            return new TilePresentation(batteryLabel, charging ? "充电中" : "已连接", STATE_INACTIVE);
         }
-        return new TilePresentation(label, charging ? "充电中" : "已连接", STATE_ACTIVE);
+        return new TilePresentation("已连接", charging ? "充电中" : "电量待同步", STATE_INACTIVE);
     }
 
     private WatchTileFormatter() {}

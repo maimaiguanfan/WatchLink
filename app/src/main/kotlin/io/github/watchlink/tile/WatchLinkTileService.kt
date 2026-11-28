@@ -23,7 +23,7 @@ class WatchLinkTileService : TileService() {
         super.onStartListening()
         listening = true
         render(refreshing = lastReply == null, reply = lastReply)
-        queryWatchStatus()
+        queryWatchStatus(HealthHostControl.QUERY)
     }
 
     override fun onStopListening() {
@@ -34,11 +34,11 @@ class WatchLinkTileService : TileService() {
     override fun onClick() {
         super.onClick()
         render(refreshing = true, reply = lastReply)
-        queryWatchStatus()
+        queryWatchStatus(HealthHostControl.REFRESH_WATCH_STATUS)
     }
 
-    private fun queryWatchStatus() {
-        HealthHostControl.send(applicationContext, HealthHostControl.QUERY) { reply ->
+    private fun queryWatchStatus(command: String) {
+        HealthHostControl.send(applicationContext, command) { reply ->
             lastReply = reply
             if (listening) {
                 render(refreshing = false, reply = reply)

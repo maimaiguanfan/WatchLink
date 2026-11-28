@@ -30,6 +30,8 @@ final class HostSettings {
     private volatile Consumer<Boolean> sleepAutoDndChangedCallback;
     private volatile Consumer<Boolean> wakeExitDndChangedCallback;
     private volatile Consumer<Boolean> sleepPauseMediaChangedCallback;
+    private volatile Consumer<Boolean> sleepStopVideoChangedCallback;
+    private volatile Consumer<String> sleepStopVideoCustomPkgsChangedCallback;
     private volatile Consumer<Boolean> myDevicesCardChangedCallback;
     private volatile Consumer<String> myDevicesTapTargetChangedCallback;
     private volatile Consumer<Boolean> rawCommandDebugChangedCallback;
@@ -112,6 +114,18 @@ final class HostSettings {
                     Consumer<Boolean> callback = sleepPauseMediaChangedCallback;
                     if (callback != null) {
                         callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = sleepStopVideoChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_CUSTOM_PKGS.equals(key)) {
+                    Consumer<String> callback = sleepStopVideoCustomPkgsChangedCallback;
+                    if (callback != null) {
+                        callback.accept(io.github.watchlink.notify.SleepVideoStopPolicy.serializeCustomPackages(
+                                io.github.watchlink.notify.SleepVideoStopPolicy.parseCustomPackages(
+                                        prefs.getString(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_CUSTOM_PKGS, ""))));
                     }
                 } else if (WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED.equals(key)) {
                     Consumer<Boolean> callback = myDevicesCardChangedCallback;
@@ -233,6 +247,25 @@ final class HostSettings {
         return readBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED);
     }
 
+    boolean isSleepStopVideoEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_ENABLED);
+    }
+
+    String sleepStopVideoCustomPkgs() {
+        if (remote != null) {
+            try {
+                if (remote.contains(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_CUSTOM_PKGS)) {
+                    return io.github.watchlink.notify.SleepVideoStopPolicy.serializeCustomPackages(
+                            io.github.watchlink.notify.SleepVideoStopPolicy.parseCustomPackages(
+                                    remote.getString(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_CUSTOM_PKGS, "")));
+                }
+            } catch (RuntimeException ignored) {}
+        }
+        return io.github.watchlink.notify.SleepVideoStopPolicy.serializeCustomPackages(
+                io.github.watchlink.notify.SleepVideoStopPolicy.parseCustomPackages(
+                        local.getString(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_CUSTOM_PKGS, "")));
+    }
+
     boolean isMyDevicesCardEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED);
     }
@@ -335,6 +368,16 @@ final class HostSettings {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, enabled).commit();
     }
 
+    boolean setLocalSleepStopVideoFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalSleepStopVideoCustomPkgsFallback(String raw) {
+        String normalized = io.github.watchlink.notify.SleepVideoStopPolicy.serializeCustomPackages(
+                io.github.watchlink.notify.SleepVideoStopPolicy.parseCustomPackages(raw));
+        return local.edit().putString(WatchLinkPrefs.KEY_SLEEP_STOP_VIDEO_CUSTOM_PKGS, normalized).commit();
+    }
+
     boolean setLocalMyDevicesCardFallback(boolean enabled) {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED, enabled).commit();
     }
@@ -404,6 +447,14 @@ final class HostSettings {
         sleepPauseMediaChangedCallback = callback;
     }
 
+    void onSleepStopVideoChanged(Consumer<Boolean> callback) {
+        sleepStopVideoChangedCallback = callback;
+    }
+
+    void onSleepStopVideoCustomPkgsChanged(Consumer<String> callback) {
+        sleepStopVideoCustomPkgsChangedCallback = callback;
+    }
+
     void onMyDevicesCardChanged(Consumer<Boolean> callback) {
         myDevicesCardChangedCallback = callback;
     }
@@ -432,6 +483,8 @@ final class HostSettings {
         sleepAutoDndChangedCallback = null;
         wakeExitDndChangedCallback = null;
         sleepPauseMediaChangedCallback = null;
+        sleepStopVideoChangedCallback = null;
+        sleepStopVideoCustomPkgsChangedCallback = null;
         myDevicesCardChangedCallback = null;
         myDevicesTapTargetChangedCallback = null;
         rawCommandDebugChangedCallback = null;

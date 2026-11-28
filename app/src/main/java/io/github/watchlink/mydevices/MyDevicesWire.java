@@ -22,9 +22,17 @@ public final class MyDevicesWire {
     public static final String EXTRA_BATTERY = "battery";
     public static final String EXTRA_CHARGING = "charging";
     public static final String EXTRA_UPDATED_AT = "updatedAt";
+    public static final String EXTRA_ICON_PNG = "iconPng";
+    public static final String EXTRA_ICON_HASH = "iconHash";
 
     @RequiresApi(34)
     public static void sendSnapshotToMyDevices(Context healthApp, MyDevicesCardCodec.CardSnapshot snap) {
+        sendSnapshotToMyDevices(healthApp, snap, null, null);
+    }
+
+    @RequiresApi(34)
+    public static void sendSnapshotToMyDevices(Context healthApp, MyDevicesCardCodec.CardSnapshot snap,
+                                               byte[] iconPng, String iconHash) {
         if (healthApp == null || snap == null || !snap.valid()) return;
         Intent intent = new Intent(ACTION_SYNC)
                 .setPackage(TargetProfile.MY_DEVICES.packageName)
@@ -36,6 +44,11 @@ public final class MyDevicesWire {
                 .putExtra(EXTRA_BATTERY, snap.batteryPercent())
                 .putExtra(EXTRA_CHARGING, snap.charging())
                 .putExtra(EXTRA_UPDATED_AT, snap.updatedAtMs());
+        if (iconPng != null && iconPng.length > 0 && iconPng.length <= 220 * 1024
+                && iconHash != null && !iconHash.isEmpty()) {
+            intent.putExtra(EXTRA_ICON_PNG, iconPng);
+            intent.putExtra(EXTRA_ICON_HASH, iconHash);
+        }
         healthApp.sendBroadcast(intent, null,
                 BroadcastOptions.makeBasic().setShareIdentityEnabled(true).toBundle());
     }

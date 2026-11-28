@@ -19,20 +19,21 @@ public class MyDevicesCardCodecTest {
                 id, "HUAWEI WATCH \"6\" Pro", "11:22:33:44:55:66", true, 88, true, 1_700_000_000_000L);
         String json = MyDevicesCardCodec.toDeviceDataJson(snap, "io.github.maimaiguanfan.watchlink");
         assertTrue(json.startsWith("{") && json.endsWith("}"));
-        assertTrue(json.contains("\"deviceId\":\"" + id + "\""));
-        assertTrue(json.contains("\"name\":\"HUAWEI WATCH \\\"6\\\" Pro\""));
-        assertTrue(json.contains("\"type\":\"WATCH\""));
+        assertTrue(json.contains("\"mDeviceId\":\"" + id + "\""));
+        assertTrue(json.contains("\"mDeviceName\":\"HUAWEI WATCH \\\"6\\\" Pro\""));
+        assertTrue(json.contains("\"mDeviceType\":\"WATCH\""));
         assertTrue(json.contains("\"mConnectState\":\"CONNECTED\""));
         assertTrue(json.contains("\"mAuthority\":\"" + MyDevicesCardCodec.VIRTUAL_AUTHORITY + "\""));
         assertTrue(json.contains("\"associatedPackageName\":\"io.github.maimaiguanfan.watchlink\""));
         assertTrue(json.contains("\"mBatteryInfoList\":[{\"batteryType\":\"SINGLE\",\"value\":88,\"charge\":true}]"));
-        assertTrue(json.contains("\"mBatteryList\":[{\"batteryType\":\"SINGLE\",\"value\":88,\"charge\":true}]"));
+        assertTrue(json.contains("\"mBatteryList\":[88]"));
 
         MyDevicesCardCodec.CardSnapshot disconnected = new MyDevicesCardCodec.CardSnapshot(
                 id, "HUAWEI WATCH 6 Pro", "", false, -1, false, 1_700_000_001_000L);
         String offJson = MyDevicesCardCodec.toDeviceDataJson(disconnected, "com.huawei.health");
         assertTrue(offJson.contains("\"mConnectState\":\"DISCONNECTED\""));
         assertTrue(offJson.contains("\"mBatteryInfoList\":[]"));
+        assertTrue(offJson.contains("\"mBatteryList\":[]"));
     }
 
     @Test public void normalizesTapTargetSafely() {

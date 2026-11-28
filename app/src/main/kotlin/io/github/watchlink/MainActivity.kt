@@ -68,9 +68,15 @@ class MainActivity : ComponentActivity() {
                 onSleepAutoDndEnable = ::setSleepAutoDndEnabled,
                 onWakeExitDndEnable = ::setWakeExitDndEnabled,
                 onSleepPauseMediaEnable = ::setSleepPauseMediaEnabled,
+                onSleepStopVideoEnable = ::setSleepStopVideoEnabled,
+                onSleepStopVideoCustomPkgs = ::setSleepStopVideoCustomPkgs,
                 onMyDevicesCardEnable = ::setMyDevicesCardEnabled,
                 onMyDevicesTapTarget = ::setMyDevicesTapTarget,
                 onOpenDndAccessSettings = { open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) },
+                onOpenWriteSettingsAccess = {
+                    open(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                        ("package:" + TargetProfile.HEALTH.packageName).toUri()))
+                },
                 onWifiAutoEnable = ::setWifiAutoEnabled,
                 onRawCommandDebugEnable = ::setRawCommandDebugEnabled,
                 onDismissMessage = { ui = ui.copy(message = null) },
@@ -251,6 +257,20 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private suspend fun writeRemoteSleepStopVideoEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteSleepStopVideoEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteSleepStopVideoCustomPkgs(raw: String): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteSleepStopVideoCustomPkgs(raw) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
     private suspend fun writeRemoteMyDevicesCardEnabled(enabled: Boolean): Boolean =
         suspendCancellableCoroutine { continuation ->
             ModuleScope.writeRemoteMyDevicesCardEnabled(enabled) { ok ->
@@ -291,7 +311,7 @@ class MainActivity : ComponentActivity() {
             || ui.gameFlashbackSaving || ui.notifyMuteDndSaving || ui.notifySilentPushSaving
             || ui.notifySilentScreenOnSaving || ui.notifySilentFocusSaving || ui.notifySilentGameSaving
             || ui.sleepAutoDndSaving || ui.wakeExitDndSaving || ui.sleepPauseMediaSaving
-            || ui.myDevicesCardSaving || ui.rawCommandDebugSaving) return
+            || ui.sleepStopVideoSaving || ui.myDevicesCardSaving || ui.rawCommandDebugSaving) return
         val revision = ++switchRevision
         val (clockReply, calendarReply, healthReply) = coroutineScope {
             val clockJob = async { clockCommand(ClockHostControl.QUERY) }
@@ -593,6 +613,49 @@ class MainActivity : ComponentActivity() {
                 healthHost = healthReply,
                 sleepPauseMediaSaving = false,
                 message = if (!saved) "未能保存入睡暂停播放开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setSleepStopVideoEnabled(enable: Boolean) {
+        if (ui.sleepStopVideoSaving) return
+        ++switchRevision
+        ui = ui.copy(sleepStopVideoSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteSleepStopVideoEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_SLEEP_STOP_VIDEO
+            else HealthHostControl.DISABLE_SLEEP_STOP_VIDEO
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.sleepStopVideoEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                sleepStopVideoSaving = false,
+                message = if (!saved) "未能保存入睡停止短视频开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setSleepStopVideoCustomPkgs(raw: String) {
+        if (ui.sleepStopVideoSaving) return
+        val normalized = io.github.watchlink.notify.SleepVideoStopPolicy.serializeCustomPackages(
+            io.github.watchlink.notify.SleepVideoStopPolicy.parseCustomPackages(raw),
+        )
+        ++switchRevision
+        ui = ui.copy(sleepStopVideoSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteSleepStopVideoCustomPkgs(normalized)
+            val healthReply = healthCommand(HealthHostControl.setSleepStopVideoCustomPkgsCommand(normalized))
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.sleepStopVideoCustomPkgs() == normalized)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                sleepStopVideoSaving = false,
+                message = if (!saved) "未能保存自定义短视频/直播包名列表。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
             )
             readChecks()
         }

@@ -230,7 +230,7 @@ public class HostSettingsTest {
         assertEquals(8, lastLeadSec.get());
 
         // Clamping out-of-range values protects against corrupt prefs.
-        remote.edit().putInt(WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC, 99).commit();
+        remote.edit().putInt(WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC, 999).commit();
         assertEquals(WatchLinkPrefs.MAX_GAME_FLASHBACK_LEAD_SEC, settings.gameFlashbackLeadSec());
         assertEquals(WatchLinkPrefs.MAX_GAME_FLASHBACK_LEAD_SEC, lastLeadSec.get());
     }

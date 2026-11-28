@@ -28,6 +28,8 @@ public final class WatchLinkModule extends XposedModule {
     private volatile Context hostContext;
     private volatile XposedInterface.HookHandle bootstrapHandle;
     private volatile WirelessSettingsBridge earlyWirelessBridge;
+    private volatile MyDevicesBridge earlyMyDevicesBridge;
+    private volatile MyDevicesCardsUiBridge myDevicesCardsUiBridge;
     private volatile AlarmObserverInstaller currentInstaller;
     private volatile HealthDaemonLiveBridge daemonLiveBridge;
     private final AtomicBoolean scheduled = new AtomicBoolean();
@@ -43,7 +45,8 @@ public final class WatchLinkModule extends XposedModule {
         if (profile == null) return;
 
         boolean isDaemon = profile.isHealthDaemonProcess(processName);
-        if (!isDaemon && !profile.isReminderProcess(processName)) return;
+        boolean isMyDevicesCards = profile.isMyDevicesCardsProcess(processName);
+        if (!isDaemon && !isMyDevicesCards && !profile.isReminderProcess(processName)) return;
         if (!scheduled.compareAndSet(false, true)) return;
 
         ProbeLog.info("MODULE_LOADED source=" + (isDaemon ? "DAEMON" : profile) + " api=" + getApiVersion());
@@ -77,9 +80,28 @@ public final class WatchLinkModule extends XposedModule {
             return;
         }
 
-        // Arm the unobfuscated WirelessSettings wake hook synchronously so cold-start 1B queries never race.
+        if (isMyDevicesCards) {
+            Consumer<Application> startCardsUi = app -> {
+                Context ctx = app != null ? app.getApplicationContext() : currentHostApplication();
+                if (ctx == null) return;
+                hostContext = ctx;
+                launchMyDevicesCardsUiBridge(loader, ctx, "WatchLink-mydevices-cards-ui");
+            };
+            XposedInterface.HookHandle handle = HostApplicationReady.observe(
+                    this, profile.packageName, param.getApplicationInfo().className, loader, startCardsUi);
+            if (handle != null) {
+                bootstrapHandle = handle;
+                return;
+            }
+            startCardsUi.accept(null);
+            return;
+        }
+
+        // Arm unobfuscated early hooks synchronously so cold-start initialization never races.
         if (profile == TargetProfile.WIRELESS_SETTINGS) {
             earlyWirelessBridge = WirelessSettingsBridge.installEarlyHook(this, loader, openRemotePreferences());
+        } else if (profile == TargetProfile.MY_DEVICES) {
+            earlyMyDevicesBridge = MyDevicesBridge.installEarlyHook(this, loader, openRemotePreferences());
         }
 
         Consumer<Application> start = app -> {
@@ -113,6 +135,16 @@ public final class WatchLinkModule extends XposedModule {
         earlyWirelessBridge = null;
         if (earlyWireless != null) {
             try { earlyWireless.close(); } catch (RuntimeException ignored) {}
+        }
+        MyDevicesBridge earlyMyDevices = earlyMyDevicesBridge;
+        earlyMyDevicesBridge = null;
+        if (earlyMyDevices != null) {
+            try { earlyMyDevices.close(); } catch (RuntimeException ignored) {}
+        }
+        MyDevicesCardsUiBridge cardsUi = myDevicesCardsUiBridge;
+        myDevicesCardsUiBridge = null;
+        if (cardsUi != null) {
+            try { cardsUi.close(); } catch (RuntimeException ignored) {}
         }
         if (installer != null) {
             currentInstaller = null;
@@ -166,7 +198,8 @@ public final class WatchLinkModule extends XposedModule {
         TargetProfile profile = TargetProfile.fromPackage(pkg);
         if (profile == null) return;
         boolean isDaemon = profile.isHealthDaemonProcess(processName);
-        if (!isDaemon && !profile.isReminderProcess(processName)) return;
+        boolean isMyDevicesCards = profile.isMyDevicesCardsProcess(processName);
+        if (!isDaemon && !isMyDevicesCards && !profile.isReminderProcess(processName)) return;
 
         ApplicationInfo owner = getModuleApplicationInfo();
         if (owner == null || owner.uid < 0 || !BuildConfig.APPLICATION_ID.equals(owner.packageName)) {
@@ -186,6 +219,12 @@ public final class WatchLinkModule extends XposedModule {
             }
             return;
         }
+        if (isMyDevicesCards) {
+            if (hostContext != null) {
+                launchMyDevicesCardsUiBridge(savedLoader, hostContext, "WatchLink-hot-reload-mydevices-cards");
+            }
+            return;
+        }
         launchInstall(profile, savedLoader, savedSources, owner.uid, hostContext, "WatchLink-hot-reload-install");
     }
 
@@ -195,8 +234,10 @@ public final class WatchLinkModule extends XposedModule {
         SharedPreferences remote = openRemotePreferences();
         WirelessSettingsBridge preInstalledWireless = earlyWirelessBridge;
         earlyWirelessBridge = null;
+        MyDevicesBridge preInstalledMyDevices = earlyMyDevicesBridge;
+        earlyMyDevicesBridge = null;
         AlarmObserverInstaller installer = new AlarmObserverInstaller(
-                this, profile, loader, ownerUid, remote, preInstalledWireless);
+                this, profile, loader, ownerUid, remote, preInstalledWireless, preInstalledMyDevices);
         currentInstaller = installer;
         Thread worker = new Thread(() -> {
             try {
@@ -205,6 +246,15 @@ public final class WatchLinkModule extends XposedModule {
                 ProbeLog.failure("ALARM_INSTALL_WORKER_FAILED", error);
             }
         }, threadName);
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    @RequiresApi(34)
+    private void launchMyDevicesCardsUiBridge(ClassLoader loader, Context ctx, String threadName) {
+        MyDevicesCardsUiBridge bridge = new MyDevicesCardsUiBridge(this, loader, ctx, openRemotePreferences());
+        myDevicesCardsUiBridge = bridge;
+        Thread worker = new Thread(bridge::install, threadName);
         worker.setDaemon(true);
         worker.start();
     }

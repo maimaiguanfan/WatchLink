@@ -59,4 +59,9 @@ public enum TargetProfile {
     public boolean isHealthDaemonProcess(String processName) {
         return this == HEALTH && (packageName + ":DaemonService").equals(processName);
     }
+
+    /** ColorOS MyDevices renders DeviceCardHomeActivity and HomeCardView inside :cards. */
+    public boolean isMyDevicesCardsProcess(String processName) {
+        return this == MY_DEVICES && (packageName + ":cards").equals(processName);
+    }
 }

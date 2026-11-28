@@ -5,9 +5,12 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
-import android.view.MotionEvent;
-import android.view.ViewConfiguration;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.net.Uri;
+import android.os.SystemClock;
 import androidx.annotation.RequiresApi;
+import io.github.libxposed.api.XposedInterface;
 import io.github.watchlink.BuildConfig;
 import io.github.watchlink.alarm.probe.ProbeLog;
 import io.github.watchlink.alarm.probe.SenderVerifier;
@@ -15,21 +18,26 @@ import io.github.watchlink.alarm.probe.TargetProfile;
 import io.github.watchlink.mydevices.MyDevicesCardCodec;
 import io.github.watchlink.mydevices.MyDevicesWire;
 import io.github.watchlink.setup.WatchLinkPrefs;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Pure zero-WatchLink-process bridge inside ColorOS MyDevices (com.heytap.mydevices 17.25.15+).
- * Receives live watch snapshots directly from Huawei Health :PhoneService via MyDevicesWire,
- * serves virtual device_data JSON in-memory through DeviceAppProviderQuery (never waking WatchLink),
- * drives IDeviceAppObserver updates, and routes card taps to either Huawei Health or WatchLink
- * according to LSPosed RemotePreferences.
+ * Pure zero-WatchLink-process bridge inside ColorOS MyDevices main process (com.heytap.mydevices 17.25.15+).
+ * Installs core hooks synchronously during onPackageReady BEFORE DeviceApplication.attachBaseContext()/onCreate()
+ * runs Koin initialization, so DeviceAppConfigManager, ConfigurationManager, AppAgentManager,
+ * DeviceAppProviderQuery, and DeviceIconConverter see WatchLink's virtual watch device and official
+ * Huawei Health watch PNG immediately on cold start without racing.
  */
 @RequiresApi(34)
 final class MyDevicesBridge {
@@ -39,101 +47,176 @@ final class MyDevicesBridge {
     private static final String DEVICE_APP_CONFIG_MGR = "com.heytap.mydevices.core.config.DeviceAppConfigManager";
     private static final String CONFIGURATION_MGR = "com.heytap.mydevices.core.config.ConfigurationManager";
     private static final String APP_AGENT_MGR = "com.heytap.mydevices.core.agent.AppAgentManager";
+    private static final String DEVICE_APP_SCANNER = "com.heytap.mydevices.core.device.DeviceAppScannerImpl";
     private static final String DEVICE_APP_CLASS = "com.oplus.mydevices.domain.entities.config.DeviceApp";
     private static final String DEL_DEVICE_METHOD_CLASS = "com.oplus.mydevices.domain.entities.config.DelDeviceMethod";
     private static final String DEVICE_APP_CONFIG_CLASS = "com.oplus.mydevices.domain.entities.config.DeviceAppConfig";
     private static final String CARD_CONFIG_CLASS = "com.oplus.mydevices.domain.entities.config.CardConfig";
     private static final String DEVICE_APP_OBSERVER_CLASS = "com.oplus.mydevices.domain.ports.scanner.IDeviceAppObserver";
-    private static final String HOME_CARD_VIEW_CLASS = "com.oplus.mydevices.deviceui.devicecard.view.homecard.HomeCardView";
+    private static final String DEVICE_INFO_KT_CLASS = "com.oplus.mydevices.domain.entities.device.DeviceInfoKt";
+    private static final String DEVICE_ICON_CONVERTER_CLASS = "com.heytap.mydevices.core.converter.product.DeviceIconConverter";
+    private static final String IDEVICE_CLASS = "com.oplus.mydevices.domain.ports.device.IDevice";
+    private static final String ICON_CACHE_SUBDIR = "device_image";
+    private static final String FILE_PROVIDER_URI_PREFIX = "content://com.oplus.mydevices.fileprovider/deviceIcon/";
+    private static final String ICON_FILE_PREFIX = "watchlink_watch_icon_";
 
-    private final Context app;
-    private final HostSettings settings;
-    private final String[] sources;
-    private final SharedPreferences cachePrefs;
+    private final XposedInterface module;
+    private final ClassLoader loader;
+    private final SharedPreferences earlyRemotePrefs;
+    private final List<XposedInterface.HookHandle> handles = new ArrayList<>();
     private final ScheduledThreadPoolExecutor worker = new ScheduledThreadPoolExecutor(1, r -> {
         Thread t = new Thread(r, "WatchLink-mydevices");
         t.setDaemon(true);
         return t;
     });
 
+    private volatile Context app;
+    private volatile HostSettings settings;
+    private volatile SharedPreferences cachePrefs;
     private BroadcastReceiver syncReceiver;
-    private volatile boolean installed;
+    private volatile boolean active = true;
+    private volatile boolean supportHookReady;
+    private volatile boolean configHookReady;
+    private volatile boolean observerHookReady;
+    private volatile boolean queryHookReady;
+
     private volatile MyDevicesCardCodec.CardSnapshot latestSnapshot;
+    private volatile File customIconFile;
+    private volatile String customIconHash = "";
     private volatile Object capturedObserver;
+    private volatile Object capturedConfigManager;
+    private volatile Field configManagerMapField;
     private volatile boolean observerAddedDevice;
     private volatile String lastObserverDeviceId = "";
     private volatile Object virtualDeviceApp;
     private volatile Object virtualDeviceAppConfig;
+    private volatile long lastQueryLogElapsedMs;
+    private volatile long lastIconPullElapsedMs;
     private Method observerOnAdd;
     private Method observerOnUpdated;
     private Method observerOnRemoved;
 
-    private float downX;
-    private float downY;
-    private boolean trackingTap;
-    private long lastTapLaunchMs;
-
-    MyDevicesBridge(Context app, HostSettings settings, String[] sources) {
-        this.app = app;
-        this.settings = settings;
-        this.sources = sources;
-        this.cachePrefs = app.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
-        this.latestSnapshot = readCachedSnapshot();
+    private MyDevicesBridge(XposedInterface module, ClassLoader loader, SharedPreferences earlyRemotePrefs) {
+        this.module = module;
+        this.loader = loader;
+        this.earlyRemotePrefs = earlyRemotePrefs;
     }
 
-    void install(AlarmObserverInstaller installer) {
-        MyDevicesSymbolResolver.Symbols symbols = MyDevicesSymbolResolver.resolve(
-                installer, new ApkSymbolCache(app, "mydevices"), sources);
-        ProbeLog.info("MYDEVICES_SYMBOLS_RESOLVED source=MY_DEVICES resolver="
-                + (symbols != null && symbols.ready() ? symbols.source() : "UNAVAILABLE"));
+    /**
+     * Installs all core MyDevices hooks synchronously during onPackageReady before
+     * DeviceApplication.attachBaseContext()/onCreate() initializes Koin & ConfigurationManager.
+     */
+    static MyDevicesBridge installEarlyHook(XposedInterface module, ClassLoader loader, SharedPreferences remotePrefs) {
+        MyDevicesBridge bridge = new MyDevicesBridge(module, loader, remotePrefs);
+        bridge.installEarlyHooksSync();
+        return bridge;
+    }
 
-        boolean supportHook = installSupportHooks(installer);
-        boolean configHook = installConfigHooks(installer);
-        boolean observerHook = installObserverHook(installer);
-        boolean queryHook = symbols != null && symbols.ready() && installProviderQueryHooks(installer, symbols);
-        installCardTapHook(installer);
+    boolean isEarlyHookReady() {
+        return supportHookReady && configHookReady && observerHookReady;
+    }
+
+    private void installEarlyHooksSync() {
+        supportHookReady = installSupportHooks();
+        configHookReady = installConfigHooks();
+        observerHookReady = installObserverHooks();
+        Class<?> queryCls = resolveProviderQueryByReflection();
+        if (queryCls != null) {
+            queryHookReady = installProviderQueryHooks(queryCls);
+        }
+        installPluginLookupHook();
+        installIconConverterHooks();
+        ProbeLog.info("MYDEVICES_EARLY_HOOK source=MY_DEVICES result="
+                + (supportHookReady && configHookReady && observerHookReady && queryHookReady ? "APPLIED" : "UNAVAILABLE"));
+    }
+
+    void attachContext(Context hostContext, HostSettings hostSettings,
+                       AlarmObserverInstaller installer, String[] sources) {
+        if (!active) return;
+        this.app = hostContext.getApplicationContext();
+        this.settings = hostSettings;
+        this.cachePrefs = this.app.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
+        restoreCachedIconFile();
+        if (latestSnapshot == null) {
+            latestSnapshot = readCachedSnapshot();
+        }
+
+        if (!queryHookReady && installer != null && sources != null) {
+            MyDevicesSymbolResolver.Symbols symbols = MyDevicesSymbolResolver.resolve(
+                    installer, new ApkSymbolCache(this.app, "mydevices"), sources);
+            ProbeLog.info("MYDEVICES_SYMBOLS_RESOLVED source=MY_DEVICES resolver="
+                    + (symbols != null && symbols.ready() ? symbols.source() : "UNAVAILABLE"));
+            if (symbols != null && symbols.ready()) {
+                try {
+                    queryHookReady = installProviderQueryHooks(loadClass(symbols.providerQueryClass()));
+                } catch (Throwable ignored) {}
+            }
+        } else {
+            ProbeLog.info("MYDEVICES_SYMBOLS_RESOLVED source=MY_DEVICES resolver=FAST_PATH");
+        }
 
         registerSyncReceiver();
-        settings.onMyDevicesCardChanged(enabled -> worker.execute(() -> {
-            if (!installed) return;
+        hostSettings.onMyDevicesCardChanged(enabled -> worker.execute(() -> {
+            if (!active) return;
+            syncConfigMap(Boolean.TRUE.equals(enabled));
             if (Boolean.TRUE.equals(enabled)) {
-                MyDevicesWire.requestPullFromHealth(app);
+                requestPullSafe();
                 pushObserverStateLocked();
             } else {
                 removeFromObserverLocked();
             }
         }));
 
-        installed = true;
-        boolean coreReady = supportHook && configHook && observerHook && queryHook;
-        ProbeLog.info((coreReady ? "MYDEVICES_CARD_READY" : "MYDEVICES_CARD_DEGRADED") + " source=MY_DEVICES");
+        boolean ready = supportHookReady && configHookReady && observerHookReady && queryHookReady;
+        ProbeLog.info((ready ? "MYDEVICES_CARD_READY" : "MYDEVICES_CARD_DEGRADED") + " source=MY_DEVICES");
 
-        if (settings.isMyDevicesCardEnabled()) {
+        if (isCardEnabled()) {
+            syncConfigMap(true);
             worker.schedule(() -> {
-                if (installed && settings.isMyDevicesCardEnabled()) {
-                    try { MyDevicesWire.requestPullFromHealth(app); } catch (RuntimeException ignored) {}
+                if (active && isCardEnabled()) {
+                    requestPullSafe();
                     pushObserverStateLocked();
                 }
-            }, 800L, TimeUnit.MILLISECONDS);
+            }, 600L, TimeUnit.MILLISECONDS);
         }
     }
 
     void close() {
-        installed = false;
-        settings.onMyDevicesCardChanged(null);
+        active = false;
+        HostSettings s = settings;
+        if (s != null) s.onMyDevicesCardChanged(null);
         capturedObserver = null;
-        if (syncReceiver != null) {
-            try { app.unregisterReceiver(syncReceiver); } catch (RuntimeException ignored) {}
+        capturedConfigManager = null;
+        Context ctx = app;
+        if (syncReceiver != null && ctx != null) {
+            try { ctx.unregisterReceiver(syncReceiver); } catch (RuntimeException ignored) {}
             syncReceiver = null;
+        }
+        synchronized (handles) {
+            for (XposedInterface.HookHandle h : handles) {
+                try { h.unhook(); } catch (RuntimeException ignored) {}
+            }
+            handles.clear();
         }
         worker.shutdownNow();
     }
 
-    private boolean installSupportHooks(AlarmObserverInstaller installer) {
+    private boolean isCardEnabled() {
+        HostSettings s = settings;
+        if (s != null) return s.isMyDevicesCardEnabled();
+        if (earlyRemotePrefs != null) {
+            try {
+                return earlyRemotePrefs.getBoolean(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED, false);
+            } catch (RuntimeException ignored) {}
+        }
+        return false;
+    }
+
+    private boolean installSupportHooks() {
         try {
-            Class<?> mgrCls = installer.target(DEVICE_APP_CONFIG_MGR);
-            Class<?> deviceAppCls = installer.target(DEVICE_APP_CLASS);
-            Class<?> delMethodCls = installer.target(DEL_DEVICE_METHOD_CLASS);
+            Class<?> mgrCls = loadClass(DEVICE_APP_CONFIG_MGR);
+            Class<?> deviceAppCls = loadClass(DEVICE_APP_CLASS);
+            Class<?> delMethodCls = loadClass(DEL_DEVICE_METHOD_CLASS);
             Object delNone = Enum.valueOf(delMethodCls.asSubclass(Enum.class), "NONE");
             Constructor<?> ctor = deviceAppCls.getDeclaredConstructor(
                     String.class, String.class, long.class, int.class,
@@ -143,43 +226,64 @@ final class MyDevicesBridge {
                     "WatchLink", VIRTUAL_PKG, 1L, 0, false, false, Boolean.FALSE, delNone);
 
             Method getPkg = deviceAppCls.getMethod("getPackageName");
-            Method getSupportApps = mgrCls.getDeclaredMethod("getSupportDeviceApplications");
-            installer.intercept("mydevices.support.apps", getSupportApps, chain -> {
-                Object result = chain.proceed();
-                if (!installed || !settings.isMyDevicesCardEnabled() || !(result instanceof List<?> list)) {
-                    return result;
-                }
-                for (Object item : list) {
-                    if (item != null && VIRTUAL_PKG.equals(safeInvoke(getPkg, item))) {
+            Method cacheListMethod = findCacheListMethod(mgrCls);
+            boolean hookedCache = false;
+            if (cacheListMethod != null) {
+                hook("mydevices.support.cache", cacheListMethod, chain -> {
+                    Object result = chain.proceed();
+                    if (!active || !isCardEnabled() || !(result instanceof List<?> list)) {
                         return result;
                     }
-                }
-                List<Object> copy = new ArrayList<>(list);
-                copy.add(virtualDeviceApp);
-                return copy;
-            });
+                    for (Object item : list) {
+                        if (item != null && VIRTUAL_PKG.equals(safeInvoke(getPkg, item))) {
+                            return result;
+                        }
+                    }
+                    if (result instanceof CopyOnWriteArrayList<?>) {
+                        CopyOnWriteArrayList<Object> copy = new CopyOnWriteArrayList<>(list);
+                        copy.add(virtualDeviceApp);
+                        return copy;
+                    }
+                    List<Object> copy = new ArrayList<>(list);
+                    copy.add(virtualDeviceApp);
+                    return copy;
+                });
+                hookedCache = true;
+            }
 
             try {
                 Method isSupport = mgrCls.getDeclaredMethod("isSupport", String.class);
-                installer.intercept("mydevices.is.support", isSupport, chain -> {
-                    if (installed && settings.isMyDevicesCardEnabled()
-                            && VIRTUAL_PKG.equals(chain.getArg(0))) {
+                hook("mydevices.is.support", isSupport, chain -> {
+                    if (active && isCardEnabled() && VIRTUAL_PKG.equals(chain.getArg(0))) {
                         return Boolean.TRUE;
                     }
                     return chain.proceed();
                 });
+                hookedCache = true;
             } catch (NoSuchMethodException ignored) {}
-            return true;
+
+            try {
+                Method getDeviceApp = mgrCls.getDeclaredMethod("getDeviceApp", String.class);
+                hook("mydevices.get.device.app", getDeviceApp, chain -> {
+                    if (active && isCardEnabled() && VIRTUAL_PKG.equals(chain.getArg(0))) {
+                        return virtualDeviceApp;
+                    }
+                    return chain.proceed();
+                });
+            } catch (NoSuchMethodException ignored) {}
+
+            return hookedCache;
         } catch (Throwable unavailable) {
+            ProbeLog.failure("MYDEVICES_CARD_DEGRADED", unavailable);
             return false;
         }
     }
 
-    private boolean installConfigHooks(AlarmObserverInstaller installer) {
+    private boolean installConfigHooks() {
         try {
-            Class<?> cfgMgrCls = installer.target(CONFIGURATION_MGR);
-            Class<?> appCfgCls = installer.target(DEVICE_APP_CONFIG_CLASS);
-            Class<?> cardCfgCls = installer.target(CARD_CONFIG_CLASS);
+            Class<?> cfgMgrCls = loadClass(CONFIGURATION_MGR);
+            Class<?> appCfgCls = loadClass(DEVICE_APP_CONFIG_CLASS);
+            Class<?> cardCfgCls = loadClass(CARD_CONFIG_CLASS);
             Constructor<?> cardCtor = cardCfgCls.getDeclaredConstructor(
                     String.class, long.class, int.class, int.class);
             cardCtor.setAccessible(true);
@@ -192,11 +296,14 @@ final class MyDevicesBridge {
                     VIRTUAL_PKG, (long) BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME,
                     cardCfg, -1, MyDevicesCardCodec.VIRTUAL_AUTHORITY, MyDevicesCardCodec.VIRTUAL_TABLE);
 
+            configManagerMapField = findMapField(cfgMgrCls);
+
             Method getPkg = appCfgCls.getMethod("getPackageName");
             Method getConfigs = cfgMgrCls.getDeclaredMethod("getAppConfigurations");
-            installer.intercept("mydevices.app.configs", getConfigs, chain -> {
+            hook("mydevices.app.configs", getConfigs, chain -> {
+                capturedConfigManager = chain.getThisObject();
                 Object result = chain.proceed();
-                if (!installed || !settings.isMyDevicesCardEnabled() || !(result instanceof List<?> list)) {
+                if (!active || !isCardEnabled() || !(result instanceof List<?> list)) {
                     return result;
                 }
                 for (Object item : list) {
@@ -208,159 +315,321 @@ final class MyDevicesBridge {
                 copy.add(virtualDeviceAppConfig);
                 return copy;
             });
+
+            try {
+                Method getOrParse = cfgMgrCls.getDeclaredMethod("getOrParseCardXmlConfig", String.class);
+                hook("mydevices.app.config.pkg", getOrParse, chain -> {
+                    capturedConfigManager = chain.getThisObject();
+                    if (active && isCardEnabled() && VIRTUAL_PKG.equals(chain.getArg(0))) {
+                        return virtualDeviceAppConfig;
+                    }
+                    return chain.proceed();
+                });
+            } catch (NoSuchMethodException ignored) {}
+
+            try {
+                Method queryAppConfig = cfgMgrCls.getDeclaredMethod("queryAppConfig");
+                hook("mydevices.app.config.query", queryAppConfig, chain -> {
+                    Object mgr = chain.getThisObject();
+                    capturedConfigManager = mgr;
+                    if (active && isCardEnabled()) {
+                        putInConfigMap(mgr, true);
+                    }
+                    Object res = chain.proceed();
+                    if (active && isCardEnabled()) {
+                        putInConfigMap(mgr, true);
+                    }
+                    return res;
+                });
+            } catch (NoSuchMethodException ignored) {}
+
             return true;
         } catch (Throwable unavailable) {
+            ProbeLog.failure("MYDEVICES_CARD_DEGRADED", unavailable);
             return false;
         }
     }
 
-    private boolean installObserverHook(AlarmObserverInstaller installer) {
+    private boolean installObserverHooks() {
         try {
-            Class<?> agentCls = installer.target(APP_AGENT_MGR);
-            Class<?> obsCls = installer.target(DEVICE_APP_OBSERVER_CLASS);
+            Class<?> agentCls = loadClass(APP_AGENT_MGR);
+            Class<?> obsCls = loadClass(DEVICE_APP_OBSERVER_CLASS);
             observerOnAdd = obsCls.getMethod("onDeviceAdd", String.class);
             observerOnUpdated = obsCls.getMethod("onDeviceUpdated", String.class);
             observerOnRemoved = obsCls.getMethod("onDeviceRemoved", String.class, boolean.class, String.class);
+
             Method addObs = agentCls.getDeclaredMethod("addDeviceObserver", String.class, obsCls);
-            installer.observeAround("mydevices.observer.add", addObs, chain -> {
-                if (installed && VIRTUAL_PKG.equals(chain.getArg(0)) && chain.getArg(1) != null) {
+            hook("mydevices.observer.add", addObs, chain -> {
+                Object res = chain.proceed();
+                if (active && VIRTUAL_PKG.equals(chain.getArg(0)) && chain.getArg(1) != null) {
                     capturedObserver = chain.getArg(1);
                     observerAddedDevice = false;
+                    ProbeLog.info("MYDEVICES_OBSERVER_CAPTURED source=MY_DEVICES");
                     worker.execute(() -> {
-                        if (installed && settings.isMyDevicesCardEnabled()) {
-                            try { MyDevicesWire.requestPullFromHealth(app); } catch (RuntimeException ignored) {}
+                        if (active && isCardEnabled()) {
+                            requestPullSafe();
                             pushObserverStateLocked();
                         }
                     });
                 }
-                return null;
-            }, (chain, token, result) -> {});
+                return res;
+            });
+
+            try {
+                Method removeObs = agentCls.getDeclaredMethod("removeDeviceObserver", String.class);
+                hook("mydevices.observer.remove", removeObs, chain -> {
+                    if (active && VIRTUAL_PKG.equals(chain.getArg(0))) {
+                        capturedObserver = null;
+                        observerAddedDevice = false;
+                    }
+                    return chain.proceed();
+                });
+            } catch (NoSuchMethodException ignored) {}
             return true;
         } catch (Throwable unavailable) {
+            ProbeLog.failure("MYDEVICES_CARD_DEGRADED", unavailable);
             return false;
         }
     }
 
-    private boolean installProviderQueryHooks(AlarmObserverInstaller installer,
-                                              MyDevicesSymbolResolver.Symbols symbols) {
+    private Class<?> resolveProviderQueryByReflection() {
         try {
-            Class<?> queryCls = installer.target(symbols.providerQueryClass());
+            Class<?> scannerCls = loadClass(DEVICE_APP_SCANNER);
+            for (Method m : scannerCls.getDeclaredMethods()) {
+                Class<?> ret = m.getReturnType();
+                if (ret == null || ret.isPrimitive() || ret == Object.class || ret.getName().startsWith("java.")) {
+                    continue;
+                }
+                try {
+                    Method qa = ret.getDeclaredMethod("queryAllDevices", String.class);
+                    Method qb = ret.getDeclaredMethod("queryDeviceById", String.class, String.class);
+                    if (List.class.isAssignableFrom(qa.getReturnType()) && qb.getReturnType() == String.class) {
+                        return ret;
+                    }
+                } catch (NoSuchMethodException ignored) {}
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    private boolean installProviderQueryHooks(Class<?> queryCls) {
+        try {
             Method queryAll = queryCls.getDeclaredMethod("queryAllDevices", String.class);
             Method queryById = queryCls.getDeclaredMethod("queryDeviceById", String.class, String.class);
-            installer.intercept("mydevices.provider.all", queryAll, chain -> {
+            hook("mydevices.provider.all", queryAll, chain -> {
                 Object rawUri = chain.getArg(0);
-                if (installed && isVirtualUri(rawUri)) {
-                    if (!settings.isMyDevicesCardEnabled()) return Collections.emptyList();
+                if (active && isVirtualUri(rawUri)) {
+                    if (!isCardEnabled()) return Collections.emptyList();
                     String json = currentDeviceJson();
-                    return json.isEmpty() ? Collections.emptyList() : Collections.singletonList(json);
+                    if (json.isEmpty()) {
+                        worker.execute(this::requestPullSafe);
+                        return Collections.emptyList();
+                    }
+                    logQueryServedThrottled();
+                    return Collections.singletonList(json);
                 }
                 return chain.proceed();
             });
-            installer.intercept("mydevices.provider.byid", queryById, chain -> {
+            hook("mydevices.provider.byid", queryById, chain -> {
                 Object rawUri = chain.getArg(0);
-                if (installed && isVirtualUri(rawUri)) {
-                    if (!settings.isMyDevicesCardEnabled()) return "";
-                    MyDevicesCardCodec.CardSnapshot snap = latestSnapshot;
+                if (active && isVirtualUri(rawUri)) {
+                    if (!isCardEnabled()) return "";
+                    MyDevicesCardCodec.CardSnapshot snap = ensureSnapshot();
                     Object requestedId = chain.getArg(1);
                     if (snap != null && snap.valid()
                             && (requestedId == null || snap.deviceId().equals(requestedId))) {
+                        logQueryServedThrottled();
                         return currentDeviceJson();
                     }
+                    worker.execute(this::requestPullSafe);
                     return "";
                 }
                 return chain.proceed();
             });
             return true;
         } catch (Throwable unavailable) {
+            ProbeLog.failure("MYDEVICES_CARD_DEGRADED", unavailable);
             return false;
         }
     }
 
-    private void installCardTapHook(AlarmObserverInstaller installer) {
+    private void installPluginLookupHook() {
         try {
-            Class<?> homeCardCls = installer.target(HOME_CARD_VIEW_CLASS);
-            Method dispatchTouch = homeCardCls.getDeclaredMethod("dispatchTouchEvent", MotionEvent.class);
-            int touchSlop = ViewConfiguration.get(app).getScaledTouchSlop();
-            installer.intercept("mydevices.card.tap", dispatchTouch, chain -> {
-                Object view = chain.getThisObject();
-                Object rawEv = chain.getArg(0);
-                if (installed && settings.isMyDevicesCardEnabled()
-                        && view != null && rawEv instanceof MotionEvent ev
-                        && isWatchLinkCardView(view)) {
-                    int action = ev.getActionMasked();
-                    if (action == MotionEvent.ACTION_DOWN) {
-                        downX = ev.getX();
-                        downY = ev.getY();
-                        trackingTap = true;
-                    } else if (action == MotionEvent.ACTION_MOVE && trackingTap) {
-                        if (Math.hypot(ev.getX() - downX, ev.getY() - downY) > touchSlop) {
-                            trackingTap = false;
-                        }
-                    } else if (action == MotionEvent.ACTION_CANCEL) {
-                        trackingTap = false;
-                    } else if (action == MotionEvent.ACTION_UP && trackingTap) {
-                        trackingTap = false;
-                        long now = System.currentTimeMillis();
-                        if (now - lastTapLaunchMs > 600L) {
-                            lastTapLaunchMs = now;
-                            launchConfiguredTapTarget();
-                            return Boolean.TRUE;
-                        }
-                    }
+            Class<?> ktCls = loadClass(DEVICE_INFO_KT_CLASS);
+            Class<?> iDeviceCls = loadClass(IDEVICE_CLASS);
+            Method getPkg = iDeviceCls.getMethod("getPackageName");
+            Method getId = iDeviceCls.getMethod("getId");
+            Method lookup = ktCls.getDeclaredMethod("getPluginLookupPackage", iDeviceCls);
+            hook("mydevices.icon.plugin.pkg", lookup, chain -> {
+                if (active && isCardEnabled() && isVirtualDevice(chain.getArg(0), getPkg, getId)) {
+                    return TargetProfile.MY_DEVICES.packageName;
                 }
                 return chain.proceed();
             });
         } catch (Throwable ignored) {}
     }
 
-    private void launchConfiguredTapTarget() {
-        String target = settings.myDevicesTapTarget();
-        String pkg = WatchLinkPrefs.TAP_TARGET_WATCHLINK.equals(target)
-                ? BuildConfig.APPLICATION_ID
-                : TargetProfile.HEALTH.packageName;
+    private void installIconConverterHooks() {
         try {
-            Intent launch = app.getPackageManager().getLaunchIntentForPackage(pkg);
-            if (launch != null) {
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                app.startActivity(launch);
-                ProbeLog.info("MYDEVICES_CARD_TAP source=MY_DEVICES");
+            Class<?> converterCls = loadClass(DEVICE_ICON_CONVERTER_CLASS);
+            Class<?> iDeviceCls = loadClass(IDEVICE_CLASS);
+            Method getPkg = iDeviceCls.getMethod("getPackageName");
+            Method getId = iDeviceCls.getMethod("getId");
+
+            try {
+                Method getIconFile = converterCls.getDeclaredMethod("getIconFileByRawUri", iDeviceCls);
+                hook("mydevices.icon.file", getIconFile, chain -> {
+                    File icon = currentCustomIconFile();
+                    if (active && isCardEnabled() && icon != null && isVirtualDevice(chain.getArg(0), getPkg, getId)) {
+                        return icon;
+                    }
+                    return chain.proceed();
+                });
+            } catch (NoSuchMethodException ignored) {}
+
+            try {
+                Method convertUri = converterCls.getDeclaredMethod("convertIconUri", iDeviceCls);
+                hook("mydevices.icon.uri", convertUri, chain -> {
+                    File icon = currentCustomIconFile();
+                    if (active && isCardEnabled() && icon != null && isVirtualDevice(chain.getArg(0), getPkg, getId)) {
+                        return customIconContentUri(icon);
+                    }
+                    return chain.proceed();
+                });
+            } catch (NoSuchMethodException ignored) {}
+
+            try {
+                Method getBitmap = converterCls.getDeclaredMethod("getDeviceBitmapIcon", iDeviceCls, int.class);
+                hook("mydevices.icon.bitmap", getBitmap, chain -> {
+                    File icon = currentCustomIconFile();
+                    if (active && isCardEnabled() && icon != null && isVirtualDevice(chain.getArg(0), getPkg, getId)) {
+                        try {
+                            Bitmap bmp = BitmapFactory.decodeFile(icon.getAbsolutePath());
+                            if (bmp != null) return bmp;
+                        } catch (Throwable ignored) {}
+                    }
+                    return chain.proceed();
+                });
+            } catch (NoSuchMethodException ignored) {}
+        } catch (Throwable ignored) {}
+    }
+
+    private static boolean isVirtualDevice(Object dev, Method getPkg, Method getId) {
+        if (dev == null) return false;
+        Object pkg = safeInvoke(getPkg, dev);
+        if (VIRTUAL_PKG.equals(pkg)) return true;
+        Object id = safeInvoke(getId, dev);
+        return id instanceof String s && s.startsWith(MyDevicesCardCodec.DEVICE_ID_PREFIX);
+    }
+
+    private File currentCustomIconFile() {
+        File f = customIconFile;
+        return (f != null && f.isFile() && f.length() > 64) ? f : null;
+    }
+
+    /**
+     * Exact FileProvider content URI matching res/xml/file_paths.xml in MyDevices 17.25.15:
+     * <cache-path name="deviceIcon" path="device_image/" /> -> content://com.oplus.mydevices.fileprovider/deviceIcon/<file>.
+     * Required by QuickCardDeviceDataConverter.b() (which checks content:// + cacheDir/device_image/<file>).
+     */
+    private static String customIconContentUri(File icon) {
+        return FILE_PROVIDER_URI_PREFIX + icon.getName();
+    }
+
+    private File iconCacheDir(Context ctx) {
+        File base = ctx.getCacheDir();
+        if (base == null) return null;
+        File dir = new File(base, ICON_CACHE_SUBDIR);
+        if (!dir.isDirectory() && !dir.mkdirs()) return null;
+        return dir;
+    }
+
+    private static String detectIconExtension(byte[] bytes) {
+        if (bytes != null && bytes.length >= 12
+                && bytes[0] == 'R' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == 'F'
+                && bytes[8] == 'W' && bytes[9] == 'E' && bytes[10] == 'B' && bytes[11] == 'P') {
+            return ".webp";
+        }
+        return ".png";
+    }
+
+    private void persistCustomIcon(byte[] pngBytes, String hash) {
+        Context ctx = app;
+        if (ctx == null || pngBytes == null || pngBytes.length <= 64 || pngBytes.length > 220 * 1024
+                || hash == null || hash.isEmpty() || !hash.matches("[A-Za-z0-9_-]{4,32}")) {
+            return;
+        }
+        if (hash.equals(customIconHash) && currentCustomIconFile() != null) return;
+        File dir = iconCacheDir(ctx);
+        if (dir == null || !dir.isDirectory()) return;
+        String ext = detectIconExtension(pngBytes);
+        String fileName = ICON_FILE_PREFIX + hash + ext;
+        File target = new File(dir, fileName);
+        File tmp = new File(dir, ICON_FILE_PREFIX + hash + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            out.write(pngBytes);
+            out.flush();
+        } catch (Exception ignored) {
+            tmp.delete();
+            return;
+        }
+        if (!tmp.renameTo(target)) {
+            tmp.delete();
+            return;
+        }
+        File[] existing = dir.listFiles();
+        if (existing != null) {
+            for (File old : existing) {
+                if (old.isFile() && old.getName().startsWith(ICON_FILE_PREFIX)
+                        && !old.getName().equals(target.getName())) {
+                    old.delete();
+                }
+            }
+        }
+        customIconFile = target;
+        customIconHash = hash;
+        ProbeLog.info("MYDEVICES_ICON_SAVED source=MY_DEVICES");
+        SharedPreferences prefs = cachePrefs;
+        if (prefs != null) {
+            try {
+                prefs.edit()
+                        .putString("iconHash", hash)
+                        .putString("iconFileName", fileName)
+                        .apply();
+            } catch (RuntimeException ignored) {}
+        }
+    }
+
+    private void restoreCachedIconFile() {
+        Context ctx = app;
+        SharedPreferences prefs = cachePrefs;
+        if (ctx == null || prefs == null) return;
+        try {
+            String hash = prefs.getString("iconHash", "");
+            if (hash == null || !hash.matches("[A-Za-z0-9_-]{4,32}")) return;
+            File dir = iconCacheDir(ctx);
+            if (dir == null) return;
+            String savedName = prefs.getString("iconFileName", "");
+            File f = (savedName != null && savedName.startsWith(ICON_FILE_PREFIX) && !savedName.contains("/"))
+                    ? new File(dir, savedName)
+                    : new File(dir, ICON_FILE_PREFIX + hash + ".webp");
+            if (!f.isFile() || f.length() <= 64) {
+                f = new File(dir, ICON_FILE_PREFIX + hash + ".png");
+            }
+            if (f.isFile() && f.length() > 64) {
+                customIconFile = f;
+                customIconHash = hash;
             }
         } catch (RuntimeException ignored) {}
     }
 
-    private boolean isWatchLinkCardView(Object view) {
-        MyDevicesCardCodec.CardSnapshot snap = latestSnapshot;
-        String expectedId = snap != null ? snap.deviceId() : "";
-        for (Class<?> c = view.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
-            for (Field f : c.getDeclaredFields()) {
-                try {
-                    f.setAccessible(true);
-                    Object v = f.get(view);
-                    if (v == null) continue;
-                    if (v instanceof String s) {
-                        if (s.startsWith(MyDevicesCardCodec.DEVICE_ID_PREFIX)
-                                || (!expectedId.isEmpty() && expectedId.equals(s))) {
-                            return true;
-                        }
-                    } else if (v.getClass().getName().contains("QuickCardDeviceData")
-                            || v.getClass().getName().contains("DeviceInfo")) {
-                        String text = String.valueOf(v);
-                        if (text.contains(MyDevicesCardCodec.DEVICE_ID_PREFIX)
-                                || text.contains(VIRTUAL_PKG)) {
-                            return true;
-                        }
-                    }
-                } catch (Throwable ignored) {}
-            }
-        }
-        return false;
-    }
-
     private void registerSyncReceiver() {
+        Context ctx = app;
+        if (ctx == null) return;
         try {
             BroadcastReceiver r = new BroadcastReceiver() {
                 @Override public void onReceive(Context context, Intent intent) {
-                    if (!installed || intent == null || !MyDevicesWire.ACTION_SYNC.equals(intent.getAction())) return;
+                    if (!active || intent == null || !MyDevicesWire.ACTION_SYNC.equals(intent.getAction())) return;
                     int uid = getSentFromUid();
                     String pkg = getSentFromPackage();
                     if (uid < 0 || !TargetProfile.HEALTH.packageName.equals(pkg)
@@ -373,14 +642,20 @@ final class MyDevicesBridge {
                     try {
                         worker.execute(() -> {
                             try {
-                                if (!installed || !SenderVerifier.verifyReminderSender(app, TargetProfile.HEALTH, uid, pkg)) {
+                                if (!active || !SenderVerifier.verifyReminderSender(ctx, TargetProfile.HEALTH, uid, pkg)) {
                                     return;
                                 }
                                 MyDevicesCardCodec.CardSnapshot snap = MyDevicesWire.fromSyncIntent(intent);
+                                byte[] iconPng = intent.getByteArrayExtra(MyDevicesWire.EXTRA_ICON_PNG);
+                                String iconHash = intent.getStringExtra(MyDevicesWire.EXTRA_ICON_HASH);
+                                if (iconPng != null && iconHash != null) {
+                                    persistCustomIcon(iconPng, iconHash);
+                                }
                                 if (snap != null) {
                                     latestSnapshot = snap;
                                     writeCachedSnapshot(snap);
-                                    if (settings.isMyDevicesCardEnabled()) {
+                                    if (isCardEnabled()) {
+                                        syncConfigMap(true);
                                         pushObserverStateLocked();
                                         ProbeLog.info("MYDEVICES_CARD_UPDATED source=MY_DEVICES");
                                     }
@@ -395,14 +670,40 @@ final class MyDevicesBridge {
                     }
                 }
             };
-            app.registerReceiver(r, new IntentFilter(MyDevicesWire.ACTION_SYNC), Context.RECEIVER_EXPORTED);
+            ctx.registerReceiver(r, new IntentFilter(MyDevicesWire.ACTION_SYNC), Context.RECEIVER_EXPORTED);
             syncReceiver = r;
         } catch (RuntimeException ignored) {}
     }
 
+    private void syncConfigMap(boolean enabled) {
+        Object mgr = capturedConfigManager;
+        if (mgr != null) putInConfigMap(mgr, enabled);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void putInConfigMap(Object mgr, boolean enabled) {
+        Field f = configManagerMapField;
+        if (mgr == null || f == null || virtualDeviceAppConfig == null) return;
+        try {
+            Object raw = f.get(mgr);
+            if (raw instanceof Map<?, ?> map) {
+                Map<Object, Object> m = (Map<Object, Object>) map;
+                if (enabled) m.put(VIRTUAL_PKG, virtualDeviceAppConfig);
+                else m.remove(VIRTUAL_PKG);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void requestPullSafe() {
+        Context ctx = app;
+        if (ctx != null && active && isCardEnabled()) {
+            try { MyDevicesWire.requestPullFromHealth(ctx); } catch (RuntimeException ignored) {}
+        }
+    }
+
     private void pushObserverStateLocked() {
         Object obs = capturedObserver;
-        MyDevicesCardCodec.CardSnapshot snap = latestSnapshot;
+        MyDevicesCardCodec.CardSnapshot snap = ensureSnapshot();
         if (obs == null || snap == null || !snap.valid()) return;
         try {
             if (!observerAddedDevice || !snap.deviceId().equals(lastObserverDeviceId)) {
@@ -427,10 +728,75 @@ final class MyDevicesBridge {
         } catch (Throwable ignored) {}
     }
 
-    private String currentDeviceJson() {
+    private MyDevicesCardCodec.CardSnapshot ensureSnapshot() {
         MyDevicesCardCodec.CardSnapshot snap = latestSnapshot;
+        if (snap == null && cachePrefs != null) {
+            snap = readCachedSnapshot();
+            if (snap != null) latestSnapshot = snap;
+        }
+        return snap;
+    }
+
+    private String currentDeviceJson() {
+        MyDevicesCardCodec.CardSnapshot snap = ensureSnapshot();
         if (snap == null || !snap.valid()) return "";
-        return MyDevicesCardCodec.toDeviceDataJson(snap, VIRTUAL_PKG);
+        File icon = currentCustomIconFile();
+        if (icon == null) {
+            long now = SystemClock.elapsedRealtime();
+            if (now - lastIconPullElapsedMs >= 10_000L) {
+                lastIconPullElapsedMs = now;
+                try { worker.execute(this::requestPullSafe); } catch (RuntimeException ignored) {}
+            }
+        }
+        String iconUri = icon != null ? customIconContentUri(icon) : null;
+        return MyDevicesCardCodec.toDeviceDataJson(snap, VIRTUAL_PKG, iconUri);
+    }
+
+    private void logQueryServedThrottled() {
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastQueryLogElapsedMs >= 5_000L) {
+            lastQueryLogElapsedMs = now;
+            ProbeLog.info("MYDEVICES_QUERY_SERVED source=MY_DEVICES");
+        }
+    }
+
+    private void hook(String id, Method method, XposedInterface.Hooker hooker) {
+        XposedInterface.HookBuilder builder = module.hook(method);
+        if (module.getApiVersion() >= XposedInterface.API_102) {
+            builder.setId(id);
+        }
+        XposedInterface.HookHandle handle = builder.intercept(hooker);
+        synchronized (handles) {
+            handles.add(handle);
+        }
+    }
+
+    private Class<?> loadClass(String name) throws ClassNotFoundException {
+        return Class.forName(name, false, loader);
+    }
+
+    private static Method findCacheListMethod(Class<?> mgrCls) {
+        Method found = null;
+        for (Method m : mgrCls.getDeclaredMethods()) {
+            int mod = m.getModifiers();
+            if (Modifier.isStatic(mod) || m.isSynthetic()) continue;
+            if (m.getParameterCount() != 0) continue;
+            if (CopyOnWriteArrayList.class.isAssignableFrom(m.getReturnType())) {
+                if (found != null) return null;
+                found = m;
+            }
+        }
+        return found;
+    }
+
+    private static Field findMapField(Class<?> cfgMgrCls) {
+        for (Field f : cfgMgrCls.getDeclaredFields()) {
+            if (!Modifier.isStatic(f.getModifiers()) && Map.class.isAssignableFrom(f.getType())) {
+                f.setAccessible(true);
+                return f;
+            }
+        }
+        return null;
     }
 
     private static boolean isVirtualUri(Object rawUri) {
@@ -443,14 +809,16 @@ final class MyDevicesBridge {
     }
 
     private MyDevicesCardCodec.CardSnapshot readCachedSnapshot() {
+        SharedPreferences prefs = cachePrefs;
+        if (prefs == null) return null;
         try {
-            String id = cachePrefs.getString("deviceId", "");
-            String name = cachePrefs.getString("watchName", "");
+            String id = prefs.getString("deviceId", "");
+            String name = prefs.getString("watchName", "");
             if (id == null || id.isEmpty() || name == null || name.isEmpty()) return null;
             MyDevicesCardCodec.CardSnapshot snap = new MyDevicesCardCodec.CardSnapshot(
-                    id, name, cachePrefs.getString("mac", ""),
-                    false, cachePrefs.getInt("battery", -1), false,
-                    cachePrefs.getLong("updatedAt", 0L));
+                    id, name, prefs.getString("mac", ""),
+                    false, prefs.getInt("battery", -1), false,
+                    prefs.getLong("updatedAt", 0L));
             return snap.valid() ? snap : null;
         } catch (RuntimeException ignored) {
             return null;
@@ -458,8 +826,10 @@ final class MyDevicesBridge {
     }
 
     private void writeCachedSnapshot(MyDevicesCardCodec.CardSnapshot snap) {
+        SharedPreferences prefs = cachePrefs;
+        if (prefs == null) return;
         try {
-            cachePrefs.edit()
+            prefs.edit()
                     .putString("deviceId", snap.deviceId())
                     .putString("watchName", snap.watchName())
                     .putString("mac", snap.macAddress())

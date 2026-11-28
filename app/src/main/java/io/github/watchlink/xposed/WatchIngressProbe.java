@@ -12,7 +12,8 @@ final class WatchIngressProbe {
 
     @RequiresApi(34)
     static void installSdk(AlarmObserverInstaller installer, HealthSymbolResolver.Symbols symbols,
-                           BooleanSupplier armed, BiConsumer<String, byte[]> received)
+                           BooleanSupplier armed, BiConsumer<String, byte[]> received,
+                           BiConsumer<String, byte[]> batteryReceived)
             throws ReflectiveOperationException {
         if (symbols == null || symbols.receiveCallbackClass() == null || symbols.receiveCallbackClass().isEmpty()) {
             throw new NoSuchMethodException("Missing Health receive callback symbol");
@@ -25,16 +26,36 @@ final class WatchIngressProbe {
         Method sdkReceive = ReminderMethodShape.packetMethod(callback, "onDataReceived", 1, sdkDevice, null, int.class);
         Method data = ReminderMethodShape.packetBytes(sdkReceive.getParameterTypes()[1]);
         installer.observeAround("health.sdk.receive", sdkReceive, chain -> {
-            if (armed.getAsBoolean() && ((Integer) chain.getArg(2)) == 0) {
-                Object source = chain.getArg(0);
-                Object packet = chain.getArg(1);
+            if (((Integer) chain.getArg(2)) != 0) return null;
+            boolean sessionArmed = armed.getAsBoolean();
+            Object packet = chain.getArg(1);
+            byte[] bytes = null;
+            boolean isBattery = false;
+            if (batteryReceived != null && packet != null) {
                 try {
-                    String key = source == null ? null : (String) identity.invoke(source);
-                    byte[] bytes = packet == null ? null : (byte[]) data.invoke(packet);
-                    received.accept(key, bytes);
-                } catch (ReflectiveOperationException e) {
-                    received.accept(null, null);
+                    bytes = (byte[]) data.invoke(packet);
+                    isBattery = HealthWatchStatusCollector.isBatteryResponseFrame(bytes);
+                } catch (ReflectiveOperationException ignored) {
+                    bytes = null;
                 }
+            }
+            if (!sessionArmed && !isBattery) return null;
+            Object source = chain.getArg(0);
+            String key = null;
+            try {
+                key = source == null ? null : (String) identity.invoke(source);
+                if (bytes == null && packet != null) {
+                    bytes = (byte[]) data.invoke(packet);
+                }
+            } catch (ReflectiveOperationException e) {
+                if (sessionArmed) received.accept(null, null);
+                return null;
+            }
+            if (isBattery) {
+                batteryReceived.accept(key, bytes);
+            }
+            if (sessionArmed) {
+                received.accept(key, bytes);
             }
             return null;
         }, (chain, token, result) -> {});

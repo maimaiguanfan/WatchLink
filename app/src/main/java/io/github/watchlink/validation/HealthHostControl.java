@@ -41,20 +41,37 @@ public final class HealthHostControl {
             ENABLE_SLEEP_AUTO_DND = "ENABLE_SLEEP_AUTO_DND", DISABLE_SLEEP_AUTO_DND = "DISABLE_SLEEP_AUTO_DND",
             ENABLE_WAKE_EXIT_DND = "ENABLE_WAKE_EXIT_DND", DISABLE_WAKE_EXIT_DND = "DISABLE_WAKE_EXIT_DND",
             ENABLE_SLEEP_PAUSE_MEDIA = "ENABLE_SLEEP_PAUSE_MEDIA", DISABLE_SLEEP_PAUSE_MEDIA = "DISABLE_SLEEP_PAUSE_MEDIA",
+            ENABLE_SLEEP_STOP_VIDEO = "ENABLE_SLEEP_STOP_VIDEO", DISABLE_SLEEP_STOP_VIDEO = "DISABLE_SLEEP_STOP_VIDEO",
+            SET_SLEEP_STOP_VIDEO_PKGS_PREFIX = "SET_SLEEP_STOP_VIDEO_PKGS:",
             ENABLE_MYDEVICES_CARD = "ENABLE_MYDEVICES_CARD", DISABLE_MYDEVICES_CARD = "DISABLE_MYDEVICES_CARD",
             SET_MYDEVICES_TAP_HEALTH = "SET_MYDEVICES_TAP_HEALTH", SET_MYDEVICES_TAP_WATCHLINK = "SET_MYDEVICES_TAP_WATCHLINK",
             TEST_LIVE_WINDOW = "TEST_LIVE_WINDOW", CANCEL_LIVE_WINDOW = "CANCEL_LIVE_WINDOW",
             ENABLE_RAW_DEBUG = "ENABLE_RAW_DEBUG", DISABLE_RAW_DEBUG = "DISABLE_RAW_DEBUG",
+            REFRESH_WATCH_STATUS = "REFRESH_WATCH_STATUS",
             TEST = "TEST", CANCEL_TEST = "CANCEL_TEST";
 
     public static String setGameFlashbackLeadSecCommand(int leadSec) {
         return SET_GAME_FLASHBACK_LEAD_PREFIX + WatchLinkPrefs.clampGameFlashbackLeadSec(leadSec);
     }
 
+    public static String setSleepStopVideoCustomPkgsCommand(String raw) {
+        String normalized = io.github.watchlink.notify.SleepVideoStopPolicy.serializeCustomPackages(
+                io.github.watchlink.notify.SleepVideoStopPolicy.parseCustomPackages(raw));
+        return SET_SLEEP_STOP_VIDEO_PKGS_PREFIX + normalized;
+    }
+
+    public static String parseSleepStopVideoCustomPkgsCommand(String command) {
+        if (command == null || !command.startsWith(SET_SLEEP_STOP_VIDEO_PKGS_PREFIX)) return null;
+        String tail = command.substring(SET_SLEEP_STOP_VIDEO_PKGS_PREFIX.length());
+        if (tail.length() > 4096) return null;
+        return io.github.watchlink.notify.SleepVideoStopPolicy.serializeCustomPackages(
+                io.github.watchlink.notify.SleepVideoStopPolicy.parseCustomPackages(tail));
+    }
+
     public static int parseGameFlashbackLeadSecCommand(String command) {
         if (command == null || !command.startsWith(SET_GAME_FLASHBACK_LEAD_PREFIX)) return -1;
         String tail = command.substring(SET_GAME_FLASHBACK_LEAD_PREFIX.length());
-        if (!tail.matches("\\d{1,2}")) return -1;
+        if (!tail.matches("\\d{1,3}")) return -1;
         try {
             int v = Integer.parseInt(tail);
             return (v >= WatchLinkPrefs.MIN_GAME_FLASHBACK_LEAD_SEC && v <= WatchLinkPrefs.MAX_GAME_FLASHBACK_LEAD_SEC)
@@ -101,6 +118,7 @@ public final class HealthHostControl {
             "SUPPORTED_94", "UNSUPPORTED", "WATCH_DISCONNECTED", "UNKNOWN");
     private static final Set<String> SLEEP_EVENTS = Set.of(
             "NONE", "FALL_ASLEEP_DND_ON", "FALL_ASLEEP_SKIP_ALREADY_DND", "FALL_ASLEEP_MEDIA_PAUSED",
+            "FALL_ASLEEP_VIDEO_STOPPED",
             "WAKE_UP_DND_OFF", "WAKE_UP_SKIP_ALREADY_OFF", "WAKE_UP_SKIP_NOT_OWNED",
             "NO_POLICY_ACCESS", "FAILED");
 
@@ -124,7 +142,81 @@ public final class HealthHostControl {
                         boolean notifySilentGameEnabled, boolean sleepPauseMediaEnabled,
                         boolean watchConnected, String watchName, int watchBattery,
                         boolean watchCharging, long watchBatteryAt,
-                        boolean myDevicesCardEnabled, String myDevicesTapTarget) {
+                        boolean myDevicesCardEnabled, String myDevicesTapTarget,
+                        boolean sleepStopVideoEnabled, String sleepStopVideoCustomPkgs,
+                        boolean writeSettingsAccess) {
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                     boolean rawCommandDebugEnabled,
+                     boolean gameFlashbackEnabled, int gameFlashbackLeadSec,
+                     boolean notifyMuteDndEnabled, boolean sleepAutoDndEnabled,
+                     String sleepWatchSupport, boolean sleepHookReady, boolean dndPolicyAccess,
+                     String sleepLastEvent, long sleepLastAt,
+                     long sleepLastFallAsleepAt, long sleepLastWakeUpAt,
+                     boolean wakeExitDndEnabled, boolean notifySilentPushEnabled,
+                     String silentPushWatchSupport,
+                     boolean notifySilentScreenOnEnabled, boolean notifySilentFocusEnabled,
+                     boolean notifySilentGameEnabled, boolean sleepPauseMediaEnabled,
+                     boolean watchConnected, String watchName, int watchBattery,
+                     boolean watchCharging, long watchBatteryAt,
+                     boolean myDevicesCardEnabled, String myDevicesTapTarget,
+                     boolean sleepStopVideoEnabled, String sleepStopVideoCustomPkgs) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, rawCommandDebugEnabled,
+                    gameFlashbackEnabled, gameFlashbackLeadSec,
+                    notifyMuteDndEnabled, sleepAutoDndEnabled, sleepWatchSupport, sleepHookReady,
+                    dndPolicyAccess, sleepLastEvent, sleepLastAt, sleepLastFallAsleepAt, sleepLastWakeUpAt,
+                    wakeExitDndEnabled, notifySilentPushEnabled, silentPushWatchSupport,
+                    notifySilentScreenOnEnabled, notifySilentFocusEnabled, notifySilentGameEnabled,
+                    sleepPauseMediaEnabled, watchConnected, watchName, watchBattery, watchCharging,
+                    watchBatteryAt, myDevicesCardEnabled, myDevicesTapTarget,
+                    sleepStopVideoEnabled, sleepStopVideoCustomPkgs, false);
+        }
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                     boolean rawCommandDebugEnabled,
+                     boolean gameFlashbackEnabled, int gameFlashbackLeadSec,
+                     boolean notifyMuteDndEnabled, boolean sleepAutoDndEnabled,
+                     String sleepWatchSupport, boolean sleepHookReady, boolean dndPolicyAccess,
+                     String sleepLastEvent, long sleepLastAt,
+                     long sleepLastFallAsleepAt, long sleepLastWakeUpAt,
+                     boolean wakeExitDndEnabled, boolean notifySilentPushEnabled,
+                     String silentPushWatchSupport,
+                     boolean notifySilentScreenOnEnabled, boolean notifySilentFocusEnabled,
+                     boolean notifySilentGameEnabled, boolean sleepPauseMediaEnabled,
+                     boolean watchConnected, String watchName, int watchBattery,
+                     boolean watchCharging, long watchBatteryAt,
+                     boolean myDevicesCardEnabled, String myDevicesTapTarget) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, rawCommandDebugEnabled,
+                    gameFlashbackEnabled, gameFlashbackLeadSec,
+                    notifyMuteDndEnabled, sleepAutoDndEnabled, sleepWatchSupport, sleepHookReady,
+                    dndPolicyAccess, sleepLastEvent, sleepLastAt, sleepLastFallAsleepAt, sleepLastWakeUpAt,
+                    wakeExitDndEnabled, notifySilentPushEnabled, silentPushWatchSupport,
+                    notifySilentScreenOnEnabled, notifySilentFocusEnabled, notifySilentGameEnabled,
+                    sleepPauseMediaEnabled, watchConnected, watchName, watchBattery, watchCharging,
+                    watchBatteryAt, myDevicesCardEnabled, myDevicesTapTarget, false, "");
+        }
         public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
                      boolean serviceWitness, boolean sdkObserver, String symbolSource,
                      String watchState, String lastDispatchMode, String lastActionSource,
@@ -431,6 +523,12 @@ public final class HealthHostControl {
             watchBatteryAt = reachable ? Math.max(0L, watchBatteryAt) : 0L;
             myDevicesCardEnabled = reachable && myDevicesCardEnabled;
             myDevicesTapTarget = WatchLinkPrefs.normalizeTapTarget(myDevicesTapTarget);
+            sleepStopVideoEnabled = reachable && sleepStopVideoEnabled;
+            sleepStopVideoCustomPkgs = reachable && sleepStopVideoCustomPkgs != null
+                    ? io.github.watchlink.notify.SleepVideoStopPolicy.serializeCustomPackages(
+                            io.github.watchlink.notify.SleepVideoStopPolicy.parseCustomPackages(sleepStopVideoCustomPkgs))
+                    : "";
+            writeSettingsAccess = reachable && writeSettingsAccess;
         }
 
         private static String sanitizeWatchName(String raw) {
@@ -446,7 +544,8 @@ public final class HealthHostControl {
     public interface CommandHandler { Reply handle(String command); }
 
     private static boolean validCommand(String value) {
-        return QUERY.equals(value) || ENABLE.equals(value) || DISABLE.equals(value)
+        return QUERY.equals(value) || REFRESH_WATCH_STATUS.equals(value)
+                || ENABLE.equals(value) || DISABLE.equals(value)
                 || ENABLE_CALENDAR.equals(value) || DISABLE_CALENDAR.equals(value)
                 || ENABLE_WIFI_AUTO.equals(value) || DISABLE_WIFI_AUTO.equals(value)
                 || SYNC_CURRENT_WIFI.equals(value)
@@ -461,6 +560,8 @@ public final class HealthHostControl {
                 || ENABLE_SLEEP_AUTO_DND.equals(value) || DISABLE_SLEEP_AUTO_DND.equals(value)
                 || ENABLE_WAKE_EXIT_DND.equals(value) || DISABLE_WAKE_EXIT_DND.equals(value)
                 || ENABLE_SLEEP_PAUSE_MEDIA.equals(value) || DISABLE_SLEEP_PAUSE_MEDIA.equals(value)
+                || ENABLE_SLEEP_STOP_VIDEO.equals(value) || DISABLE_SLEEP_STOP_VIDEO.equals(value)
+                || parseSleepStopVideoCustomPkgsCommand(value) != null
                 || ENABLE_MYDEVICES_CARD.equals(value) || DISABLE_MYDEVICES_CARD.equals(value)
                 || SET_MYDEVICES_TAP_HEALTH.equals(value) || SET_MYDEVICES_TAP_WATCHLINK.equals(value)
                 || TEST_LIVE_WINDOW.equals(value) || CANCEL_LIVE_WINDOW.equals(value)
@@ -550,6 +651,9 @@ public final class HealthHostControl {
                             details.putLong("watchBatteryAt", reply.watchBatteryAt());
                             details.putBoolean("myDevicesCardEnabled", reply.myDevicesCardEnabled());
                             details.putString("myDevicesTapTarget", reply.myDevicesTapTarget());
+                            details.putBoolean("sleepStopVideoEnabled", reply.sleepStopVideoEnabled());
+                            details.putString("sleepStopVideoCustomPkgs", reply.sleepStopVideoCustomPkgs());
+                            details.putBoolean("writeSettingsAccess", reply.writeSettingsAccess());
                             pending.setResult(ACK, null, details);
                         } catch (RuntimeException e) {
                             ProbeLog.failure("HEALTH_HOST_CONTROL_FAILED", e);
@@ -648,7 +752,10 @@ public final class HealthHostControl {
                                         data.getBoolean("watchCharging", false),
                                         data.getLong("watchBatteryAt", 0L),
                                         data.getBoolean("myDevicesCardEnabled", false),
-                                        data.getString("myDevicesTapTarget", WatchLinkPrefs.TAP_TARGET_HEALTH)));
+                                        data.getString("myDevicesTapTarget", WatchLinkPrefs.TAP_TARGET_HEALTH),
+                                        data.getBoolean("sleepStopVideoEnabled", false),
+                                        data.getString("sleepStopVideoCustomPkgs", ""),
+                                        data.getBoolean("writeSettingsAccess", false)));
                             } else callback.accept(unavailable());
                         }
                     }, main, 0, null, null);

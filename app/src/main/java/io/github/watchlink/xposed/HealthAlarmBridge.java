@@ -57,6 +57,8 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     private HealthRawCommandBridge rawCommandBridge;
     private HealthSleepDndBridge sleepDndBridge;
     private HealthWatchStatusCollector watchStatusCollector;
+    private HealthWatchImageResolver watchImageResolver;
+    private volatile String lastSentIconHash = "";
     private BroadcastReceiver myDevicesPullReceiver;
     private BroadcastReceiver controlReceiver;
     private boolean registered;
@@ -150,14 +152,15 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         sleepDnd.install(installer, symbols);
         sleepDndBridge = sleepDnd;
 
-        HealthWatchStatusCollector watchStatus = new HealthWatchStatusCollector(app, worker, readiness);
-        watchStatus.setChangeListener(this::pushWatchStatusToMyDevices);
+        watchImageResolver = new HealthWatchImageResolver(app);
+        HealthWatchStatusCollector watchStatus = new HealthWatchStatusCollector(app, worker, readiness, sender);
+        watchStatus.setChangeListener(snap -> pushWatchStatusToMyDevices(snap, false));
         watchStatus.install(installer, symbols);
         watchStatusCollector = watchStatus;
         registerMyDevicesPullReceiver();
         settings.onMyDevicesCardChanged(enabled -> worker.execute(() -> {
             if (installed && Boolean.TRUE.equals(enabled) && watchStatusCollector != null) {
-                pushWatchStatusToMyDevices(watchStatusCollector.snapshot());
+                pushWatchStatusToMyDevices(watchStatusCollector.snapshot(), true);
             }
         }));
         settings.onTimerChanged(() -> worker.execute(() -> {
@@ -204,7 +207,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                             try {
                                 if (installed && SenderVerifier.verifyReminderSender(app, TargetProfile.MY_DEVICES, uid, pkg)
                                         && watchStatusCollector != null) {
-                                    pushWatchStatusToMyDevices(watchStatusCollector.snapshot());
+                                    pushWatchStatusToMyDevices(watchStatusCollector.snapshot(), true);
                                 }
                             } catch (RuntimeException ignored) {
                             } finally {
@@ -221,7 +224,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         } catch (RuntimeException ignored) {}
     }
 
-    private void pushWatchStatusToMyDevices(HealthWatchStatusCollector.WatchStatusSnapshot snap) {
+    private void pushWatchStatusToMyDevices(HealthWatchStatusCollector.WatchStatusSnapshot snap, boolean includeIcon) {
         if (!installed || snap == null || !settings.isMyDevicesCardEnabled()) return;
         String name = MyDevicesCardCodec.sanitizeDisplayName(snap.watchName());
         String rawMac = snap.rawMac() == null ? "" : snap.rawMac();
@@ -231,8 +234,21 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 deviceId, name, rawMac, snap.connected(),
                 snap.batteryPercent(), snap.charging(),
                 snap.updatedAtMs() > 0L ? snap.updatedAtMs() : System.currentTimeMillis());
+        byte[] iconPng = null;
+        String iconHash = null;
+        HealthWatchImageResolver resolver = watchImageResolver;
+        if (resolver != null && snap.connected()) {
+            HealthWatchImageResolver.WatchIcon icon = resolver.resolveForWatch(
+                    snap.productType(), snap.hiLinkDeviceId(), snap.deviceModel(),
+                    snap.deviceSubModelId(), snap.watchName());
+            if (icon != null && icon.valid() && (includeIcon || !icon.hash().equals(lastSentIconHash))) {
+                iconPng = icon.pngBytes();
+                iconHash = icon.hash();
+                lastSentIconHash = icon.hash();
+            }
+        }
         try {
-            MyDevicesWire.sendSnapshotToMyDevices(app, card);
+            MyDevicesWire.sendSnapshotToMyDevices(app, card, iconPng, iconHash);
         } catch (RuntimeException ignored) {}
     }
 
@@ -271,7 +287,12 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                     symbols.sendFacadeClass());
             Method submit = ReminderMethodShape.packetMethod(channel, "sendCommand", 1, device, null);
             Method bytes = ReminderMethodShape.packetBytes(submit.getParameterTypes()[1]);
-            WatchIngressProbe.installSdk(installer, symbols, this::anySessionArmed, (mac, frame) -> observeSdk(true, mac, frame));
+            WatchIngressProbe.installSdk(installer, symbols, this::anySessionArmed,
+                    (mac, frame) -> observeSdk(true, mac, frame),
+                    (mac, frame) -> {
+                        HealthWatchStatusCollector collector = watchStatusCollector;
+                        if (collector != null) collector.observeSdkFrame(mac, frame);
+                    });
             installer.observeAround("health.sdk.send", submit, chain -> {
                 if (anySessionArmed()) {
                     Object packet = chain.getArg(1);
@@ -749,9 +770,11 @@ final class HealthAlarmBridge extends BroadcastReceiver {
             case HealthHostControl.DISABLE_WAKE_EXIT_DND -> settings.setLocalWakeExitDndFallback(false);
             case HealthHostControl.ENABLE_SLEEP_PAUSE_MEDIA -> settings.setLocalSleepPauseMediaFallback(true);
             case HealthHostControl.DISABLE_SLEEP_PAUSE_MEDIA -> settings.setLocalSleepPauseMediaFallback(false);
+            case HealthHostControl.ENABLE_SLEEP_STOP_VIDEO -> settings.setLocalSleepStopVideoFallback(true);
+            case HealthHostControl.DISABLE_SLEEP_STOP_VIDEO -> settings.setLocalSleepStopVideoFallback(false);
             case HealthHostControl.ENABLE_MYDEVICES_CARD -> {
                 settings.setLocalMyDevicesCardFallback(true);
-                if (watchStatusCollector != null) pushWatchStatusToMyDevices(watchStatusCollector.snapshot());
+                if (watchStatusCollector != null) pushWatchStatusToMyDevices(watchStatusCollector.snapshot(), true);
             }
             case HealthHostControl.DISABLE_MYDEVICES_CARD -> settings.setLocalMyDevicesCardFallback(false);
             case HealthHostControl.SET_MYDEVICES_TAP_HEALTH ->
@@ -779,6 +802,11 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 if (leadSec >= 0) {
                     settings.setLocalGameFlashbackLeadSecFallback(leadSec);
                     if (liveBridge != null) liveBridge.onGameFlashbackLeadSecChanged(leadSec);
+                } else {
+                    String customPkgs = HealthHostControl.parseSleepStopVideoCustomPkgsCommand(command);
+                    if (customPkgs != null) {
+                        settings.setLocalSleepStopVideoCustomPkgsFallback(customPkgs);
+                    }
                 }
             }
         }
@@ -792,9 +820,14 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         HealthSleepDndBridge.StatusSnapshot sleep = sleepDndBridge != null
                 ? sleepDndBridge.statusSnapshot()
                 : new HealthSleepDndBridge.StatusSnapshot("UNKNOWN", false, false, "NONE", 0L, 0L, 0L);
+        boolean isStatusQuery = HealthHostControl.QUERY.equals(command);
+        boolean isForceRefresh = HealthHostControl.REFRESH_WATCH_STATUS.equals(command);
         HealthWatchStatusCollector.WatchStatusSnapshot watchStatus = watchStatusCollector != null
-                ? watchStatusCollector.snapshot()
+                ? watchStatusCollector.snapshot(isStatusQuery || isForceRefresh, isForceRefresh)
                 : HealthWatchStatusCollector.WatchStatusSnapshot.DISCONNECTED;
+        if (isForceRefresh && watchStatus.connected()) {
+            pushWatchStatusToMyDevices(watchStatus, false);
+        }
         return new HealthHostControl.Reply(
                 true,
                 settings.isEnabled(),
@@ -848,7 +881,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 watchStatus.charging(),
                 watchStatus.updatedAtMs(),
                 settings.isMyDevicesCardEnabled(),
-                settings.myDevicesTapTarget());
+                settings.myDevicesTapTarget(),
+                settings.isSleepStopVideoEnabled(),
+                settings.sleepStopVideoCustomPkgs(),
+                sleep.writeSettingsAccess());
     }
 
     private void startManualTestLocked() {

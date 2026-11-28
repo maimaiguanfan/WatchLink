@@ -105,20 +105,22 @@ public class GameReviveCoordinatorTest {
         assertNull(coord.onRemove(key, t0 + 15_000L, 0));
     }
 
-    @Test public void shortEarlyGameReviveAvoidsImmediateDoubleBuzzAndFallsBackToZero() {
+    @Test public void leadSecGreaterThanReviveSecondsFiresImmediatelyOnce() {
         GameReviveCoordinator coord = new GameReviveCoordinator();
         long t0 = 200_000L;
         String key = LiveWindowPayload.GAME_FLASHBACK_KEY_PREFIX + "ums:short";
 
-        // 4s early-game revive when user set leadSec = 5s -> must NOT fire immediately on OP_CREATE.
-        GameReviveCoordinator.UpsertPlan p1 = coord.onUpsert(gameCard("ums:short", "复活 4秒", "复活 4秒", "4秒"), t0, 5);
-        assertNull(p1.immediateAlert());
-        assertEquals(Long.valueOf(t0 + 4_000L), p1.scheduleAtElapsedMs());
+        // 4s early-game revive when user set leadSec = 10s -> fires immediately once.
+        GameReviveCoordinator.UpsertPlan p1 = coord.onUpsert(gameCard("ums:short", "复活 4秒", "复活 4秒", "4秒"), t0, 10);
+        assertNotNull(p1.immediateAlert());
+        assertFalse(p1.immediateAlert().completionAlert());
+        assertEquals(4, p1.immediateAlert().remainingSec());
+        assertNull(p1.scheduleAtElapsedMs());
 
-        // Fires once at 0s completion.
-        GameReviveCoordinator.AlertAction fired = coord.onTimerFired(key, p1.generation(), t0 + 4_000L, 5);
-        assertNotNull(fired);
-        assertTrue(fired.completionAlert());
+        // Subsequent ticks and completion must NOT fire a second time.
+        assertNull(coord.onUpsert(gameCard("ums:short", "复活 2秒", "复活 2秒", "2秒"), t0 + 2_000L, 10).immediateAlert());
+        assertNull(coord.onUpsert(gameCard("ums:short", "已复活", "已复活", "已复活"), t0 + 4_000L, 10).immediateAlert());
+        assertNull(coord.onRemove(key, t0 + 4_100L, 10));
     }
 
     @Test public void changingLeadSecLiveReschedulesOrTriggersImmediately() {
