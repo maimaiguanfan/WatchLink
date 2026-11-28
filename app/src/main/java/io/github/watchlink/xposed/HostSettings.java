@@ -30,6 +30,8 @@ final class HostSettings {
     private volatile Consumer<Boolean> sleepAutoDndChangedCallback;
     private volatile Consumer<Boolean> wakeExitDndChangedCallback;
     private volatile Consumer<Boolean> sleepPauseMediaChangedCallback;
+    private volatile Consumer<Boolean> myDevicesCardChangedCallback;
+    private volatile Consumer<String> myDevicesTapTargetChangedCallback;
     private volatile Consumer<Boolean> rawCommandDebugChangedCallback;
 
     HostSettings(SharedPreferences remote, SharedPreferences local) {
@@ -110,6 +112,18 @@ final class HostSettings {
                     Consumer<Boolean> callback = sleepPauseMediaChangedCallback;
                     if (callback != null) {
                         callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = myDevicesCardChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_MYDEVICES_TAP_TARGET.equals(key)) {
+                    Consumer<String> callback = myDevicesTapTargetChangedCallback;
+                    if (callback != null) {
+                        callback.accept(WatchLinkPrefs.normalizeTapTarget(
+                                prefs.getString(WatchLinkPrefs.KEY_MYDEVICES_TAP_TARGET,
+                                        WatchLinkPrefs.TAP_TARGET_HEALTH)));
                     }
                 } else if (WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG.equals(key)) {
                     Consumer<Boolean> callback = rawCommandDebugChangedCallback;
@@ -219,6 +233,25 @@ final class HostSettings {
         return readBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED);
     }
 
+    boolean isMyDevicesCardEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED);
+    }
+
+    String myDevicesTapTarget() {
+        if (remote != null) {
+            try {
+                if (remote.contains(WatchLinkPrefs.KEY_MYDEVICES_TAP_TARGET)) {
+                    return WatchLinkPrefs.normalizeTapTarget(
+                            remote.getString(WatchLinkPrefs.KEY_MYDEVICES_TAP_TARGET,
+                                    WatchLinkPrefs.TAP_TARGET_HEALTH));
+                }
+            } catch (RuntimeException ignored) {}
+        }
+        return WatchLinkPrefs.normalizeTapTarget(
+                local.getString(WatchLinkPrefs.KEY_MYDEVICES_TAP_TARGET,
+                        WatchLinkPrefs.TAP_TARGET_HEALTH));
+    }
+
     boolean isRawCommandDebugEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG);
     }
@@ -302,6 +335,15 @@ final class HostSettings {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, enabled).commit();
     }
 
+    boolean setLocalMyDevicesCardFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalMyDevicesTapTargetFallback(String target) {
+        return local.edit().putString(WatchLinkPrefs.KEY_MYDEVICES_TAP_TARGET,
+                WatchLinkPrefs.normalizeTapTarget(target)).commit();
+    }
+
     boolean setLocalRawCommandDebugFallback(boolean enabled) {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, enabled).commit();
     }
@@ -362,6 +404,14 @@ final class HostSettings {
         sleepPauseMediaChangedCallback = callback;
     }
 
+    void onMyDevicesCardChanged(Consumer<Boolean> callback) {
+        myDevicesCardChangedCallback = callback;
+    }
+
+    void onMyDevicesTapTargetChanged(Consumer<String> callback) {
+        myDevicesTapTargetChangedCallback = callback;
+    }
+
     void onRawCommandDebugChanged(Consumer<Boolean> callback) {
         rawCommandDebugChangedCallback = callback;
     }
@@ -382,6 +432,8 @@ final class HostSettings {
         sleepAutoDndChangedCallback = null;
         wakeExitDndChangedCallback = null;
         sleepPauseMediaChangedCallback = null;
+        myDevicesCardChangedCallback = null;
+        myDevicesTapTargetChangedCallback = null;
         rawCommandDebugChangedCallback = null;
         if (remote != null && remoteListener != null) {
             try { remote.unregisterOnSharedPreferenceChangeListener(remoteListener); }

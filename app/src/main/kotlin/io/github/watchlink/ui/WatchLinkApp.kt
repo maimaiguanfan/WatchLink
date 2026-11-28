@@ -80,6 +80,7 @@ internal data class WatchLinkUiState(
     val sleepAutoDndSaving: Boolean = false,
     val wakeExitDndSaving: Boolean = false,
     val sleepPauseMediaSaving: Boolean = false,
+    val myDevicesCardSaving: Boolean = false,
     val wifiAutoSaving: Boolean = false,
     val rawCommandDebugSaving: Boolean = false,
     val wifiSyncingCurrent: Boolean = false,
@@ -212,6 +213,20 @@ internal data class WatchLinkUiState(
         get() = !sleepPauseMediaSaving && (scope?.remotePrefsSupported() == true
                 || healthHost?.reachable() == true)
 
+    val effectiveMyDevicesCardEnabled: Boolean
+        get() = scope?.remoteMyDevicesCardEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.myDevicesCardEnabled()
+            ?: false
+
+    val effectiveMyDevicesTapTarget: String
+        get() = scope?.remoteMyDevicesTapTarget()
+            ?: healthHost?.takeIf { it.reachable() }?.myDevicesTapTarget()
+            ?: WatchLinkPrefs.TAP_TARGET_HEALTH
+
+    val canToggleMyDevicesCard: Boolean
+        get() = !myDevicesCardSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
     val effectiveWifiAutoEnabled: Boolean
         get() = scope?.remoteWifiAutoSyncEnabled()
             ?: healthHost?.takeIf { it.reachable() }?.wifiAutoSyncEnabled()
@@ -245,6 +260,7 @@ internal data class WatchLinkUiState(
             effectiveSleepAutoDndEnabled,
             effectiveWakeExitDndEnabled,
             effectiveSleepPauseMediaEnabled,
+            effectiveMyDevicesCardEnabled,
             effectiveWifiAutoEnabled,
         ).count { it }
 }
@@ -254,6 +270,7 @@ private enum class Page(val title: String) {
     REMINDERS("提醒同步"),
     LIVE("实况窗同步"),
     NOTIFICATIONS("通知与免打扰"),
+    MY_DEVICES("设备空间卡片"),
     WIFI("Wi-Fi 同步"),
     WIFI_SYNC("批量同步 Wi-Fi"),
     DIAGNOSTICS("测试与诊断"),
@@ -277,6 +294,8 @@ internal fun WatchLinkApp(
     onSleepAutoDndEnable: (Boolean) -> Unit,
     onWakeExitDndEnable: (Boolean) -> Unit,
     onSleepPauseMediaEnable: (Boolean) -> Unit,
+    onMyDevicesCardEnable: (Boolean) -> Unit,
+    onMyDevicesTapTarget: (String) -> Unit,
     onOpenDndAccessSettings: () -> Unit,
     onWifiAutoEnable: (Boolean) -> Unit,
     onRawCommandDebugEnable: (Boolean) -> Unit,
@@ -288,6 +307,7 @@ internal fun WatchLinkApp(
     onRequestCalendarScope: () -> Unit,
     onRequestUmsScope: () -> Unit,
     onRequestWirelessScope: () -> Unit,
+    onRequestMyDevicesScope: () -> Unit,
     onSyncCurrentWifi: () -> Unit,
     onLoadSavedWifi: () -> Unit,
     onToggleWifiSelection: (String) -> Unit,
@@ -369,6 +389,12 @@ internal fun WatchLinkApp(
                             onSleepPauseMediaEnable = onSleepPauseMediaEnable,
                             onOpenDndAccessSettings = onOpenDndAccessSettings,
                         )
+                        Page.MY_DEVICES -> myDevicesPage(
+                            state = state,
+                            onMyDevicesCardEnable = onMyDevicesCardEnable,
+                            onMyDevicesTapTarget = onMyDevicesTapTarget,
+                            onRequestMyDevicesScope = onRequestMyDevicesScope,
+                        )
                         Page.WIFI -> wifiPage(
                             state = state,
                             onWifiAutoEnable = onWifiAutoEnable,
@@ -429,6 +455,10 @@ private fun LazyListScope.homePage(state: WatchLinkUiState, onRefresh: () -> Uni
     }
     val notifySummary = if (activeNotify.isEmpty()) "多场景静默推送、睡眠免打扰与入睡暂停播放"
     else "已开启：${activeNotify.joinToString(" · ")}"
+    val myDevicesSummary = if (state.effectiveMyDevicesCardEnabled) {
+        val targetName = if (state.effectiveMyDevicesTapTarget == WatchLinkPrefs.TAP_TARGET_WATCHLINK) "WatchLink" else "华为运动健康"
+        "已开启 · 点击卡片进入$targetName"
+    } else "ColorOS 我的设备原生连接与电量卡片"
     val wifiSummary = if (state.effectiveWifiAutoEnabled) "已开启 · 自动同步与批量导入"
     else "自动同步新连接与批量导入"
 
@@ -440,6 +470,8 @@ private fun LazyListScope.homePage(state: WatchLinkUiState, onRefresh: () -> Uni
             Menu(Page.LIVE.title, liveSummary) { openPage(Page.LIVE) }
             HorizontalDivider()
             Menu(Page.NOTIFICATIONS.title, notifySummary) { openPage(Page.NOTIFICATIONS) }
+            HorizontalDivider()
+            Menu(Page.MY_DEVICES.title, myDevicesSummary) { openPage(Page.MY_DEVICES) }
             HorizontalDivider()
             Menu(Page.WIFI.title, wifiSummary) { openPage(Page.WIFI) }
         }
@@ -869,6 +901,71 @@ private fun LazyListScope.notificationsPage(
     }
 }
 
+private fun LazyListScope.myDevicesPage(
+    state: WatchLinkUiState,
+    onMyDevicesCardEnable: (Boolean) -> Unit,
+    onMyDevicesTapTarget: (String) -> Unit,
+    onRequestMyDevicesScope: () -> Unit,
+) {
+    val enabled = state.effectiveMyDevicesCardEnabled
+    val tapTarget = state.effectiveMyDevicesTapTarget
+    val scope = state.scope
+    val checks = state.checks
+    val trusted = checks == null || checks.myDevicesTrusted
+    val needsScope = enabled && trusted && scope?.frameworkConnected() == true && !scope.myDevicesGranted()
+
+    val cardSummary = when {
+        !trusted -> "未检测到官方 ColorOS 设备空间（我的设备）"
+        state.myDevicesCardSaving -> "正在保存…"
+        !state.canToggleMyDevicesCard -> "请先启用模块或打开运动健康"
+        needsScope -> "需授权「设备空间」作用域"
+        else -> "在 ColorOS 控制中心与我的设备显示手表电量与状态（零常驻进程）"
+    }
+
+    item("mydevices-title") { SectionTitle("ColorOS 设备空间") }
+    item("mydevices-card") {
+        Card(Modifier.fillMaxWidth()) {
+            SwitchRow(
+                "显示华为手表设备卡片",
+                cardSummary,
+                enabled,
+                trusted && state.canToggleMyDevicesCard,
+                onMyDevicesCardEnable,
+            )
+            if (needsScope) {
+                HorizontalDivider()
+                if (scope.requestPending()) {
+                    BasicComponent(title = "等待 LSPosed 授权", summary = "请在弹窗中同意「我的设备（设备空间）」")
+                } else {
+                    Menu("申请设备空间作用域", "向 LSPosed 申请 com.heytap.mydevices 可选作用域", onRequestMyDevicesScope)
+                }
+            }
+            if (enabled) {
+                HorizontalDivider()
+                val targetLabel = if (tapTarget == WatchLinkPrefs.TAP_TARGET_WATCHLINK) "WatchLink" else "华为运动健康"
+                BasicComponent(
+                    title = "点击卡片打开",
+                    summary = "当前选择：$targetLabel",
+                    endActions = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            TextButton(
+                                text = if (tapTarget == WatchLinkPrefs.TAP_TARGET_HEALTH) "[运动健康]" else "运动健康",
+                                onClick = { onMyDevicesTapTarget(WatchLinkPrefs.TAP_TARGET_HEALTH) },
+                                enabled = state.canToggleMyDevicesCard && tapTarget != WatchLinkPrefs.TAP_TARGET_HEALTH,
+                            )
+                            TextButton(
+                                text = if (tapTarget == WatchLinkPrefs.TAP_TARGET_WATCHLINK) "[WatchLink]" else "WatchLink",
+                                onClick = { onMyDevicesTapTarget(WatchLinkPrefs.TAP_TARGET_WATCHLINK) },
+                                enabled = state.canToggleMyDevicesCard && tapTarget != WatchLinkPrefs.TAP_TARGET_WATCHLINK,
+                            )
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
 private fun LazyListScope.wifiPage(
     state: WatchLinkUiState,
     onWifiAutoEnable: (Boolean) -> Unit,
@@ -1201,6 +1298,8 @@ private fun LazyListScope.diagnosticsPage(
             HorizontalDivider()
             BasicComponent(title = "无线设置（可选）", summary = targetRuntimeText(scope, TargetProfile.WIRELESS_SETTINGS))
             HorizontalDivider()
+            BasicComponent(title = "设备空间（可选）", summary = targetRuntimeText(scope, TargetProfile.MY_DEVICES))
+            HorizontalDivider()
             BasicComponent(
                 title = "热重载宿主",
                 summary = when {
@@ -1393,6 +1492,11 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
             )
             HorizontalDivider()
             BasicComponent(
+                title = "设备空间原生卡片（需勾选我的设备）",
+                summary = "需额外勾选可选作用域「我的设备 / 设备空间（com.heytap.mydevices）」，不依赖 OPPO 健康，也无需 WatchLink 常驻后台。华为运动健康会直接将手表连接状态、电量与充电态推送给设备空间并实时刷新卡片；可在「设备空间卡片」页自定义点击卡片打开华为运动健康或 WatchLink。"
+            )
+            HorizontalDivider()
+            BasicComponent(
                 title = "Wi-Fi 同步（自动同步需勾选无线设置）",
                 summary = "自动同步新连接需额外勾选「无线设置（com.oplus.wirelesssettings）」，无需 Root 也无需开启定位服务，连入新网络时自动下发手表。\n" +
                     "首次导入已保存网络可使用「批量同步」：仅在点击读取时临时调用 Root 于内存中解析系统配置，不显示也不保存明文密码，离开页面即清空内存，完成后可随时收回 Root；支持开放与 WPA2/WPA3/WEP 网络，暂不支持企业认证（EAP）。"
@@ -1426,7 +1530,7 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
                 summary = "WatchLink ${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})\n" +
                     "包名：${BuildConfig.APPLICATION_ID}\n" +
                     "框架：LSPosed API 102（兼容 API 101）\n" +
-                    "基线：时钟 $VERIFIED_CLOCK · 日历 $VERIFIED_CALENDAR · 智慧服务 $VERIFIED_UMS · 无线设置 $VERIFIED_WIRELESS · 运动健康 $VERIFIED_HEALTH"
+                    "基线：时钟 $VERIFIED_CLOCK · 日历 $VERIFIED_CALENDAR · 智慧服务 $VERIFIED_UMS · 设备空间 $VERIFIED_MY_DEVICES · 无线设置 $VERIFIED_WIRELESS · 运动健康 $VERIFIED_HEALTH"
             )
             HorizontalDivider()
             Menu("作者的酷安主页", "查看更新日志与问题反馈", onCoolapk)
@@ -1653,6 +1757,7 @@ private fun targetRuntimeText(scope: ModuleScope.View?, target: TargetProfile): 
         TargetProfile.HEALTH -> scope.healthActive()
         TargetProfile.WIRELESS_SETTINGS -> scope.wirelessActive()
         TargetProfile.UMS -> scope.umsActive()
+        TargetProfile.MY_DEVICES -> scope.myDevicesActive()
     }
     val runtime = when (target) {
         TargetProfile.CLOCK -> scope.clockRuntime()
@@ -1660,10 +1765,12 @@ private fun targetRuntimeText(scope: ModuleScope.View?, target: TargetProfile): 
         TargetProfile.HEALTH -> scope.healthRuntime()
         TargetProfile.WIRELESS_SETTINGS -> scope.wirelessRuntime()
         TargetProfile.UMS -> scope.umsRuntime()
+        TargetProfile.MY_DEVICES -> scope.myDevicesRuntime()
     }
     if ((target == TargetProfile.CALENDAR && !scope.calendarGranted())
         || (target == TargetProfile.WIRELESS_SETTINGS && !scope.wirelessGranted())
         || (target == TargetProfile.UMS && !scope.umsGranted())
+        || (target == TargetProfile.MY_DEVICES && !scope.myDevicesGranted())
     ) {
         if (scope.frameworkConnected()) return "未勾选（可选）"
     }

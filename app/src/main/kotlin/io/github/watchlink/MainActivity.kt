@@ -68,6 +68,8 @@ class MainActivity : ComponentActivity() {
                 onSleepAutoDndEnable = ::setSleepAutoDndEnabled,
                 onWakeExitDndEnable = ::setWakeExitDndEnabled,
                 onSleepPauseMediaEnable = ::setSleepPauseMediaEnabled,
+                onMyDevicesCardEnable = ::setMyDevicesCardEnabled,
+                onMyDevicesTapTarget = ::setMyDevicesTapTarget,
                 onOpenDndAccessSettings = { open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) },
                 onWifiAutoEnable = ::setWifiAutoEnabled,
                 onRawCommandDebugEnable = ::setRawCommandDebugEnabled,
@@ -79,6 +81,7 @@ class MainActivity : ComponentActivity() {
                 onRequestCalendarScope = ::requestCalendarScope,
                 onRequestUmsScope = ::requestUmsScope,
                 onRequestWirelessScope = ::requestWirelessScope,
+                onRequestMyDevicesScope = ::requestMyDevicesScope,
                 onSyncCurrentWifi = ::syncCurrentWifi,
                 onLoadSavedWifi = ::loadSavedWifiViaRoot,
                 onToggleWifiSelection = ::toggleWifiSelection,
@@ -248,6 +251,20 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private suspend fun writeRemoteMyDevicesCardEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteMyDevicesCardEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteMyDevicesTapTarget(target: String): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteMyDevicesTapTarget(target) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
     private suspend fun writeRemoteRawCommandDebugEnabled(enabled: Boolean): Boolean =
         suspendCancellableCoroutine { continuation ->
             ModuleScope.writeRemoteRawCommandDebugEnabled(enabled) { ok ->
@@ -274,7 +291,7 @@ class MainActivity : ComponentActivity() {
             || ui.gameFlashbackSaving || ui.notifyMuteDndSaving || ui.notifySilentPushSaving
             || ui.notifySilentScreenOnSaving || ui.notifySilentFocusSaving || ui.notifySilentGameSaving
             || ui.sleepAutoDndSaving || ui.wakeExitDndSaving || ui.sleepPauseMediaSaving
-            || ui.rawCommandDebugSaving) return
+            || ui.myDevicesCardSaving || ui.rawCommandDebugSaving) return
         val revision = ++switchRevision
         val (clockReply, calendarReply, healthReply) = coroutineScope {
             val clockJob = async { clockCommand(ClockHostControl.QUERY) }
@@ -298,6 +315,7 @@ class MainActivity : ComponentActivity() {
                 val healthVersion = readVersion(TargetProfile.HEALTH.packageName)
                 val wirelessVersion = readVersion(TargetProfile.WIRELESS_SETTINGS.packageName)
                 val umsVersion = readVersion(TargetProfile.UMS.packageName)
+                val myDevicesVersion = readVersion(TargetProfile.MY_DEVICES.packageName)
                 HomeChecks(
                     clockVersion = clockVersion,
                     clockTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.CLOCK),
@@ -312,6 +330,8 @@ class MainActivity : ComponentActivity() {
                     wirelessTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.WIRELESS_SETTINGS),
                     umsVersion = umsVersion,
                     umsTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.UMS),
+                    myDevicesVersion = myDevicesVersion,
+                    myDevicesTrusted = SenderVerifier.trustedReminderTarget(applicationContext, TargetProfile.MY_DEVICES),
                 )
             }.getOrNull()
         }
@@ -366,6 +386,16 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val scope = withContext(Dispatchers.IO) {
                 ModuleScope.requestUms(applicationContext)
+                ModuleScope.inspect()
+            }
+            ui = ui.copy(scope = scope)
+        }
+    }
+
+    private fun requestMyDevicesScope() {
+        lifecycleScope.launch {
+            val scope = withContext(Dispatchers.IO) {
+                ModuleScope.requestMyDevices(applicationContext)
                 ModuleScope.inspect()
             }
             ui = ui.copy(scope = scope)
@@ -563,6 +593,55 @@ class MainActivity : ComponentActivity() {
                 healthHost = healthReply,
                 sleepPauseMediaSaving = false,
                 message = if (!saved) "未能保存入睡暂停播放开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setMyDevicesCardEnabled(enable: Boolean) {
+        if (ui.myDevicesCardSaving) return
+        ++switchRevision
+        ui = ui.copy(myDevicesCardSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteMyDevicesCardEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_MYDEVICES_CARD
+            else HealthHostControl.DISABLE_MYDEVICES_CARD
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.myDevicesCardEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                myDevicesCardSaving = false,
+                message = when {
+                    !saved -> "未能保存设备空间卡片开关状态。请确认 LSPosed 已启用或运动健康在线后再试。"
+                    enable && scopeNow.frameworkConnected() && !scopeNow.myDevicesGranted() ->
+                        "已开启设备空间卡片，请点击下方「申请设备空间作用域」并在重启/重载设备空间后生效。"
+                    else -> null
+                },
+            )
+            readChecks()
+        }
+    }
+
+    private fun setMyDevicesTapTarget(target: String) {
+        if (ui.myDevicesCardSaving) return
+        val normalized = io.github.watchlink.setup.WatchLinkPrefs.normalizeTapTarget(target)
+        ++switchRevision
+        ui = ui.copy(myDevicesCardSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteMyDevicesTapTarget(normalized)
+            val healthAction = if (normalized == io.github.watchlink.setup.WatchLinkPrefs.TAP_TARGET_WATCHLINK)
+                HealthHostControl.SET_MYDEVICES_TAP_WATCHLINK
+            else HealthHostControl.SET_MYDEVICES_TAP_HEALTH
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.myDevicesTapTarget() == normalized)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                myDevicesCardSaving = false,
+                message = if (!saved) "未能保存卡片点击跳转目标。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
             )
             readChecks()
         }

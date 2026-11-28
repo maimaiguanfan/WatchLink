@@ -31,7 +31,8 @@ public final class ModuleScope {
     public static final List<String> OPTIONAL_PACKAGES = List.of(
             TargetProfile.CALENDAR.packageName,
             TargetProfile.WIRELESS_SETTINGS.packageName,
-            TargetProfile.UMS.packageName);
+            TargetProfile.UMS.packageName,
+            TargetProfile.MY_DEVICES.packageName);
 
     public record TargetRuntime(String state, long loadedVersionCode) {
         public static final TargetRuntime UNSUPPORTED = new TargetRuntime("UNSUPPORTED", 0);
@@ -79,7 +80,43 @@ public final class ModuleScope {
                        Boolean remoteNotifyMuteDndEnabled, Boolean remoteSleepAutoDndEnabled,
                        Boolean remoteWakeExitDndEnabled, Boolean remoteNotifySilentPushEnabled,
                        Boolean remoteNotifySilentScreenOnEnabled, Boolean remoteNotifySilentFocusEnabled,
-                       Boolean remoteNotifySilentGameEnabled, Boolean remoteSleepPauseMediaEnabled) {
+                       Boolean remoteNotifySilentGameEnabled, Boolean remoteSleepPauseMediaEnabled,
+                       boolean myDevicesGranted, boolean myDevicesActive, TargetRuntime myDevicesRuntime,
+                       Boolean remoteMyDevicesCardEnabled, String remoteMyDevicesTapTarget) {
+        public View(boolean frameworkConnected,
+                    String frameworkName,
+                    String frameworkVersion,
+                    int frameworkApiVersion,
+                    boolean clockGranted, boolean healthGranted, boolean calendarGranted,
+                    boolean wirelessGranted, boolean umsGranted,
+                    boolean clockActive, boolean healthActive, boolean calendarActive,
+                    boolean wirelessActive, boolean umsActive,
+                    TargetRuntime clockRuntime, TargetRuntime healthRuntime,
+                    TargetRuntime calendarRuntime, TargetRuntime wirelessRuntime,
+                    TargetRuntime umsRuntime, TargetRuntime daemonRuntime,
+                    boolean checking,
+                    boolean requestPending, String requestResult,
+                    boolean remotePrefsSupported,
+                    Boolean remoteEnabled, Boolean remoteCalendarEnabled,
+                    Boolean remoteWifiAutoSyncEnabled, Boolean remoteLiveWindowEnabled,
+                    TimerOptions timerOptions, Boolean remoteRawCommandDebugEnabled,
+                    Boolean remoteGameFlashbackEnabled, Integer remoteGameFlashbackLeadSec,
+                    Boolean remoteNotifyMuteDndEnabled, Boolean remoteSleepAutoDndEnabled,
+                    Boolean remoteWakeExitDndEnabled, Boolean remoteNotifySilentPushEnabled,
+                    Boolean remoteNotifySilentScreenOnEnabled, Boolean remoteNotifySilentFocusEnabled,
+                    Boolean remoteNotifySilentGameEnabled, Boolean remoteSleepPauseMediaEnabled) {
+            this(frameworkConnected, frameworkName, frameworkVersion, frameworkApiVersion, clockGranted,
+                    healthGranted, calendarGranted, wirelessGranted, umsGranted, clockActive, healthActive,
+                    calendarActive, wirelessActive, umsActive, clockRuntime, healthRuntime, calendarRuntime,
+                    wirelessRuntime, umsRuntime, daemonRuntime, checking, requestPending, requestResult,
+                    remotePrefsSupported, remoteEnabled, remoteCalendarEnabled, remoteWifiAutoSyncEnabled,
+                    remoteLiveWindowEnabled, timerOptions, remoteRawCommandDebugEnabled,
+                    remoteGameFlashbackEnabled, remoteGameFlashbackLeadSec,
+                    remoteNotifyMuteDndEnabled, remoteSleepAutoDndEnabled, remoteWakeExitDndEnabled,
+                    remoteNotifySilentPushEnabled, remoteNotifySilentScreenOnEnabled,
+                    remoteNotifySilentFocusEnabled, remoteNotifySilentGameEnabled, remoteSleepPauseMediaEnabled,
+                    false, false, TargetRuntime.ABSENT, null, null);
+        }
         public View(boolean frameworkConnected,
                     String frameworkName,
                     String frameworkVersion,
@@ -334,13 +371,15 @@ public final class ModuleScope {
                     || daemonRuntime.isStale()
                     || (calendarGranted && calendarRuntime.isStale())
                     || (wirelessGranted && wirelessRuntime.isStale())
-                    || (umsGranted && umsRuntime.isStale()));
+                    || (umsGranted && umsRuntime.isStale())
+                    || (myDevicesGranted && myDevicesRuntime.isStale()));
         }
 
         public boolean canHotReloadAny() {
             return supportsApi102()
                     && (clockRuntime.isRunning() || healthRuntime.isRunning() || daemonRuntime.isRunning()
-                    || calendarRuntime.isRunning() || wirelessRuntime.isRunning() || umsRuntime.isRunning());
+                    || calendarRuntime.isRunning() || wirelessRuntime.isRunning() || umsRuntime.isRunning()
+                    || myDevicesRuntime.isRunning());
         }
     }
 
@@ -350,7 +389,7 @@ public final class ModuleScope {
     private static final long HOT_RELOAD_TIMEOUT_MS = 8_000;
     private static final TargetProfile[] TARGETS = {
             TargetProfile.CLOCK, TargetProfile.CALENDAR, TargetProfile.HEALTH,
-            TargetProfile.WIRELESS_SETTINGS, TargetProfile.UMS
+            TargetProfile.WIRELESS_SETTINGS, TargetProfile.UMS, TargetProfile.MY_DEVICES
     };
     private static final ScheduledThreadPoolExecutor worker = new ScheduledThreadPoolExecutor(1, task -> {
         Thread thread = new Thread(task, "WatchLink-scope");
@@ -392,12 +431,15 @@ public final class ModuleScope {
     private static Boolean remoteSleepAutoDndEnabled;
     private static Boolean remoteWakeExitDndEnabled;
     private static Boolean remoteSleepPauseMediaEnabled;
+    private static Boolean remoteMyDevicesCardEnabled;
+    private static String remoteMyDevicesTapTarget;
     private static Boolean remoteRawCommandDebugEnabled;
     private static TargetRuntime clockRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime healthRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime calendarRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime wirelessRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime umsRuntime = TargetRuntime.UNSUPPORTED;
+    private static TargetRuntime myDevicesRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime daemonRuntime = TargetRuntime.UNSUPPORTED;
     private static final Map<TargetProfile, HookedTarget> runningTargets = new HashMap<>();
     private static HookedTarget daemonTarget;
@@ -408,7 +450,7 @@ public final class ModuleScope {
     private static String result = "IDLE";
     private static long lastProbe = -REFRESH_INTERVAL_MS;
     private static Probe probe;
-    private static boolean clockActive, healthActive, calendarActive, wirelessActive, umsActive;
+    private static boolean clockActive, healthActive, calendarActive, wirelessActive, umsActive, myDevicesActive;
 
     public static View inspect() { return snapshot; }
 
@@ -521,6 +563,40 @@ public final class ModuleScope {
         writeRemoteBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, enabled, callback);
     }
 
+    /** Persists the ColorOS MyDevices native card toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteMyDevicesCardEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED, enabled, callback);
+    }
+
+    /** Persists the ColorOS MyDevices card tap target ("HEALTH" or "WATCHLINK") to LSPosed RemotePreferences. */
+    public static void writeRemoteMyDevicesTapTarget(String target, Consumer<Boolean> callback) {
+        String normalized = WatchLinkPrefs.normalizeTapTarget(target);
+        worker.execute(() -> {
+            listen();
+            boolean written = false;
+            XposedService service = framework;
+            if (service != null && supportsRemote(service)) {
+                try {
+                    SharedPreferences prefs = service.getRemotePreferences(WatchLinkPrefs.GROUP);
+                    written = prefs.edit()
+                            .putString(WatchLinkPrefs.KEY_MYDEVICES_TAP_TARGET, normalized)
+                            .putLong(WatchLinkPrefs.KEY_UPDATED_AT, System.currentTimeMillis())
+                            .commit();
+                    if (written) {
+                        remotePrefsSupported = true;
+                        remoteMyDevicesTapTarget = normalized;
+                        ProbeLog.info("REMOTE_PREFS_SAVED");
+                        publish();
+                    }
+                } catch (RuntimeException error) {
+                    ProbeLog.failure("REMOTE_PREFS_WRITE_FAILED", error);
+                }
+            }
+            boolean ok = written;
+            new Handler(Looper.getMainLooper()).post(() -> callback.accept(ok));
+        });
+    }
+
     /** Persists the opt-in ADB raw watch command debug toggle to LSPosed RemotePreferences. */
     public static void writeRemoteRawCommandDebugEnabled(boolean enabled, Consumer<Boolean> callback) {
         writeRemoteBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, enabled, callback);
@@ -588,6 +664,7 @@ public final class ModuleScope {
                         else if (WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED.equals(key)) remoteSleepAutoDndEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED.equals(key)) remoteWakeExitDndEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED.equals(key)) remoteSleepPauseMediaEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED.equals(key)) remoteMyDevicesCardEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG.equals(key)) remoteRawCommandDebugEnabled = enabled;
                         ProbeLog.info("REMOTE_PREFS_SAVED");
                         publish();
@@ -701,6 +778,11 @@ public final class ModuleScope {
         requestPackages(owner, List.of(TargetProfile.UMS.packageName));
     }
 
+    /** Prompts LSPosed for the optional ColorOS MyDevices scope for native watch device-space card. */
+    public static void requestMyDevices(Context owner) {
+        requestPackages(owner, List.of(TargetProfile.MY_DEVICES.packageName));
+    }
+
     private static void requestPackages(Context owner, List<String> wanted) {
         refresh(owner, true);
         worker.execute(() -> {
@@ -807,12 +889,15 @@ public final class ModuleScope {
         remoteSleepAutoDndEnabled = null;
         remoteWakeExitDndEnabled = null;
         remoteSleepPauseMediaEnabled = null;
+        remoteMyDevicesCardEnabled = null;
+        remoteMyDevicesTapTarget = null;
         remoteRawCommandDebugEnabled = null;
         clockRuntime = TargetRuntime.UNSUPPORTED;
         healthRuntime = TargetRuntime.UNSUPPORTED;
         calendarRuntime = TargetRuntime.UNSUPPORTED;
         wirelessRuntime = TargetRuntime.UNSUPPORTED;
         umsRuntime = TargetRuntime.UNSUPPORTED;
+        myDevicesRuntime = TargetRuntime.UNSUPPORTED;
         daemonRuntime = TargetRuntime.UNSUPPORTED;
         runningTargets.clear();
         daemonTarget = null;
@@ -853,6 +938,8 @@ public final class ModuleScope {
         remoteSleepAutoDndEnabled = null;
         remoteWakeExitDndEnabled = null;
         remoteSleepPauseMediaEnabled = null;
+        remoteMyDevicesCardEnabled = null;
+        remoteMyDevicesTapTarget = null;
         remoteRawCommandDebugEnabled = null;
         runningTargets.clear();
         daemonTarget = null;
@@ -863,6 +950,7 @@ public final class ModuleScope {
             calendarRuntime = TargetRuntime.UNSUPPORTED;
             wirelessRuntime = TargetRuntime.UNSUPPORTED;
             umsRuntime = TargetRuntime.UNSUPPORTED;
+            myDevicesRuntime = TargetRuntime.UNSUPPORTED;
             daemonRuntime = TargetRuntime.UNSUPPORTED;
             return;
         }
@@ -913,6 +1001,12 @@ public final class ModuleScope {
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, false) : null;
                 remoteSleepPauseMediaEnabled = prefs.contains(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, false) : null;
+                remoteMyDevicesCardEnabled = prefs.contains(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_MYDEVICES_CARD_ENABLED, false) : null;
+                remoteMyDevicesTapTarget = prefs.contains(WatchLinkPrefs.KEY_MYDEVICES_TAP_TARGET)
+                        ? WatchLinkPrefs.normalizeTapTarget(
+                                prefs.getString(WatchLinkPrefs.KEY_MYDEVICES_TAP_TARGET,
+                                        WatchLinkPrefs.TAP_TARGET_HEALTH)) : null;
                 remoteRawCommandDebugEnabled = prefs.contains(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, false) : null;
             } catch (RuntimeException error) {
@@ -927,6 +1021,7 @@ public final class ModuleScope {
                 calendarRuntime = TargetRuntime.ABSENT;
                 wirelessRuntime = TargetRuntime.ABSENT;
                 umsRuntime = TargetRuntime.ABSENT;
+                myDevicesRuntime = TargetRuntime.ABSENT;
                 daemonRuntime = TargetRuntime.ABSENT;
                 if (targets != null) {
                     for (HookedTarget target : targets) {
@@ -951,6 +1046,9 @@ public final class ModuleScope {
                         } else if (TargetProfile.UMS.isReminderProcess(proc)) {
                             runningTargets.put(TargetProfile.UMS, target);
                             umsRuntime = classifyState(state, target.getLoadedVersionCode());
+                        } else if (TargetProfile.MY_DEVICES.isReminderProcess(proc)) {
+                            runningTargets.put(TargetProfile.MY_DEVICES, target);
+                            myDevicesRuntime = classifyState(state, target.getLoadedVersionCode());
                         }
                     }
                 }
@@ -960,6 +1058,7 @@ public final class ModuleScope {
                 calendarRuntime = TargetRuntime.UNSUPPORTED;
                 wirelessRuntime = TargetRuntime.UNSUPPORTED;
                 umsRuntime = TargetRuntime.UNSUPPORTED;
+                myDevicesRuntime = TargetRuntime.UNSUPPORTED;
                 daemonRuntime = TargetRuntime.UNSUPPORTED;
             }
         } else {
@@ -968,13 +1067,14 @@ public final class ModuleScope {
             calendarRuntime = TargetRuntime.UNSUPPORTED;
             wirelessRuntime = TargetRuntime.UNSUPPORTED;
             umsRuntime = TargetRuntime.UNSUPPORTED;
+            myDevicesRuntime = TargetRuntime.UNSUPPORTED;
             daemonRuntime = TargetRuntime.UNSUPPORTED;
         }
     }
 
     private static final class Probe {
         final long deadline;
-        Boolean clock, health, calendar, wireless, ums;
+        Boolean clock, health, calendar, wireless, ums, myDevices;
         Probe(long deadline) { this.deadline = deadline; }
     }
 
@@ -995,8 +1095,10 @@ public final class ModuleScope {
                     else if (target == TargetProfile.CALENDAR) current.calendar = ready;
                     else if (target == TargetProfile.WIRELESS_SETTINGS) current.wireless = ready;
                     else if (target == TargetProfile.UMS) current.ums = ready;
+                    else if (target == TargetProfile.MY_DEVICES) current.myDevices = ready;
                     if (current.clock != null && current.health != null
-                            && current.calendar != null && current.wireless != null && current.ums != null) {
+                            && current.calendar != null && current.wireless != null
+                            && current.ums != null && current.myDevices != null) {
                         finish(current);
                     }
                 }));
@@ -1015,6 +1117,7 @@ public final class ModuleScope {
         calendarActive = Boolean.TRUE.equals(current.calendar);
         wirelessActive = Boolean.TRUE.equals(current.wireless);
         umsActive = Boolean.TRUE.equals(current.ums);
+        myDevicesActive = Boolean.TRUE.equals(current.myDevices);
         probe = null;
         publish();
     }
@@ -1039,7 +1142,10 @@ public final class ModuleScope {
                 remoteGameFlashbackEnabled, remoteGameFlashbackLeadSec,
                 remoteNotifyMuteDndEnabled, remoteSleepAutoDndEnabled, remoteWakeExitDndEnabled,
                 remoteNotifySilentPushEnabled, remoteNotifySilentScreenOnEnabled,
-                remoteNotifySilentFocusEnabled, remoteNotifySilentGameEnabled, remoteSleepPauseMediaEnabled);
+                remoteNotifySilentFocusEnabled, remoteNotifySilentGameEnabled, remoteSleepPauseMediaEnabled,
+                grants != null && grants.contains(TargetProfile.MY_DEVICES.packageName),
+                myDevicesActive, myDevicesRuntime,
+                remoteMyDevicesCardEnabled, remoteMyDevicesTapTarget);
     }
 
     private ModuleScope() {}

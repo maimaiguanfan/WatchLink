@@ -14,6 +14,9 @@ import io.github.watchlink.BuildConfig;
 import io.github.watchlink.alarm.probe.ProbeLog;
 import io.github.watchlink.alarm.probe.SenderVerifier;
 import io.github.watchlink.alarm.probe.TargetProfile;
+import io.github.watchlink.mydevices.MyDevicesCardCodec;
+import io.github.watchlink.mydevices.MyDevicesWire;
+import io.github.watchlink.setup.WatchLinkPrefs;
 import io.github.watchlink.validation.DailyAlarmWire;
 import io.github.watchlink.validation.HealthHostControl;
 import io.github.watchlink.validation.HuaweiReminderService;
@@ -54,6 +57,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     private HealthRawCommandBridge rawCommandBridge;
     private HealthSleepDndBridge sleepDndBridge;
     private HealthWatchStatusCollector watchStatusCollector;
+    private BroadcastReceiver myDevicesPullReceiver;
     private BroadcastReceiver controlReceiver;
     private boolean registered;
     private volatile boolean installed;
@@ -147,8 +151,15 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         sleepDndBridge = sleepDnd;
 
         HealthWatchStatusCollector watchStatus = new HealthWatchStatusCollector(app, worker, readiness);
+        watchStatus.setChangeListener(this::pushWatchStatusToMyDevices);
         watchStatus.install(installer, symbols);
         watchStatusCollector = watchStatus;
+        registerMyDevicesPullReceiver();
+        settings.onMyDevicesCardChanged(enabled -> worker.execute(() -> {
+            if (installed && Boolean.TRUE.equals(enabled) && watchStatusCollector != null) {
+                pushWatchStatusToMyDevices(watchStatusCollector.snapshot());
+            }
+        }));
         settings.onTimerChanged(() -> worker.execute(() -> {
             if (!settings.isTimerEnabled()) cancelActiveDailyFor(TargetProfile.CLOCK, true);
             if (!settings.isTimerEnabled() || !settings.isTimerLiveWindowEnabled()) live.closeGroupLocked(true);
@@ -172,6 +183,57 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 ProbeLog.failure("DAILY_HEALTH_REPORT_UNAVAILABLE", unavailable);
             }
         }
+    }
+
+    private void registerMyDevicesPullReceiver() {
+        try {
+            BroadcastReceiver r = new BroadcastReceiver() {
+                @Override public void onReceive(Context context, Intent intent) {
+                    if (!installed || intent == null || !MyDevicesWire.ACTION_PULL.equals(intent.getAction())) return;
+                    int uid = getSentFromUid();
+                    String pkg = getSentFromPackage();
+                    if (uid < 0 || !TargetProfile.MY_DEVICES.packageName.equals(pkg)
+                            || intent.getComponent() != null
+                            || !TargetProfile.HEALTH.packageName.equals(intent.getPackage())
+                            || (intent.getFlags() & Intent.FLAG_RECEIVER_REGISTERED_ONLY) == 0) {
+                        return;
+                    }
+                    PendingResult pending = goAsync();
+                    try {
+                        worker.execute(() -> {
+                            try {
+                                if (installed && SenderVerifier.verifyReminderSender(app, TargetProfile.MY_DEVICES, uid, pkg)
+                                        && watchStatusCollector != null) {
+                                    pushWatchStatusToMyDevices(watchStatusCollector.snapshot());
+                                }
+                            } catch (RuntimeException ignored) {
+                            } finally {
+                                pending.finish();
+                            }
+                        });
+                    } catch (RuntimeException shuttingDown) {
+                        pending.finish();
+                    }
+                }
+            };
+            app.registerReceiver(r, new IntentFilter(MyDevicesWire.ACTION_PULL), Context.RECEIVER_EXPORTED);
+            myDevicesPullReceiver = r;
+        } catch (RuntimeException ignored) {}
+    }
+
+    private void pushWatchStatusToMyDevices(HealthWatchStatusCollector.WatchStatusSnapshot snap) {
+        if (!installed || snap == null || !settings.isMyDevicesCardEnabled()) return;
+        String name = MyDevicesCardCodec.sanitizeDisplayName(snap.watchName());
+        String rawMac = snap.rawMac() == null ? "" : snap.rawMac();
+        if (!snap.connected() && rawMac.isEmpty() && snap.watchName().isEmpty()) return;
+        String deviceId = MyDevicesCardCodec.syntheticDeviceId(rawMac, name);
+        MyDevicesCardCodec.CardSnapshot card = new MyDevicesCardCodec.CardSnapshot(
+                deviceId, name, rawMac, snap.connected(),
+                snap.batteryPercent(), snap.charging(),
+                snap.updatedAtMs() > 0L ? snap.updatedAtMs() : System.currentTimeMillis());
+        try {
+            MyDevicesWire.sendSnapshotToMyDevices(app, card);
+        } catch (RuntimeException ignored) {}
     }
 
     private boolean installExternalServiceHook(AlarmObserverInstaller installer) {
@@ -252,7 +314,12 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         settings.onDisabled(null);
         settings.onTimerChanged(null);
         settings.onCalendarDisabled(null);
+        settings.onMyDevicesCardChanged(null);
         daily.stop();
+        if (myDevicesPullReceiver != null) {
+            try { app.unregisterReceiver(myDevicesPullReceiver); } catch (RuntimeException ignored) {}
+            myDevicesPullReceiver = null;
+        }
         if (watchStatusCollector != null) {
             try { watchStatusCollector.close(); } catch (RuntimeException ignored) {}
             watchStatusCollector = null;
@@ -682,6 +749,15 @@ final class HealthAlarmBridge extends BroadcastReceiver {
             case HealthHostControl.DISABLE_WAKE_EXIT_DND -> settings.setLocalWakeExitDndFallback(false);
             case HealthHostControl.ENABLE_SLEEP_PAUSE_MEDIA -> settings.setLocalSleepPauseMediaFallback(true);
             case HealthHostControl.DISABLE_SLEEP_PAUSE_MEDIA -> settings.setLocalSleepPauseMediaFallback(false);
+            case HealthHostControl.ENABLE_MYDEVICES_CARD -> {
+                settings.setLocalMyDevicesCardFallback(true);
+                if (watchStatusCollector != null) pushWatchStatusToMyDevices(watchStatusCollector.snapshot());
+            }
+            case HealthHostControl.DISABLE_MYDEVICES_CARD -> settings.setLocalMyDevicesCardFallback(false);
+            case HealthHostControl.SET_MYDEVICES_TAP_HEALTH ->
+                    settings.setLocalMyDevicesTapTargetFallback(WatchLinkPrefs.TAP_TARGET_HEALTH);
+            case HealthHostControl.SET_MYDEVICES_TAP_WATCHLINK ->
+                    settings.setLocalMyDevicesTapTargetFallback(WatchLinkPrefs.TAP_TARGET_WATCHLINK);
             case HealthHostControl.TEST_LIVE_WINDOW -> {
                 if (liveBridge != null) liveBridge.startLiveTest();
             }
@@ -770,7 +846,9 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 watchStatus.watchName(),
                 watchStatus.batteryPercent(),
                 watchStatus.charging(),
-                watchStatus.updatedAtMs());
+                watchStatus.updatedAtMs(),
+                settings.isMyDevicesCardEnabled(),
+                settings.myDevicesTapTarget());
     }
 
     private void startManualTestLocked() {

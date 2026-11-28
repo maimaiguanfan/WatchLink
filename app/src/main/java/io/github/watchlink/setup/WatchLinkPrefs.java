@@ -25,8 +25,17 @@ public final class WatchLinkPrefs {
     public static final String KEY_SLEEP_AUTO_DND_ENABLED = "sleep_auto_dnd_enabled";
     public static final String KEY_WAKE_EXIT_DND_ENABLED = "wake_exit_dnd_enabled";
     public static final String KEY_SLEEP_PAUSE_MEDIA_ENABLED = "sleep_pause_media_enabled";
+    public static final String KEY_MYDEVICES_CARD_ENABLED = "mydevices_card_enabled";
+    public static final String KEY_MYDEVICES_TAP_TARGET = "mydevices_tap_target";
     public static final String KEY_RAW_COMMAND_DEBUG = "raw_command_debug_enabled";
     public static final String KEY_UPDATED_AT = "updated_at";
+
+    public static final String TAP_TARGET_HEALTH = "HEALTH";
+    public static final String TAP_TARGET_WATCHLINK = "WATCHLINK";
+
+    public static String normalizeTapTarget(String raw) {
+        return TAP_TARGET_WATCHLINK.equals(raw) ? TAP_TARGET_WATCHLINK : TAP_TARGET_HEALTH;
+    }
 
     public static final int DEFAULT_GAME_FLASHBACK_LEAD_SEC = 5;
     public static final int MIN_GAME_FLASHBACK_LEAD_SEC = 0;

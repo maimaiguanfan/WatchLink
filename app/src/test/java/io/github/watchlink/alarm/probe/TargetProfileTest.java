@@ -12,7 +12,7 @@ public class TargetProfileTest {
     @Test public void authenticatesOnlyExactPackageUidAndOfficialSigner() {
         for (TargetProfile profile : TargetProfile.values()) {
             String cert = switch (profile) {
-                case CLOCK, UMS -> CLOCK_CERT;
+                case CLOCK, UMS, MY_DEVICES -> CLOCK_CERT;
                 case CALENDAR -> CALENDAR_CERT;
                 case HEALTH -> HEALTH_CERT;
                 case WIRELESS_SETTINGS -> WIRELESS_CERT;
@@ -40,11 +40,13 @@ public class TargetProfileTest {
         TargetProfile health = TargetProfile.HEALTH;
         TargetProfile wireless = TargetProfile.WIRELESS_SETTINGS;
         TargetProfile ums = TargetProfile.UMS;
+        TargetProfile myDevices = TargetProfile.MY_DEVICES;
         assertTrue(clock.isAlertSource());
         assertTrue(calendar.isAlertSource());
         assertFalse(health.isAlertSource());
         assertFalse(wireless.isAlertSource());
         assertFalse(ums.isAlertSource());
+        assertFalse(myDevices.isAlertSource());
         assertTrue(clock.isReminderProcess(clock.packageName));
         assertTrue(calendar.isReminderProcess(calendar.packageName));
         assertFalse(calendar.isReminderProcess(calendar.packageName + ":hlog"));
@@ -52,6 +54,8 @@ public class TargetProfileTest {
         assertFalse(wireless.isReminderProcess(wireless.packageName + ":tzupdate"));
         assertTrue(ums.isReminderProcess(ums.packageName));
         assertFalse(ums.isReminderProcess(ums.packageName + ":remote"));
+        assertTrue(myDevices.isReminderProcess(myDevices.packageName));
+        assertFalse(myDevices.isReminderProcess(myDevices.packageName + ":remote"));
         assertTrue(health.isReminderProcess(health.packageName + ":PhoneService"));
         assertTrue(health.isHealthDaemonProcess(health.packageName + ":DaemonService"));
         assertFalse(health.isHealthDaemonProcess(health.packageName + ":PhoneService"));

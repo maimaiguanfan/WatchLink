@@ -18,7 +18,10 @@ public enum TargetProfile {
     WIRELESS_SETTINGS("com.oplus.wirelesssettings",
             certificates("e49802409584ce53152a9000820a51e4fa8a723b7bcc263e335240acf100bf9e")),
     UMS("com.oplus.pantanal.ums",
-            certificates("159e6f37c336f2f41272542dbc1dc85721dd567ed4ac68ac13f2e43003ce0dce"));
+            certificates("159e6f37c336f2f41272542dbc1dc85721dd567ed4ac68ac13f2e43003ce0dce")),
+    MY_DEVICES("com.heytap.mydevices",
+            certificates("159e6f37c336f2f41272542dbc1dc85721dd567ed4ac68ac13f2e43003ce0dce",
+                    "64aafaf1d5bc9155a9e417a849e4f8eda1d0d1341667c28ed7c443c76f820b9a"));
 
     public final String packageName;
     private final Set<String> signerSha256;

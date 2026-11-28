@@ -44,6 +44,7 @@ final class AlarmObserverInstaller {
     private HealthAlarmBridge healthBridge;
     private WirelessSettingsBridge wirelessBridge;
     private UmsFluidBridge umsBridge;
+    private MyDevicesBridge myDevicesBridge;
     private HostSettings hostSettings;
 
     AlarmObserverInstaller(XposedInterface module, TargetProfile profile, ClassLoader loader,
@@ -97,6 +98,7 @@ final class AlarmObserverInstaller {
                 case HEALTH -> ".health_settings_v1";
                 case WIRELESS_SETTINGS -> ".wireless_settings_v1";
                 case UMS -> ".ums_settings_v1";
+                case MY_DEVICES -> ".mydevices_settings_v1";
             };
             SharedPreferences local = hostContext.getSharedPreferences(
                     BuildConfig.APPLICATION_ID + localSuffix, Context.MODE_PRIVATE);
@@ -174,6 +176,10 @@ final class AlarmObserverInstaller {
                 UmsFluidBridge bridge = new UmsFluidBridge(hostContext, settings, sources);
                 umsBridge = bridge;
                 bridge.install(this);
+            } else if (profile == TargetProfile.MY_DEVICES) {
+                MyDevicesBridge bridge = new MyDevicesBridge(hostContext, settings, sources);
+                myDevicesBridge = bridge;
+                bridge.install(this);
             } else {
                 HealthAlarmBridge bridge = new HealthAlarmBridge(hostContext, ownerUid, settings, sources);
                 healthBridge = bridge;
@@ -246,6 +252,10 @@ final class AlarmObserverInstaller {
             try { umsBridge.close(); } catch (RuntimeException ignored) {}
             umsBridge = null;
         }
+        if (myDevicesBridge != null) {
+            try { myDevicesBridge.close(); } catch (RuntimeException ignored) {}
+            myDevicesBridge = null;
+        }
         if (hostSettings != null) {
             try { hostSettings.close(); } catch (RuntimeException ignored) {}
             hostSettings = null;
@@ -264,7 +274,8 @@ final class AlarmObserverInstaller {
             Class<?> application = target(CalendarSymbolResolver.APPLICATION);
             if (!Context.class.isAssignableFrom(application)) throw new NoSuchMethodException("Calendar application");
             getter = staticMethod(application, appGetter, Application.class);
-        } else if (target == TargetProfile.WIRELESS_SETTINGS || target == TargetProfile.UMS) {
+        } else if (target == TargetProfile.WIRELESS_SETTINGS || target == TargetProfile.UMS
+                || target == TargetProfile.MY_DEVICES) {
             return null;
         } else {
             getter = staticMethod(target("com.huawei.hwcommonmodel.application.BaseApplication"),

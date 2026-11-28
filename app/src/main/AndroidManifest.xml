@@ -15,6 +15,7 @@
         <package android:name="com.huawei.health" />
         <package android:name="com.oplus.wirelesssettings" />
         <package android:name="com.oplus.pantanal.ums" />
+        <package android:name="com.heytap.mydevices" />
         <package android:name="com.tencent.mobileqq" />
     </queries>
 

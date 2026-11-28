@@ -41,6 +41,8 @@ public final class HealthHostControl {
             ENABLE_SLEEP_AUTO_DND = "ENABLE_SLEEP_AUTO_DND", DISABLE_SLEEP_AUTO_DND = "DISABLE_SLEEP_AUTO_DND",
             ENABLE_WAKE_EXIT_DND = "ENABLE_WAKE_EXIT_DND", DISABLE_WAKE_EXIT_DND = "DISABLE_WAKE_EXIT_DND",
             ENABLE_SLEEP_PAUSE_MEDIA = "ENABLE_SLEEP_PAUSE_MEDIA", DISABLE_SLEEP_PAUSE_MEDIA = "DISABLE_SLEEP_PAUSE_MEDIA",
+            ENABLE_MYDEVICES_CARD = "ENABLE_MYDEVICES_CARD", DISABLE_MYDEVICES_CARD = "DISABLE_MYDEVICES_CARD",
+            SET_MYDEVICES_TAP_HEALTH = "SET_MYDEVICES_TAP_HEALTH", SET_MYDEVICES_TAP_WATCHLINK = "SET_MYDEVICES_TAP_WATCHLINK",
             TEST_LIVE_WINDOW = "TEST_LIVE_WINDOW", CANCEL_LIVE_WINDOW = "CANCEL_LIVE_WINDOW",
             ENABLE_RAW_DEBUG = "ENABLE_RAW_DEBUG", DISABLE_RAW_DEBUG = "DISABLE_RAW_DEBUG",
             TEST = "TEST", CANCEL_TEST = "CANCEL_TEST";
@@ -121,7 +123,42 @@ public final class HealthHostControl {
                         boolean notifySilentScreenOnEnabled, boolean notifySilentFocusEnabled,
                         boolean notifySilentGameEnabled, boolean sleepPauseMediaEnabled,
                         boolean watchConnected, String watchName, int watchBattery,
-                        boolean watchCharging, long watchBatteryAt) {
+                        boolean watchCharging, long watchBatteryAt,
+                        boolean myDevicesCardEnabled, String myDevicesTapTarget) {
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                     boolean rawCommandDebugEnabled,
+                     boolean gameFlashbackEnabled, int gameFlashbackLeadSec,
+                     boolean notifyMuteDndEnabled, boolean sleepAutoDndEnabled,
+                     String sleepWatchSupport, boolean sleepHookReady, boolean dndPolicyAccess,
+                     String sleepLastEvent, long sleepLastAt,
+                     long sleepLastFallAsleepAt, long sleepLastWakeUpAt,
+                     boolean wakeExitDndEnabled, boolean notifySilentPushEnabled,
+                     String silentPushWatchSupport,
+                     boolean notifySilentScreenOnEnabled, boolean notifySilentFocusEnabled,
+                     boolean notifySilentGameEnabled, boolean sleepPauseMediaEnabled,
+                     boolean watchConnected, String watchName, int watchBattery,
+                     boolean watchCharging, long watchBatteryAt) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, rawCommandDebugEnabled,
+                    gameFlashbackEnabled, gameFlashbackLeadSec,
+                    notifyMuteDndEnabled, sleepAutoDndEnabled, sleepWatchSupport, sleepHookReady,
+                    dndPolicyAccess, sleepLastEvent, sleepLastAt, sleepLastFallAsleepAt, sleepLastWakeUpAt,
+                    wakeExitDndEnabled, notifySilentPushEnabled, silentPushWatchSupport,
+                    notifySilentScreenOnEnabled, notifySilentFocusEnabled, notifySilentGameEnabled,
+                    sleepPauseMediaEnabled, watchConnected, watchName, watchBattery, watchCharging,
+                    watchBatteryAt, false, WatchLinkPrefs.TAP_TARGET_HEALTH);
+        }
         public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
                      boolean serviceWitness, boolean sdkObserver, String symbolSource,
                      String watchState, String lastDispatchMode, String lastActionSource,
@@ -392,6 +429,8 @@ public final class HealthHostControl {
             watchBattery = (reachable && watchBattery >= 0 && watchBattery <= 100) ? watchBattery : -1;
             watchCharging = reachable && watchConnected && watchCharging;
             watchBatteryAt = reachable ? Math.max(0L, watchBatteryAt) : 0L;
+            myDevicesCardEnabled = reachable && myDevicesCardEnabled;
+            myDevicesTapTarget = WatchLinkPrefs.normalizeTapTarget(myDevicesTapTarget);
         }
 
         private static String sanitizeWatchName(String raw) {
@@ -422,6 +461,8 @@ public final class HealthHostControl {
                 || ENABLE_SLEEP_AUTO_DND.equals(value) || DISABLE_SLEEP_AUTO_DND.equals(value)
                 || ENABLE_WAKE_EXIT_DND.equals(value) || DISABLE_WAKE_EXIT_DND.equals(value)
                 || ENABLE_SLEEP_PAUSE_MEDIA.equals(value) || DISABLE_SLEEP_PAUSE_MEDIA.equals(value)
+                || ENABLE_MYDEVICES_CARD.equals(value) || DISABLE_MYDEVICES_CARD.equals(value)
+                || SET_MYDEVICES_TAP_HEALTH.equals(value) || SET_MYDEVICES_TAP_WATCHLINK.equals(value)
                 || TEST_LIVE_WINDOW.equals(value) || CANCEL_LIVE_WINDOW.equals(value)
                 || ENABLE_RAW_DEBUG.equals(value) || DISABLE_RAW_DEBUG.equals(value)
                 || TEST.equals(value) || CANCEL_TEST.equals(value);
@@ -507,6 +548,8 @@ public final class HealthHostControl {
                             details.putInt("watchBattery", reply.watchBattery());
                             details.putBoolean("watchCharging", reply.watchCharging());
                             details.putLong("watchBatteryAt", reply.watchBatteryAt());
+                            details.putBoolean("myDevicesCardEnabled", reply.myDevicesCardEnabled());
+                            details.putString("myDevicesTapTarget", reply.myDevicesTapTarget());
                             pending.setResult(ACK, null, details);
                         } catch (RuntimeException e) {
                             ProbeLog.failure("HEALTH_HOST_CONTROL_FAILED", e);
@@ -603,7 +646,9 @@ public final class HealthHostControl {
                                         data.getString("watchName", ""),
                                         data.getInt("watchBattery", -1),
                                         data.getBoolean("watchCharging", false),
-                                        data.getLong("watchBatteryAt", 0L)));
+                                        data.getLong("watchBatteryAt", 0L),
+                                        data.getBoolean("myDevicesCardEnabled", false),
+                                        data.getString("myDevicesTapTarget", WatchLinkPrefs.TAP_TARGET_HEALTH)));
                             } else callback.accept(unavailable());
                         }
                     }, main, 0, null, null);
