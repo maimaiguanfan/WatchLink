@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
                 onNotifySilentScreenOnEnable = ::setNotifySilentScreenOnEnabled,
                 onNotifySilentFocusEnable = ::setNotifySilentFocusEnabled,
                 onNotifySilentGameEnable = ::setNotifySilentGameEnabled,
+                onNotifyDisconnectStageEnable = ::setNotifyDisconnectStageEnabled,
                 onSleepAutoDndEnable = ::setSleepAutoDndEnabled,
                 onWakeExitDndEnable = ::setWakeExitDndEnabled,
                 onSleepPauseMediaEnable = ::setSleepPauseMediaEnabled,
@@ -236,6 +237,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private suspend fun writeRemoteNotifyDisconnectStageEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteNotifyDisconnectStageEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
     private suspend fun writeRemoteSleepAutoDndEnabled(enabled: Boolean): Boolean =
         suspendCancellableCoroutine { continuation ->
             ModuleScope.writeRemoteSleepAutoDndEnabled(enabled) { ok ->
@@ -310,7 +318,7 @@ class MainActivity : ComponentActivity() {
         if (ui.saving || ui.calendarSaving || ui.wifiAutoSaving || ui.liveWindowSaving
             || ui.gameFlashbackSaving || ui.notifyMuteDndSaving || ui.notifySilentPushSaving
             || ui.notifySilentScreenOnSaving || ui.notifySilentFocusSaving || ui.notifySilentGameSaving
-            || ui.sleepAutoDndSaving || ui.wakeExitDndSaving || ui.sleepPauseMediaSaving
+            || ui.notifyDisconnectStageSaving || ui.sleepAutoDndSaving || ui.wakeExitDndSaving || ui.sleepPauseMediaSaving
             || ui.sleepStopVideoSaving || ui.myDevicesCardSaving || ui.rawCommandDebugSaving) return
         val revision = ++switchRevision
         val (clockReply, calendarReply, healthReply) = coroutineScope {
@@ -592,6 +600,27 @@ class MainActivity : ComponentActivity() {
                 healthHost = healthReply,
                 notifySilentGameSaving = false,
                 message = if (!saved) "未能保存游戏前台静默推送开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setNotifyDisconnectStageEnabled(enable: Boolean) {
+        if (ui.notifyDisconnectStageSaving) return
+        ++switchRevision
+        ui = ui.copy(notifyDisconnectStageSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteNotifyDisconnectStageEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_NOTIFY_DISCONNECT_STAGE
+            else HealthHostControl.DISABLE_NOTIFY_DISCONNECT_STAGE
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.notifyDisconnectStageEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                notifyDisconnectStageSaving = false,
+                message = if (!saved) "未能保存短时断连通知暂存开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
             )
             readChecks()
         }

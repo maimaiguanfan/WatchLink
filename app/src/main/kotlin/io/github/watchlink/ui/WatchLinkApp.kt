@@ -81,6 +81,7 @@ internal data class WatchLinkUiState(
     val notifySilentScreenOnSaving: Boolean = false,
     val notifySilentFocusSaving: Boolean = false,
     val notifySilentGameSaving: Boolean = false,
+    val notifyDisconnectStageSaving: Boolean = false,
     val sleepAutoDndSaving: Boolean = false,
     val wakeExitDndSaving: Boolean = false,
     val sleepPauseMediaSaving: Boolean = false,
@@ -191,6 +192,15 @@ internal data class WatchLinkUiState(
         get() = !notifySilentGameSaving && (scope?.remotePrefsSupported() == true
                 || healthHost?.reachable() == true)
 
+    val effectiveNotifyDisconnectStageEnabled: Boolean
+        get() = scope?.remoteNotifyDisconnectStageEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.notifyDisconnectStageEnabled()
+            ?: false
+
+    val canToggleNotifyDisconnectStage: Boolean
+        get() = !notifyDisconnectStageSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
     val effectiveSleepAutoDndEnabled: Boolean
         get() = scope?.remoteSleepAutoDndEnabled()
             ?: healthHost?.takeIf { it.reachable() }?.sleepAutoDndEnabled()
@@ -276,6 +286,7 @@ internal data class WatchLinkUiState(
             effectiveNotifySilentScreenOnEnabled,
             effectiveNotifySilentFocusEnabled,
             effectiveNotifySilentGameEnabled,
+            effectiveNotifyDisconnectStageEnabled,
             effectiveSleepAutoDndEnabled,
             effectiveWakeExitDndEnabled,
             effectiveSleepPauseMediaEnabled,
@@ -311,6 +322,7 @@ internal fun WatchLinkApp(
     onNotifySilentScreenOnEnable: (Boolean) -> Unit,
     onNotifySilentFocusEnable: (Boolean) -> Unit,
     onNotifySilentGameEnable: (Boolean) -> Unit,
+    onNotifyDisconnectStageEnable: (Boolean) -> Unit,
     onSleepAutoDndEnable: (Boolean) -> Unit,
     onWakeExitDndEnable: (Boolean) -> Unit,
     onSleepPauseMediaEnable: (Boolean) -> Unit,
@@ -407,6 +419,7 @@ internal fun WatchLinkApp(
                             onNotifySilentScreenOnEnable = onNotifySilentScreenOnEnable,
                             onNotifySilentFocusEnable = onNotifySilentFocusEnable,
                             onNotifySilentGameEnable = onNotifySilentGameEnable,
+                            onNotifyDisconnectStageEnable = onNotifyDisconnectStageEnable,
                             onSleepAutoDndEnable = onSleepAutoDndEnable,
                             onWakeExitDndEnable = onWakeExitDndEnable,
                             onSleepPauseMediaEnable = onSleepPauseMediaEnable,
@@ -463,7 +476,7 @@ private fun LazyListScope.homePage(state: WatchLinkUiState, onRefresh: () -> Uni
             HorizontalDivider()
             Menu(Page.LIVE.title, "流体云、实况通知与游戏闪回") { openPage(Page.LIVE) }
             HorizontalDivider()
-            Menu(Page.NOTIFICATIONS.title, "手表静默推送与入睡联动控制") { openPage(Page.NOTIFICATIONS) }
+            Menu(Page.NOTIFICATIONS.title, "静默推送、断连暂存与入睡联动") { openPage(Page.NOTIFICATIONS) }
             HorizontalDivider()
             Menu(Page.MY_DEVICES.title, "在系统设备空间显示手表状态与电量") { openPage(Page.MY_DEVICES) }
             HorizontalDivider()
@@ -777,6 +790,7 @@ private fun LazyListScope.notificationsPage(
     onNotifySilentScreenOnEnable: (Boolean) -> Unit,
     onNotifySilentFocusEnable: (Boolean) -> Unit,
     onNotifySilentGameEnable: (Boolean) -> Unit,
+    onNotifyDisconnectStageEnable: (Boolean) -> Unit,
     onSleepAutoDndEnable: (Boolean) -> Unit,
     onWakeExitDndEnable: (Boolean) -> Unit,
     onSleepPauseMediaEnable: (Boolean) -> Unit,
@@ -790,6 +804,7 @@ private fun LazyListScope.notificationsPage(
     val silentScreenOnEnabled = state.effectiveNotifySilentScreenOnEnabled
     val silentFocusEnabled = state.effectiveNotifySilentFocusEnabled
     val silentGameEnabled = state.effectiveNotifySilentGameEnabled
+    val disconnectStageEnabled = state.effectiveNotifyDisconnectStageEnabled
     val sleepDndEnabled = state.effectiveSleepAutoDndEnabled
     val wakeDndEnabled = state.effectiveWakeExitDndEnabled
     val sleepPauseMediaEnabled = state.effectiveSleepPauseMediaEnabled
@@ -826,6 +841,11 @@ private fun LazyListScope.notificationsPage(
         state.notifySilentGameSaving -> "正在保存…"
         !state.canToggleNotifySilentGame -> "请先启用模块或打开运动健康"
         else -> "游戏在前台运行时普通通知静默，游戏闪回不受影响"
+    }
+    val disconnectStageSummary = when {
+        state.notifyDisconnectStageSaving -> "正在保存…"
+        !state.canToggleNotifyDisconnectStage -> "请先启用模块或打开运动健康"
+        else -> "断连 1 分钟内最多暂存 5 条通知，重连后仅 1 条震动提醒，其余静默补发"
     }
     val sleepDndSummary = when {
         state.sleepAutoDndSaving -> "正在保存…"
@@ -891,6 +911,19 @@ private fun LazyListScope.notificationsPage(
                 silentGameEnabled,
                 state.canToggleNotifySilentGame,
                 onNotifySilentGameEnable,
+            )
+        }
+    }
+
+    item("notify-disconnect-title") { SectionTitle("断连补发") }
+    item("notify-disconnect-card") {
+        Card(Modifier.fillMaxWidth()) {
+            SwitchRow(
+                "短时断连通知暂存",
+                disconnectStageSummary,
+                disconnectStageEnabled,
+                state.canToggleNotifyDisconnectStage,
+                onNotifyDisconnectStageEnable,
             )
         }
     }
@@ -1644,6 +1677,7 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
                 title = "通知与入睡（基础作用域）",
                 summary = "仅需勾选「华为运动健康」，无需新增作用域。\n" +
                     "「手表静默推送」基于华为 5.2.1 静默标记，提供免打扰、手机静默通知、亮屏解锁、禅定与专注、游戏前台五项独立开关，开启后通知仅静默送达手表而不震动（不拦截来电与强提醒，游戏闪回也会穿透游戏前台静默）。\n" +
+                    "「短时断连通知暂存」在手表短暂断连时于内存中暂存 1 分钟内最多 5 条普通通知（同条更新自动去重，手机端已读清除同步移除）；重连后按时间顺序补发，其中仅最新 1 条震动提醒，其余全部以静默方式补发，避免连续震动打扰。\n" +
                     "「入睡联动」提供入睡开启免打扰、醒来退出免打扰、入睡暂停媒体播放、入睡停止短视频与直播（返回桌面并自动息屏，支持自定义应用包名）四项独立开关。"
             )
             HorizontalDivider()

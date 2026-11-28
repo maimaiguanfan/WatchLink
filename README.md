@@ -1,63 +1,77 @@
 # WatchLink
 
-一个面向 **一加 / OPPO（ColorOS）系统时钟 & 日历强提醒 ↔ 华为手表** 的纯 LSPosed 实时闹钟协同模块。
+一个面向 **欧加手机（一加 / OPPO / realme ColorOS）↔ 华为手表** 的**轻量化、零后台**纯 LSPosed 联动模块，专注在非华为手机上补全部分华为手表与 ColorOS 之间的品牌专属协同体验。
 
-当手机系统闹钟或 ColorOS 日历「强提醒」闹钟真实响铃时，WatchLink 会通过华为运动健康向已连接的华为手表发送原生闹钟协同提醒，支持**手表端停止 / 延后反控手机**、**手机端停止 / 延后自动关闭手表提醒**，以及按手机时钟/日历日程复响。
+## 核心理念
 
-## 特性亮点
+- **轻量化、纯 LSPosed**：无需 Magisk 模块、无需转换为系统特权应用、无需勾选 `com.android.systemui`，也不依赖 OPPO 健康（`com.heytap.health`）。
+- **跨重启零后台进程**：所有开关默认关闭，配置通过 LSPosed `RemotePreferences` 持久化在框架侧（不支持时自动回退宿主本地存储）。设置完成后即可关闭 WatchLink，整机重启后全程无需再拉起模块自身进程，由已勾选宿主直接点对点协同。
+- **按功能精准桥接，不做全局机型伪装**：不全局修改运动健康的华为机型判断，避免触发无关私有接口导致异常或功能退化。
+- **LSPosed API 102 与防升级适配**：
+  - 全部 Hook 绑定命名 ID，支持受控热重载（响铃或测试期间自动延后保护）与模块内一键热重载旧版本宿主；
+  - 内置基于 `dexlib2` 的动态符号解析与 APK 指纹缓存，宿主升级变更混淆类名时自动重扫适配，契约不匹配时安全降级。
+- **隐私友好**：无网络权限，不记录、不持久化个人闹钟/日程内容、通知正文、Wi-Fi 明文密码或设备 MAC，诊断日志仅包含白名单结构化状态事件。
 
-- **纯 LSPosed 模块，免 Magisk / 免特权应用**：无需转换系统应用、无需写入权限 XML、无需勾选 `com.android.systemui`，核心仅需勾选**系统时钟**与**华为运动健康**（如需同步日历强提醒，可选额外勾选**系统日历**）。
-- **跨重启零后台进程**：开关配置通过 LSPosed `RemotePreferences` 持久化在框架侧（不支持时自动回退至宿主本地存储）。首次开启后即可退出 WatchLink，整机重启后全程无需再启动模块自身进程。
-- **ColorOS 日历「强提醒」闹钟同步（可选）**：自动同步 ColorOS 日历强提醒至华为手表原生闹钟界面，完整支持表端一键关闭与延后 5 分钟稍后提醒，按锁屏页 / 顶栏浮窗 / 流体云 / 监听回退链路安全反控。
-- **运动健康进程内原生下发**：手机起铃时，一加时钟与日历通过 OS UID 与签名校验后的点对点广播直连华为运动健康 `:PhoneService`，由健康进程以自身身份调用 `ExternalPhoneService` 发起原生协同提醒（并在后台受限时自动回退至进程内 `HwDeviceMgrInterface.sendDeviceData`）。
-- **LSPosed API 102 支持（兼容 API 101）**：
-  - 全部 Hook 使用 API 102 命名 Hook ID（`HookBuilder.setId`）。
-  - 实现受控热重载（`onHotReloading` / `onHotReloaded`）：响铃或测试进行中自动延后保护，空闲时完整卸载广播接收器、工作线程与 Hook 句柄后再无缝重载。
-  - 集成 `XposedService.getRunningTargets()` 与 `hotReloadModule()`，模块更新后可在应用内一键热重载旧版本宿主，无需重启手机。
-- **防升级失效动态适配**：
-  - 内置基于 `dexlib2` 的结构化符号解析器（`ClockSymbolResolver` / `CalendarSymbolResolver` / `HealthSymbolResolver`）与按 APK 路径/大小/修改时间建立的指纹缓存（`ApkSymbolCache`）。
-  - 同一版本启动零 DEX 扫描；时钟、日历或运动健康更新导致混淆类名变化时自动重扫适配。若反控字节码发生变化，仅保护性关闭表端反控，手机→手表响铃同步仍保持可用；运动健康主下发与表端按键回程通道本身不依赖混淆类。
-- **隐私友好**：无网络权限、不持久化或记录个人闹钟/日程标签与设备 MAC，诊断日志仅导出严格白名单内的结构化状态事件。
+## 主要功能
 
-## 运行要求
+### 1. 提醒同步（闹钟 / 倒计时 / 日历强提醒）
+- **手机闹钟双向协同**：ColorOS 系统时钟真实响铃时，通过华为运动健康原生强提醒协议下发手表，支持**手表端停止 / 延后反控手机**，手机端先停也会同步关闭手表弹窗。
+- **倒计时同步**：支持手表实况窗实时显示进度与预计结束时间、到期时原生强提醒并支持双端停止，可选将表端「延后」键映射为按原时长「再次计时」。
+- **日历强提醒同步（可选）**：同步 ColorOS 系统日历中开启「强提醒」的日程与待办，支持表端一键停止或延后 5 分钟。
+
+### 2. 实况窗与游戏闪回
+- **流体云 & Android 实况通知同步**：将取餐码、外卖配送、打车行程、航班/高铁出行、快递物流（含驿站取件码）、电影票与排号进度映射至支持实况窗的华为手表，自动适配 10 格弦月窗宽度，进度更新保持静默。
+- **独立游戏闪回开关**：支持游戏复活与起飞倒计时同步，可自定义**提前 0–300 秒震动提醒**（若大于当前剩余时间则立即提醒一次），并在游戏前台静默期间自动穿透放行。
+
+### 3. 通知与入睡
+- **手表静默推送（5 项独立开关）**：基于华为 `5.2.1` 静默标记，支持在**手机免打扰**、**手机静默/无震动通知**、**亮屏解锁使用中**、**禅定空间（含轻禅定）/ 专注模式**、**游戏前台运行**时将通知静默送达手表通知栏而不震动（不拦截来电、闹钟与强提醒）。
+- **短时断连通知暂存**：手表短暂断连时于内存中暂存 **1 分钟内最多 5 条**普通通知（同条更新自动去重，手机端已读清除同步移除）；重连后按时间顺序补发，其中**仅最新 1 条震动提醒，其余全部静默补发**，避免重连时连续震动打扰。
+- **入睡联动（4 项独立开关）**：联动手表实时入睡/醒来监测，支持**入睡自动开启手机免打扰**、**醒来自动退出免打扰**、**入睡暂停媒体播放**，以及**入睡自动停止短视频与直播**（支持内置常见平台与自定义包名，停止后返回桌面并自动息屏）。
+
+### 4. 系统状态集成
+- **快捷设置磁贴**：在系统控制中心添加「WatchLink 手表状态」磁贴，直接显示手表电量与充电状态；单击按需刷新，长按打开 WatchLink，不常驻后台。
+- **ColorOS 设备空间卡片（可选）**：零后台将华为手表同步至 ColorOS「我的设备 / 设备空间」，展示手表高清同配色图片、连接状态与实时电量，支持自定义点击卡片打开华为运动健康或 WatchLink。
+
+### 5. Wi-Fi 同步
+- **新网络自动同步（可选）**：免 Root、免定位权限，手机连入新 Wi-Fi 时自动下发手表。
+- **批量同步**：按需通过临时 Root 在内存中读取手机已保存网络并批量推送手表，不展示也不保存明文密码，退出页面即清空。
+
+## 运行要求与作用域
 
 - Android 14（API 34）及以上
-- 一加 / OPPO 官方签名 ColorOS 系统时钟（`com.coloros.alarmclock`），可选 ColorOS 系统日历（`com.coloros.calendar`）
-- 官方签名华为运动健康（`com.huawei.health`）及支持原生协同闹钟的华为手表
+- 欧加 ColorOS 手机 + 官方签名华为运动健康（`com.huawei.health`）+ 华为手表
 - 支持 Modern Xposed API 101 / 102 的 LSPosed 框架
 
-> 已验证基线：ColorOS 时钟 `17.6.100`、ColorOS 日历 `17.6.30`、华为运动健康 `17.0.10.330`、HUAWEI WATCH 6 Pro。
+> 当前实测基线：OnePlus PLK110（Android 17 / ColorOS 17）、HUAWEI WATCH 6 Pro（HarmonyOS `7.0.0.111`）、时钟 `17.6.100`、日历 `17.6.30`、运动健康 `17.0.10.330`、智慧服务 `17.22.8`、设备空间 `17.25.15`、无线设置 `17.6.5`。
+
+| 宿主应用 | 包名 | 必要性 | 对应功能 |
+| --- | --- | --- | --- |
+| 系统时钟 | `com.coloros.alarmclock` | **基础必选** | 手机闹钟、倒计时双向同步 |
+| 华为运动健康 | `com.huawei.health` | **基础必选** | 全部表端通信、通知静默、断连暂存、入睡联动、电量磁贴 |
+| 系统日历 | `com.coloros.calendar` | 按需可选 | 日程与待办强提醒同步 |
+| 智慧服务 | `com.oplus.pantanal.ums` | 按需可选 | ColorOS 流体云与游戏闪回同步 |
+| 设备空间 / 我的设备 | `com.heytap.mydevices` | 按需可选 | ColorOS 设备空间原生手表卡片 |
+| 无线设置 | `com.oplus.wirelesssettings` | 按需可选 | 新连 Wi-Fi 免 Root 自动同步 |
 
 ## 快速开始
 
 1. 安装 WatchLink（包名 `io.github.maimaiguanfan.watchlink`）。
-2. 在 LSPosed 管理器中启用 WatchLink，勾选：
-   - **时钟**（`com.coloros.alarmclock`）
-   - **华为运动健康**（`com.huawei.health`）
-   - **日历**（`com.coloros.calendar`，可选，用于同步日历强提醒闹钟）
-   - **智慧服务**（`com.oplus.pantanal.ums`，可选，用于同步流体云订单与行程）
-   - **无线设置**（`com.oplus.wirelesssettings`，可选，用于自动同步 Wi-Fi）
-3. 重启一次已勾选宿主。更新模块后，支持 API 102 的框架也可从「测试与诊断」热重载宿主。
-4. 打开 WatchLink：
-   - 确认顶部状态卡显示就绪，可先在「测试与诊断 → 立即发送测试提醒」验证手表弹窗与停止/延后按键回传；
-   - 首页显示灰色「待刷新」时，可点击状态卡重新查询。
-   - 在「闹钟与日历」中开启手机闹钟或日历强提醒，之后即可关闭 WatchLink。
-   - 在「闹钟与日历 → 倒计时同步」开启后，手表实况窗会展示预计结束时间、进度和暂停状态。手机时钟到期响铃时，手表收到强提醒，可在任一端停止本轮响铃。可单独关闭运行中卡片，或开启「手表延后键映射为再次计时」。倒计时仅使用时钟和运动健康两个作用域。
-   - 「实况通知」可将流体云和 Android 实况通知中的取餐码、打车行程、配送与排号进度同步到手表。手机模式切换和助手收藏会被过滤。
+2. 在 LSPosed 管理器中启用模块，勾选基础作用域「**系统时钟**」与「**华为运动健康**」，并按需勾选上述可选作用域（也可在 WatchLink 内一键申请）。
+3. 重启一次已勾选宿主；后续模块升级可在「测试与诊断」中直接一键热重载（需 API 102 框架）。
+4. 打开 WatchLink，进入「功能设置」按需开启所需功能，完成后直接关闭 WatchLink 即可。
 
 ## 工作原理简述
 
 ```text
-一加时钟 (com.coloros.alarmclock) / 一加日历 (com.coloros.calendar，可选)
-  │ 1. Hook 时钟 AlarmKlaxon/AlarmService 或日历强提醒弹窗生命周期捕获真实起铃与结束
-  │ 2. 通过 OS UID + 证书校验的 DailyAlarmWire 发送 OPEN / END
-  ▼
-华为运动健康 (com.huawei.health:PhoneService)
-  │ 3. 进程内读取 RemotePreferences 开关，以自身 UID 调用 ExternalPhoneService
-  │    （受限时自动回退 HwDeviceMgrInterface.sendDeviceData）
-  │ 4. 监听 ExternalPhoneService (alarm_clock_msg_from_device) + 可选 SDK 双通道回程
-  ▼
-华为手表 ◄── 原生闹钟协同提醒 / 停止 / 延后 ──► 回传对应宿主执行经字节码核验的原生动作
+ColorOS 宿主（时钟 / 日历 / 智慧服务 / 无线设置 / 设备空间）
+   ▲                                          │
+   │ 签名校验点对点广播（零 WatchLink 后台进程）│
+   │                                          ▼
+华为运动健康（:DaemonService / :PhoneService）
+   │ 读取 LSPosed RemotePreferences 开关
+   │ 进程内直调原生协议（8/9 强提醒 · 5.55.2 实况窗 · 5.2.1 静默通知 · 1/8 电量 · Wi-Fi 同步）
+   ▼
+华为手表 ◄── 双向实时联动（停止/延后 · 睡眠状态 · 实时电量）
 ```
 
 ## 本地构建与测试
@@ -75,8 +89,22 @@
 ./gradlew assembleRelease :app:lintRelease
 ```
 
-## 开源组件致谢
+## 鸣谢
+
+排名不分先后，感谢以下项目与社区开发者提供的技术参考、工具支持与灵感：
+
+- **Skill**：[hujiayucc/LSPosed-Mod-Dev.skill](https://github.com/hujiayucc/LSPosed-Mod-Dev.skill)
+- **酷安** [@虫纸先生爱吃菜](https://www.coolapk.com/u/2513938)
+- **酷安** [@Myfyfy](https://www.coolapk.com/u/501644)
+
+### 开源组件
 
 - [libxposed/api](https://github.com/libxposed/api) & [libxposed/service](https://github.com/libxposed/service)（Modern Xposed API 102）
 - [compose-miuix-ui/miuix](https://github.com/compose-miuix-ui/miuix)（Apache-2.0）
-- [smali-dexlib2](https://github.com/google/smali)
+- [smali-dexlib2](https://github.com/google/smali)（BSD-3-Clause）
+
+## 开源协议
+
+本项目基于 [GNU General Public License v3.0 (GPL-3.0)](LICENSE) 协议开源。
+
+你可以自由地使用、修改和分发本项目代码，但任何基于本项目修改并分发的衍生版本均须同样遵循 GPL-3.0 协议并公开对应源代码。本项目按「现状（AS IS）」提供，不附带任何明示或暗示的担保。

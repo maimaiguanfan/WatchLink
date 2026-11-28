@@ -32,6 +32,12 @@ public final class DiagnosticEventsTest {
                 DiagnosticEvents.event("HEALTH_LIVE_DISPATCH source=UMS live_op=CREATE live_event=PICK_UP mode=START_SERVICE code=A739"));
         assertEquals("UMS_SYMBOLS_RESOLVED source=UMS resolver=DEX_SCAN",
                 DiagnosticEvents.event("UMS_SYMBOLS_RESOLVED source=UMS resolver=DEX_SCAN title=Cotti"));
+        assertEquals("HEALTH_NOTIFY_DISCONNECT_STAGED source=HEALTH",
+                DiagnosticEvents.event("HEALTH_NOTIFY_DISCONNECT_STAGED source=HEALTH text=secret"));
+        assertEquals("HEALTH_NOTIFY_DISCONNECT_FLUSHED source=HEALTH",
+                DiagnosticEvents.event("HEALTH_NOTIFY_DISCONNECT_FLUSHED source=HEALTH pkg=com.tencent.mm"));
+        assertEquals("HEALTH_NOTIFY_SILENT_PUSH source=HEALTH silent_reason=DISCONNECT_STAGED",
+                DiagnosticEvents.event("HEALTH_NOTIFY_SILENT_PUSH source=HEALTH silent_reason=DISCONNECT_STAGED title=x"));
         assertNull(DiagnosticEvents.event("UNKNOWN_EVENT private=anything"));
         assertNull(DiagnosticEvents.event("DAILY_HEALTH_OUTBOUND\nDAILY_HEALTH_DISMISS"));
     }

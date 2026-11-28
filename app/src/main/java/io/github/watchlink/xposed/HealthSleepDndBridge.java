@@ -46,6 +46,7 @@ final class HealthSleepDndBridge {
     static final String EXTRA_FILTER = "filter";
     static final String EXTRA_WATCHLINK_SILENT_PUSH = "watchlink_silent_push";
     static final String EXTRA_WATCHLINK_SILENT_REASON = "watchlink_silent_reason";
+    static final String EXTRA_WATCHLINK_FORCE_SILENT_STAGED = "watchlink_force_silent_staged";
     private static final String EXTRA_REMINDER_STATUS = "data_extra_reminder_status";
     private static final int TLV_TAG_REMINDER = 0x13;
     private static final String TLV_SILENT_REMINDER_HEX = "13020000";
@@ -220,6 +221,15 @@ final class HealthSleepDndBridge {
         if (!installed || !(rawTag instanceof Integer tag) || tag != TLV_TAG_REMINDER
                 || !(rawBundle instanceof Bundle bundle)) {
             return null;
+        }
+        if (bundle.getBoolean(EXTRA_WATCHLINK_FORCE_SILENT_STAGED, false)) {
+            long now = SystemClock.elapsedRealtime();
+            if (now - lastSilentLogElapsedMs >= SILENT_LOG_INTERVAL_MS) {
+                lastSilentLogElapsedMs = now;
+                ProbeLog.info("HEALTH_NOTIFY_SILENT_PUSH source=HEALTH silent_reason="
+                        + NotificationDndPolicy.REASON_DISCONNECT_STAGED);
+            }
+            return TLV_SILENT_REMINDER_HEX;
         }
         boolean silentOnDnd = settings.isNotifyMuteDndEnabled();
         boolean silentOnFocus = settings.isNotifySilentFocusEnabled();

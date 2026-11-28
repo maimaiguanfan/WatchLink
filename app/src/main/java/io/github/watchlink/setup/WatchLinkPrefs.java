@@ -22,6 +22,7 @@ public final class WatchLinkPrefs {
     public static final String KEY_NOTIFY_SILENT_SCREEN_ON_ENABLED = "notify_silent_screen_on_enabled";
     public static final String KEY_NOTIFY_SILENT_FOCUS_ENABLED = "notify_silent_focus_enabled";
     public static final String KEY_NOTIFY_SILENT_GAME_ENABLED = "notify_silent_game_enabled";
+    public static final String KEY_NOTIFY_DISCONNECT_STAGE_ENABLED = "notify_disconnect_stage_enabled";
     public static final String KEY_SLEEP_AUTO_DND_ENABLED = "sleep_auto_dnd_enabled";
     public static final String KEY_WAKE_EXIT_DND_ENABLED = "wake_exit_dnd_enabled";
     public static final String KEY_SLEEP_PAUSE_MEDIA_ENABLED = "sleep_pause_media_enabled";

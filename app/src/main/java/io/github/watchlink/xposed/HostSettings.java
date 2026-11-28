@@ -27,6 +27,7 @@ final class HostSettings {
     private volatile Consumer<Boolean> notifySilentScreenOnChangedCallback;
     private volatile Consumer<Boolean> notifySilentFocusChangedCallback;
     private volatile Consumer<Boolean> notifySilentGameChangedCallback;
+    private volatile Consumer<Boolean> notifyDisconnectStageChangedCallback;
     private volatile Consumer<Boolean> sleepAutoDndChangedCallback;
     private volatile Consumer<Boolean> wakeExitDndChangedCallback;
     private volatile Consumer<Boolean> sleepPauseMediaChangedCallback;
@@ -99,6 +100,11 @@ final class HostSettings {
                     Consumer<Boolean> callback = notifySilentGameChangedCallback;
                     if (callback != null) {
                         callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = notifyDisconnectStageChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED, false));
                     }
                 } else if (WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED.equals(key)) {
                     Consumer<Boolean> callback = sleepAutoDndChangedCallback;
@@ -235,6 +241,10 @@ final class HostSettings {
         return readBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED);
     }
 
+    boolean isNotifyDisconnectStageEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED);
+    }
+
     boolean isSleepAutoDndEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED);
     }
@@ -356,6 +366,10 @@ final class HostSettings {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED, enabled).commit();
     }
 
+    boolean setLocalNotifyDisconnectStageFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED, enabled).commit();
+    }
+
     boolean setLocalSleepAutoDndFallback(boolean enabled) {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, enabled).commit();
     }
@@ -435,6 +449,10 @@ final class HostSettings {
         notifySilentGameChangedCallback = callback;
     }
 
+    void onNotifyDisconnectStageChanged(Consumer<Boolean> callback) {
+        notifyDisconnectStageChangedCallback = callback;
+    }
+
     void onSleepAutoDndChanged(Consumer<Boolean> callback) {
         sleepAutoDndChangedCallback = callback;
     }
@@ -480,6 +498,7 @@ final class HostSettings {
         notifySilentScreenOnChangedCallback = null;
         notifySilentFocusChangedCallback = null;
         notifySilentGameChangedCallback = null;
+        notifyDisconnectStageChangedCallback = null;
         sleepAutoDndChangedCallback = null;
         wakeExitDndChangedCallback = null;
         sleepPauseMediaChangedCallback = null;

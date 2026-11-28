@@ -285,4 +285,25 @@ public class HostSettingsTest {
         assertFalse(sleepDnd.get());
         assertFalse(wakeDnd.get());
     }
+
+    @Test public void notifyDisconnectStageToggleDefaultsFalseAndNotifiesChanges() {
+        var remote = new MemoryPrefs();
+        var local = new MemoryPrefs();
+        var settings = new HostSettings(remote, local);
+
+        assertFalse(settings.isNotifyDisconnectStageEnabled());
+        var staged = new java.util.concurrent.atomic.AtomicBoolean();
+        settings.onNotifyDisconnectStageChanged(v -> staged.set(Boolean.TRUE.equals(v)));
+
+        assertTrue(settings.setLocalNotifyDisconnectStageFallback(true));
+        assertTrue(settings.isNotifyDisconnectStageEnabled());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED, true).commit();
+        assertTrue(settings.isNotifyDisconnectStageEnabled());
+        assertTrue(staged.get());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED, false).commit();
+        assertFalse(settings.isNotifyDisconnectStageEnabled());
+        assertFalse(staged.get());
+    }
 }

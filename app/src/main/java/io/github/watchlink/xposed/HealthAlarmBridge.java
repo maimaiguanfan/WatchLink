@@ -56,6 +56,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     private HealthLiveWindowBridge liveBridge;
     private HealthRawCommandBridge rawCommandBridge;
     private HealthSleepDndBridge sleepDndBridge;
+    private HealthDisconnectNotificationBridge disconnectNotifyBridge;
     private HealthWatchStatusCollector watchStatusCollector;
     private HealthWatchImageResolver watchImageResolver;
     private volatile String lastSentIconHash = "";
@@ -152,9 +153,20 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         sleepDnd.install(installer, symbols);
         sleepDndBridge = sleepDnd;
 
+        HealthDisconnectNotificationBridge disconnectNotify =
+                new HealthDisconnectNotificationBridge(app, settings, worker, readiness);
+        disconnectNotify.install(installer, symbols);
+        disconnectNotifyBridge = disconnectNotify;
+
         watchImageResolver = new HealthWatchImageResolver(app);
         HealthWatchStatusCollector watchStatus = new HealthWatchStatusCollector(app, worker, readiness, sender);
-        watchStatus.setChangeListener(snap -> pushWatchStatusToMyDevices(snap, false));
+        watchStatus.setChangeListener(snap -> {
+            pushWatchStatusToMyDevices(snap, false);
+            HealthDisconnectNotificationBridge stage = disconnectNotifyBridge;
+            if (stage != null && snap != null) {
+                stage.onWatchConnectionObserved(snap.connected());
+            }
+        });
         watchStatus.install(installer, symbols);
         watchStatusCollector = watchStatus;
         registerMyDevicesPullReceiver();
@@ -348,6 +360,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         if (sleepDndBridge != null) {
             try { sleepDndBridge.close(); } catch (RuntimeException ignored) {}
             sleepDndBridge = null;
+        }
+        if (disconnectNotifyBridge != null) {
+            try { disconnectNotifyBridge.close(); } catch (RuntimeException ignored) {}
+            disconnectNotifyBridge = null;
         }
         if (rawCommandBridge != null) {
             try { rawCommandBridge.close(); } catch (RuntimeException ignored) {}
@@ -764,6 +780,14 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 settings.setLocalNotifySilentGameFallback(false);
                 if (liveBridge != null) liveBridge.onNotifySilentGameFallbackChanged(false);
             }
+            case HealthHostControl.ENABLE_NOTIFY_DISCONNECT_STAGE -> {
+                settings.setLocalNotifyDisconnectStageFallback(true);
+                if (disconnectNotifyBridge != null) disconnectNotifyBridge.onSettingsFallbackChanged(true);
+            }
+            case HealthHostControl.DISABLE_NOTIFY_DISCONNECT_STAGE -> {
+                settings.setLocalNotifyDisconnectStageFallback(false);
+                if (disconnectNotifyBridge != null) disconnectNotifyBridge.onSettingsFallbackChanged(false);
+            }
             case HealthHostControl.ENABLE_SLEEP_AUTO_DND -> settings.setLocalSleepAutoDndFallback(true);
             case HealthHostControl.DISABLE_SLEEP_AUTO_DND -> settings.setLocalSleepAutoDndFallback(false);
             case HealthHostControl.ENABLE_WAKE_EXIT_DND -> settings.setLocalWakeExitDndFallback(true);
@@ -884,7 +908,8 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 settings.myDevicesTapTarget(),
                 settings.isSleepStopVideoEnabled(),
                 settings.sleepStopVideoCustomPkgs(),
-                sleep.writeSettingsAccess());
+                sleep.writeSettingsAccess(),
+                settings.isNotifyDisconnectStageEnabled());
     }
 
     private void startManualTestLocked() {
