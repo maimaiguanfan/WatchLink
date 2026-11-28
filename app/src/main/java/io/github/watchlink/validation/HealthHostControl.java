@@ -35,8 +35,12 @@ public final class HealthHostControl {
             SET_GAME_FLASHBACK_LEAD_PREFIX = "SET_GAME_FLASHBACK_LEAD:",
             ENABLE_NOTIFY_MUTE_DND = "ENABLE_NOTIFY_MUTE_DND", DISABLE_NOTIFY_MUTE_DND = "DISABLE_NOTIFY_MUTE_DND",
             ENABLE_NOTIFY_SILENT_PUSH = "ENABLE_NOTIFY_SILENT_PUSH", DISABLE_NOTIFY_SILENT_PUSH = "DISABLE_NOTIFY_SILENT_PUSH",
+            ENABLE_NOTIFY_SILENT_SCREEN_ON = "ENABLE_NOTIFY_SILENT_SCREEN_ON", DISABLE_NOTIFY_SILENT_SCREEN_ON = "DISABLE_NOTIFY_SILENT_SCREEN_ON",
+            ENABLE_NOTIFY_SILENT_FOCUS = "ENABLE_NOTIFY_SILENT_FOCUS", DISABLE_NOTIFY_SILENT_FOCUS = "DISABLE_NOTIFY_SILENT_FOCUS",
+            ENABLE_NOTIFY_SILENT_GAME = "ENABLE_NOTIFY_SILENT_GAME", DISABLE_NOTIFY_SILENT_GAME = "DISABLE_NOTIFY_SILENT_GAME",
             ENABLE_SLEEP_AUTO_DND = "ENABLE_SLEEP_AUTO_DND", DISABLE_SLEEP_AUTO_DND = "DISABLE_SLEEP_AUTO_DND",
             ENABLE_WAKE_EXIT_DND = "ENABLE_WAKE_EXIT_DND", DISABLE_WAKE_EXIT_DND = "DISABLE_WAKE_EXIT_DND",
+            ENABLE_SLEEP_PAUSE_MEDIA = "ENABLE_SLEEP_PAUSE_MEDIA", DISABLE_SLEEP_PAUSE_MEDIA = "DISABLE_SLEEP_PAUSE_MEDIA",
             TEST_LIVE_WINDOW = "TEST_LIVE_WINDOW", CANCEL_LIVE_WINDOW = "CANCEL_LIVE_WINDOW",
             ENABLE_RAW_DEBUG = "ENABLE_RAW_DEBUG", DISABLE_RAW_DEBUG = "DISABLE_RAW_DEBUG",
             TEST = "TEST", CANCEL_TEST = "CANCEL_TEST";
@@ -94,7 +98,7 @@ public final class HealthHostControl {
     private static final Set<String> SILENT_PUSH_SUPPORTS = Set.of(
             "SUPPORTED_94", "UNSUPPORTED", "WATCH_DISCONNECTED", "UNKNOWN");
     private static final Set<String> SLEEP_EVENTS = Set.of(
-            "NONE", "FALL_ASLEEP_DND_ON", "FALL_ASLEEP_SKIP_ALREADY_DND",
+            "NONE", "FALL_ASLEEP_DND_ON", "FALL_ASLEEP_SKIP_ALREADY_DND", "FALL_ASLEEP_MEDIA_PAUSED",
             "WAKE_UP_DND_OFF", "WAKE_UP_SKIP_ALREADY_OFF", "WAKE_UP_SKIP_NOT_OWNED",
             "NO_POLICY_ACCESS", "FAILED");
 
@@ -113,7 +117,37 @@ public final class HealthHostControl {
                         String sleepLastEvent, long sleepLastAt,
                         long sleepLastFallAsleepAt, long sleepLastWakeUpAt,
                         boolean wakeExitDndEnabled, boolean notifySilentPushEnabled,
-                        String silentPushWatchSupport) {
+                        String silentPushWatchSupport,
+                        boolean notifySilentScreenOnEnabled, boolean notifySilentFocusEnabled,
+                        boolean notifySilentGameEnabled, boolean sleepPauseMediaEnabled) {
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                     boolean rawCommandDebugEnabled,
+                     boolean gameFlashbackEnabled, int gameFlashbackLeadSec,
+                     boolean notifyMuteDndEnabled, boolean sleepAutoDndEnabled,
+                     String sleepWatchSupport, boolean sleepHookReady, boolean dndPolicyAccess,
+                     String sleepLastEvent, long sleepLastAt,
+                     long sleepLastFallAsleepAt, long sleepLastWakeUpAt,
+                     boolean wakeExitDndEnabled, boolean notifySilentPushEnabled,
+                     String silentPushWatchSupport) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, rawCommandDebugEnabled,
+                    gameFlashbackEnabled, gameFlashbackLeadSec,
+                    notifyMuteDndEnabled, sleepAutoDndEnabled, sleepWatchSupport, sleepHookReady,
+                    dndPolicyAccess, sleepLastEvent, sleepLastAt, sleepLastFallAsleepAt, sleepLastWakeUpAt,
+                    wakeExitDndEnabled, notifySilentPushEnabled, silentPushWatchSupport,
+                    false, false, false, false);
+        }
         public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
                      boolean serviceWitness, boolean sdkObserver, String symbolSource,
                      String watchState, String lastDispatchMode, String lastActionSource,
@@ -316,6 +350,10 @@ public final class HealthHostControl {
             wakeExitDndEnabled = reachable && wakeExitDndEnabled;
             notifySilentPushEnabled = reachable && notifySilentPushEnabled;
             silentPushWatchSupport = pick(reachable, SILENT_PUSH_SUPPORTS, silentPushWatchSupport, "UNKNOWN");
+            notifySilentScreenOnEnabled = reachable && notifySilentScreenOnEnabled;
+            notifySilentFocusEnabled = reachable && notifySilentFocusEnabled;
+            notifySilentGameEnabled = reachable && notifySilentGameEnabled;
+            sleepPauseMediaEnabled = reachable && sleepPauseMediaEnabled;
         }
 
         private static String pick(boolean reachable, Set<String> allowed, String value, String fallback) {
@@ -335,8 +373,12 @@ public final class HealthHostControl {
                 || parseGameFlashbackLeadSecCommand(value) >= 0
                 || ENABLE_NOTIFY_MUTE_DND.equals(value) || DISABLE_NOTIFY_MUTE_DND.equals(value)
                 || ENABLE_NOTIFY_SILENT_PUSH.equals(value) || DISABLE_NOTIFY_SILENT_PUSH.equals(value)
+                || ENABLE_NOTIFY_SILENT_SCREEN_ON.equals(value) || DISABLE_NOTIFY_SILENT_SCREEN_ON.equals(value)
+                || ENABLE_NOTIFY_SILENT_FOCUS.equals(value) || DISABLE_NOTIFY_SILENT_FOCUS.equals(value)
+                || ENABLE_NOTIFY_SILENT_GAME.equals(value) || DISABLE_NOTIFY_SILENT_GAME.equals(value)
                 || ENABLE_SLEEP_AUTO_DND.equals(value) || DISABLE_SLEEP_AUTO_DND.equals(value)
                 || ENABLE_WAKE_EXIT_DND.equals(value) || DISABLE_WAKE_EXIT_DND.equals(value)
+                || ENABLE_SLEEP_PAUSE_MEDIA.equals(value) || DISABLE_SLEEP_PAUSE_MEDIA.equals(value)
                 || TEST_LIVE_WINDOW.equals(value) || CANCEL_LIVE_WINDOW.equals(value)
                 || ENABLE_RAW_DEBUG.equals(value) || DISABLE_RAW_DEBUG.equals(value)
                 || TEST.equals(value) || CANCEL_TEST.equals(value);
@@ -413,6 +455,10 @@ public final class HealthHostControl {
                             details.putBoolean("wakeExitDndEnabled", reply.wakeExitDndEnabled());
                             details.putBoolean("notifySilentPushEnabled", reply.notifySilentPushEnabled());
                             details.putString("silentPushWatchSupport", reply.silentPushWatchSupport());
+                            details.putBoolean("notifySilentScreenOnEnabled", reply.notifySilentScreenOnEnabled());
+                            details.putBoolean("notifySilentFocusEnabled", reply.notifySilentFocusEnabled());
+                            details.putBoolean("notifySilentGameEnabled", reply.notifySilentGameEnabled());
+                            details.putBoolean("sleepPauseMediaEnabled", reply.sleepPauseMediaEnabled());
                             pending.setResult(ACK, null, details);
                         } catch (RuntimeException e) {
                             ProbeLog.failure("HEALTH_HOST_CONTROL_FAILED", e);
@@ -500,7 +546,11 @@ public final class HealthHostControl {
                                         data.getLong("sleepLastWakeUpAt", 0L),
                                         data.getBoolean("wakeExitDndEnabled", false),
                                         data.getBoolean("notifySilentPushEnabled", false),
-                                        data.getString("silentPushWatchSupport")));
+                                        data.getString("silentPushWatchSupport"),
+                                        data.getBoolean("notifySilentScreenOnEnabled", false),
+                                        data.getBoolean("notifySilentFocusEnabled", false),
+                                        data.getBoolean("notifySilentGameEnabled", false),
+                                        data.getBoolean("sleepPauseMediaEnabled", false)));
                             } else callback.accept(unavailable());
                         }
                     }, main, 0, null, null);

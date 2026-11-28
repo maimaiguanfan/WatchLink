@@ -19,8 +19,12 @@ public final class WatchLinkPrefs {
     public static final String KEY_GAME_FLASHBACK_LEAD_SEC = "game_flashback_lead_sec";
     public static final String KEY_NOTIFY_MUTE_DND_ENABLED = "notify_mute_dnd_enabled";
     public static final String KEY_NOTIFY_SILENT_PUSH_ENABLED = "notify_silent_push_enabled";
+    public static final String KEY_NOTIFY_SILENT_SCREEN_ON_ENABLED = "notify_silent_screen_on_enabled";
+    public static final String KEY_NOTIFY_SILENT_FOCUS_ENABLED = "notify_silent_focus_enabled";
+    public static final String KEY_NOTIFY_SILENT_GAME_ENABLED = "notify_silent_game_enabled";
     public static final String KEY_SLEEP_AUTO_DND_ENABLED = "sleep_auto_dnd_enabled";
     public static final String KEY_WAKE_EXIT_DND_ENABLED = "wake_exit_dnd_enabled";
+    public static final String KEY_SLEEP_PAUSE_MEDIA_ENABLED = "sleep_pause_media_enabled";
     public static final String KEY_RAW_COMMAND_DEBUG = "raw_command_debug_enabled";
     public static final String KEY_UPDATED_AT = "updated_at";
 

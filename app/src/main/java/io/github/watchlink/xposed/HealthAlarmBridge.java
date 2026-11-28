@@ -643,10 +643,36 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 settings.setLocalNotifySilentPushFallback(false);
                 if (liveBridge != null) liveBridge.onNotifySilentPushFallbackChanged(false);
             }
+            case HealthHostControl.ENABLE_NOTIFY_SILENT_SCREEN_ON -> {
+                settings.setLocalNotifySilentScreenOnFallback(true);
+                if (liveBridge != null) liveBridge.onNotifySilentScreenOnFallbackChanged(true);
+            }
+            case HealthHostControl.DISABLE_NOTIFY_SILENT_SCREEN_ON -> {
+                settings.setLocalNotifySilentScreenOnFallback(false);
+                if (liveBridge != null) liveBridge.onNotifySilentScreenOnFallbackChanged(false);
+            }
+            case HealthHostControl.ENABLE_NOTIFY_SILENT_FOCUS -> {
+                settings.setLocalNotifySilentFocusFallback(true);
+                if (liveBridge != null) liveBridge.onNotifySilentFocusFallbackChanged(true);
+            }
+            case HealthHostControl.DISABLE_NOTIFY_SILENT_FOCUS -> {
+                settings.setLocalNotifySilentFocusFallback(false);
+                if (liveBridge != null) liveBridge.onNotifySilentFocusFallbackChanged(false);
+            }
+            case HealthHostControl.ENABLE_NOTIFY_SILENT_GAME -> {
+                settings.setLocalNotifySilentGameFallback(true);
+                if (liveBridge != null) liveBridge.onNotifySilentGameFallbackChanged(true);
+            }
+            case HealthHostControl.DISABLE_NOTIFY_SILENT_GAME -> {
+                settings.setLocalNotifySilentGameFallback(false);
+                if (liveBridge != null) liveBridge.onNotifySilentGameFallbackChanged(false);
+            }
             case HealthHostControl.ENABLE_SLEEP_AUTO_DND -> settings.setLocalSleepAutoDndFallback(true);
             case HealthHostControl.DISABLE_SLEEP_AUTO_DND -> settings.setLocalSleepAutoDndFallback(false);
             case HealthHostControl.ENABLE_WAKE_EXIT_DND -> settings.setLocalWakeExitDndFallback(true);
             case HealthHostControl.DISABLE_WAKE_EXIT_DND -> settings.setLocalWakeExitDndFallback(false);
+            case HealthHostControl.ENABLE_SLEEP_PAUSE_MEDIA -> settings.setLocalSleepPauseMediaFallback(true);
+            case HealthHostControl.DISABLE_SLEEP_PAUSE_MEDIA -> settings.setLocalSleepPauseMediaFallback(false);
             case HealthHostControl.TEST_LIVE_WINDOW -> {
                 if (liveBridge != null) liveBridge.startLiveTest();
             }
@@ -723,7 +749,11 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 sleep.lastWakeUpAt(),
                 settings.isWakeExitDndEnabled(),
                 settings.isNotifySilentPushEnabled(),
-                readiness == null ? "UNKNOWN" : readiness.readSilentPushSupport());
+                readiness == null ? "UNKNOWN" : readiness.readSilentPushSupport(),
+                settings.isNotifySilentScreenOnEnabled(),
+                settings.isNotifySilentFocusEnabled(),
+                settings.isNotifySilentGameEnabled(),
+                settings.isSleepPauseMediaEnabled());
     }
 
     private void startManualTestLocked() {

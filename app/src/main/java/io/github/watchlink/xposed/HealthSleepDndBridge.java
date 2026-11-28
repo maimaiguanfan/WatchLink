@@ -1,18 +1,15 @@
 package io.github.watchlink.xposed;
 
 import android.app.NotificationManager;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.SharedPreferences;
-import android.database.ContentObserver;
-import android.net.Uri;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.os.SystemClock;
-import android.provider.Settings;
+import android.view.KeyEvent;
 import androidx.annotation.RequiresApi;
 import io.github.watchlink.BuildConfig;
 import io.github.watchlink.alarm.probe.ProbeLog;
@@ -22,12 +19,14 @@ import io.github.watchlink.notify.SleepDndCoordinator;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Huawei Health :PhoneService bridge linking real-time watch sleep/wake detection
  * (BtProxySleepStatusManager.dealDeviceSleepAction: action 16 = fall asleep, 4 = wake up)
- * to two independent Android Do Not Disturb features (enter DND on fall asleep, exit DND on wake up),
- * while persisting the latest observed fall-asleep and wake-up timestamps for diagnostics.
+ * to independent Android Do Not Disturb toggles and fall-asleep media playback pause,
+ * plus 5.2.1 TLV 13 02 00 00 silent-push enforcement across DND, Focus/ZenSpace, Game foreground,
+ * unlocked screen, and silent phone notifications.
  */
 @RequiresApi(34)
 final class HealthSleepDndBridge {
@@ -39,6 +38,7 @@ final class HealthSleepDndBridge {
     private static final int TLV_TAG_REMINDER = 0x13;
     private static final String TLV_SILENT_REMINDER_HEX = "13020000";
     private static final long SILENT_LOG_INTERVAL_MS = 10_000L;
+    private static final long AUDIO_FOCUS_RELEASE_DELAY_MS = 450L;
 
     private static final String PREFS_NAME = BuildConfig.APPLICATION_ID + ".sleep_dnd_state_v1";
     private static final String KEY_LAST_FALL_ASLEEP_AT = "last_fall_asleep_at";
@@ -60,14 +60,13 @@ final class HealthSleepDndBridge {
     private final ScheduledExecutorService worker;
     private final HealthCooperativeReadiness readiness;
     private final SharedPreferences statePrefs;
+    private final PhoneModeObserver modeObserver;
 
-    private BroadcastReceiver dndReceiver;
-    private ContentObserver zenModeObserver;
     private volatile boolean installed;
     private volatile boolean hookReady;
     private volatile boolean silentPushHookReady;
-    private volatile boolean phoneDndActive;
     private volatile long lastSilentLogElapsedMs;
+    private volatile long lastMediaPauseElapsedMs;
     private volatile String lastEvent = "NONE";
     private volatile long lastAt;
     private volatile long lastFallAsleepAt;
@@ -80,13 +79,13 @@ final class HealthSleepDndBridge {
         this.worker = worker;
         this.readiness = readiness;
         this.statePrefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        this.modeObserver = new PhoneModeObserver(app, worker);
         this.lastFallAsleepAt = Math.max(0L, statePrefs.getLong(KEY_LAST_FALL_ASLEEP_AT, 0L));
         this.lastWakeUpAt = Math.max(0L, statePrefs.getLong(KEY_LAST_WAKE_UP_AT, 0L));
     }
 
     void install(AlarmObserverInstaller installer, HealthSymbolResolver.Symbols symbols) {
-        registerDndObservers();
-        phoneDndActive = isPhoneDndActive();
+        modeObserver.start();
         hookReady = installSleepActionHook(installer, symbols);
         silentPushHookReady = installSilentReminderHook(installer, symbols);
         installed = true;
@@ -98,14 +97,7 @@ final class HealthSleepDndBridge {
 
     void close() {
         installed = false;
-        if (dndReceiver != null) {
-            try { app.unregisterReceiver(dndReceiver); } catch (RuntimeException ignored) {}
-            dndReceiver = null;
-        }
-        if (zenModeObserver != null) {
-            try { app.getContentResolver().unregisterContentObserver(zenModeObserver); } catch (RuntimeException ignored) {}
-            zenModeObserver = null;
-        }
+        modeObserver.close();
     }
 
     StatusSnapshot statusSnapshot() {
@@ -199,62 +191,40 @@ final class HealthSleepDndBridge {
             return null;
         }
         boolean silentOnDnd = settings.isNotifyMuteDndEnabled();
+        boolean silentOnFocus = settings.isNotifySilentFocusEnabled();
+        boolean silentOnGame = settings.isNotifySilentGameEnabled();
+        boolean silentOnScreenOn = settings.isNotifySilentScreenOnEnabled();
         boolean silentOnPhoneSilent = settings.isNotifySilentPushEnabled();
-        if (!silentOnDnd && !silentOnPhoneSilent) return null;
+        if (!silentOnDnd && !silentOnFocus && !silentOnGame && !silentOnScreenOn && !silentOnPhoneSilent) {
+            return null;
+        }
 
         String pkg = bundle.getString("packagename");
         if (pkg == null || pkg.isEmpty()) pkg = bundle.getString("data_package_name");
         String category = bundle.getString("data_category");
         String daemonReason = bundle.getString(EXTRA_WATCHLINK_SILENT_REASON);
         boolean daemonTagged = bundle.getBoolean(EXTRA_WATCHLINK_SILENT_PUSH, false);
-        boolean dndActive = phoneDndActive || "DND".equals(daemonReason);
-        boolean markedSilent = "PHONE_SILENT".equals(daemonReason)
+
+        boolean dndActive = modeObserver.isDndActive() || NotificationDndPolicy.REASON_DND.equals(daemonReason);
+        boolean focusActive = modeObserver.isFocusActive() || NotificationDndPolicy.REASON_FOCUS.equals(daemonReason);
+        boolean gameActive = modeObserver.isGameForeground() || NotificationDndPolicy.REASON_GAME.equals(daemonReason);
+        boolean screenUnlocked = modeObserver.isScreenUnlocked() || NotificationDndPolicy.REASON_SCREEN_ON.equals(daemonReason);
+        boolean markedSilent = NotificationDndPolicy.REASON_PHONE_SILENT.equals(daemonReason)
                 || (daemonTagged && daemonReason == null)
                 || bundle.getInt(EXTRA_REMINDER_STATUS, 15) == 0;
-        if (!NotificationDndPolicy.shouldPushSilentlyToWatch(
-                silentOnDnd, silentOnPhoneSilent, dndActive, markedSilent, pkg, category)) {
-            return null;
-        }
+
+        String reason = NotificationDndPolicy.evaluateSilentReason(
+                silentOnDnd, silentOnFocus, silentOnGame, silentOnScreenOn, silentOnPhoneSilent,
+                dndActive, focusActive, gameActive, screenUnlocked, markedSilent,
+                pkg, category);
+        if (reason == null) return null;
+
         long now = SystemClock.elapsedRealtime();
         if (now - lastSilentLogElapsedMs >= SILENT_LOG_INTERVAL_MS) {
             lastSilentLogElapsedMs = now;
-            ProbeLog.info("HEALTH_NOTIFY_SILENT_PUSH source=HEALTH silent_reason="
-                    + (silentOnDnd && dndActive ? "DND" : "PHONE_SILENT"));
+            ProbeLog.info("HEALTH_NOTIFY_SILENT_PUSH source=HEALTH silent_reason=" + reason);
         }
         return TLV_SILENT_REMINDER_HEX;
-    }
-
-    private void registerDndObservers() {
-        try {
-            BroadcastReceiver r = new BroadcastReceiver() {
-                @Override public void onReceive(Context context, Intent intent) {
-                    if (!installed) return;
-                    try {
-                        worker.execute(() -> phoneDndActive = isPhoneDndActive());
-                    } catch (RuntimeException ignored) {}
-                }
-            };
-            app.registerReceiver(r,
-                    new IntentFilter(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED),
-                    Context.RECEIVER_EXPORTED);
-            dndReceiver = r;
-        } catch (RuntimeException ignored) {}
-
-        try {
-            Uri zenUri = Settings.Global.getUriFor("zen_mode");
-            if (zenUri != null) {
-                ContentObserver obs = new ContentObserver(new Handler(Looper.getMainLooper())) {
-                    @Override public void onChange(boolean selfChange) {
-                        if (!installed) return;
-                        try {
-                            worker.execute(() -> phoneDndActive = isPhoneDndActive());
-                        } catch (RuntimeException ignored) {}
-                    }
-                };
-                app.getContentResolver().registerContentObserver(zenUri, false, obs);
-                zenModeObserver = obs;
-            }
-        } catch (RuntimeException ignored) {}
     }
 
     private static Method uniqueOldReminderMethod(Class<?> cls) {
@@ -281,20 +251,24 @@ final class HealthSleepDndBridge {
 
         boolean sleepEnableDnd = settings.isSleepAutoDndEnabled();
         boolean wakeExitDnd = settings.isWakeExitDndEnabled();
-        boolean phoneDndActive = isPhoneDndActive();
+        modeObserver.refreshDnd();
+        boolean phoneDndActive = modeObserver.isDndActive();
         SleepDndCoordinator.Decision decision = SleepDndCoordinator.onSleepAction(
                 sleepEnableDnd, wakeExitDnd, action, phoneDndActive);
+        boolean dndUpdatedLastEvent = false;
         switch (decision) {
             case ENABLE_DND -> {
                 String apply = applyDndFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY);
                 if ("APPLIED".equals(apply) || "DAEMON_FALLBACK".equals(apply)) {
                     lastEvent = "FALL_ASLEEP_DND_ON";
                     lastAt = nowWall;
+                    dndUpdatedLastEvent = true;
                     ProbeLog.info("HEALTH_SLEEP_DND_APPLIED source=HEALTH dnd_result="
                             + ("APPLIED".equals(apply) ? "ENABLE_DND" : "DAEMON_FALLBACK"));
                 } else {
                     lastEvent = "NO_POLICY_ACCESS".equals(apply) ? "NO_POLICY_ACCESS" : "FAILED";
                     lastAt = nowWall;
+                    dndUpdatedLastEvent = true;
                     ProbeLog.info("HEALTH_SLEEP_DND_APPLIED source=HEALTH dnd_result=" + lastEvent);
                 }
             }
@@ -303,26 +277,102 @@ final class HealthSleepDndBridge {
                 if ("APPLIED".equals(apply) || "DAEMON_FALLBACK".equals(apply)) {
                     lastEvent = "WAKE_UP_DND_OFF";
                     lastAt = nowWall;
+                    dndUpdatedLastEvent = true;
                     ProbeLog.info("HEALTH_SLEEP_DND_APPLIED source=HEALTH dnd_result="
                             + ("APPLIED".equals(apply) ? "DISABLE_DND" : "DAEMON_FALLBACK"));
                 } else {
                     lastEvent = "NO_POLICY_ACCESS".equals(apply) ? "NO_POLICY_ACCESS" : "FAILED";
                     lastAt = nowWall;
+                    dndUpdatedLastEvent = true;
                     ProbeLog.info("HEALTH_SLEEP_DND_APPLIED source=HEALTH dnd_result=" + lastEvent);
                 }
             }
             case SKIP_ALREADY_DND -> {
                 lastEvent = "FALL_ASLEEP_SKIP_ALREADY_DND";
                 lastAt = nowWall;
+                dndUpdatedLastEvent = true;
                 ProbeLog.info("HEALTH_SLEEP_DND_APPLIED source=HEALTH dnd_result=SKIP_ALREADY_DND");
             }
             case SKIP_ALREADY_OFF -> {
                 lastEvent = "WAKE_UP_SKIP_ALREADY_OFF";
                 lastAt = nowWall;
+                dndUpdatedLastEvent = true;
                 ProbeLog.info("HEALTH_SLEEP_DND_APPLIED source=HEALTH dnd_result=SKIP_ALREADY_OFF");
             }
             case DISABLED, IGNORE_ACTION -> {}
         }
+
+        handleSleepPauseMediaLocked(action, nowWall, !dndUpdatedLastEvent);
+    }
+
+    private void handleSleepPauseMediaLocked(int action, long nowWall, boolean updateLastEvent) {
+        AudioManager am = null;
+        boolean musicActive = false;
+        boolean inCall = false;
+        try {
+            am = app.getSystemService(AudioManager.class);
+            if (am != null) {
+                int mode = am.getMode();
+                inCall = mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION;
+                musicActive = am.isMusicActive();
+            }
+        } catch (RuntimeException ignored) {}
+
+        long nowElapsed = SystemClock.elapsedRealtime();
+        SleepDndCoordinator.MediaPauseDecision mediaDecision = SleepDndCoordinator.onSleepMediaAction(
+                settings.isSleepPauseMediaEnabled(), action, musicActive, inCall, nowElapsed, lastMediaPauseElapsedMs);
+        switch (mediaDecision) {
+            case PAUSE_MEDIA -> {
+                boolean paused = pauseMediaPlayback(am);
+                if (paused) {
+                    lastMediaPauseElapsedMs = nowElapsed;
+                    if (updateLastEvent) {
+                        lastEvent = "FALL_ASLEEP_MEDIA_PAUSED";
+                        lastAt = nowWall;
+                    }
+                    ProbeLog.info("HEALTH_SLEEP_MEDIA_PAUSED source=HEALTH media_result=PAUSED");
+                } else {
+                    ProbeLog.info("HEALTH_SLEEP_MEDIA_PAUSED source=HEALTH media_result=FAILED");
+                }
+            }
+            case SKIP_IN_CALL -> ProbeLog.info("HEALTH_SLEEP_MEDIA_PAUSED source=HEALTH media_result=SKIP_IN_CALL");
+            case SKIP_NOT_PLAYING -> ProbeLog.info("HEALTH_SLEEP_MEDIA_PAUSED source=HEALTH media_result=SKIP_NOT_PLAYING");
+            case SKIP_COOLDOWN -> ProbeLog.info("HEALTH_SLEEP_MEDIA_PAUSED source=HEALTH media_result=SKIP_COOLDOWN");
+            case DISABLED, IGNORE_ACTION -> {}
+        }
+    }
+
+    private boolean pauseMediaPlayback(AudioManager am) {
+        if (am == null) return false;
+        boolean dispatched = false;
+        try {
+            long eventTime = SystemClock.uptimeMillis();
+            am.dispatchMediaKeyEvent(new KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN,
+                    KeyEvent.KEYCODE_MEDIA_PAUSE, 0));
+            am.dispatchMediaKeyEvent(new KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP,
+                    KeyEvent.KEYCODE_MEDIA_PAUSE, 0));
+            dispatched = true;
+        } catch (RuntimeException ignored) {}
+
+        // Brief audio-focus grab & release as a fallback for apps that ignore KEYCODE_MEDIA_PAUSE.
+        try {
+            AudioAttributes attrs = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build();
+            AudioFocusRequest req = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(attrs)
+                    .setOnAudioFocusChangeListener(change -> {})
+                    .build();
+            int focus = am.requestAudioFocus(req);
+            if (focus == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                dispatched = true;
+                worker.schedule(() -> {
+                    try { am.abandonAudioFocusRequest(req); } catch (RuntimeException ignored) {}
+                }, AUDIO_FOCUS_RELEASE_DELAY_MS, TimeUnit.MILLISECONDS);
+            }
+        } catch (RuntimeException ignored) {}
+        return dispatched;
     }
 
     private String applyDndFilter(int filter) {
@@ -360,19 +410,6 @@ final class HealthSleepDndBridge {
         } catch (RuntimeException ignored) {
             return false;
         }
-    }
-
-    private boolean isPhoneDndActive() {
-        int filter = NotificationDndPolicy.INTERRUPTION_FILTER_UNKNOWN;
-        try {
-            NotificationManager nm = app.getSystemService(NotificationManager.class);
-            if (nm != null) filter = nm.getCurrentInterruptionFilter();
-        } catch (RuntimeException ignored) {}
-        int zenMode = 0;
-        try {
-            zenMode = Settings.Global.getInt(app.getContentResolver(), "zen_mode", 0);
-        } catch (RuntimeException ignored) {}
-        return NotificationDndPolicy.isPhoneDndActive(filter, zenMode);
     }
 
     private void recordSleepTimestamp(int action, long nowWall) {

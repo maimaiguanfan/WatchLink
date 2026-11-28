@@ -71,5 +71,41 @@ public class NotificationDndPolicyTest {
                 true, true, true, true, "com.example.clock", NotificationDndPolicy.CATEGORY_ALARM));
         assertFalse(NotificationDndPolicy.shouldPushSilentlyToWatch(
                 true, true, true, true, "com.tencent.mm", NotificationDndPolicy.CATEGORY_CALL));
+        assertNull(NotificationDndPolicy.evaluateSilentReason(
+                true, true, true, true, true,
+                true, true, true, true, true,
+                "com.tencent.mm", NotificationDndPolicy.CATEGORY_CALL));
+    }
+
+    @Test public void detectsScreenUnlockedFocusZenAndGameForeground() {
+        assertTrue(NotificationDndPolicy.isScreenUnlocked(true, false));
+        assertFalse(NotificationDndPolicy.isScreenUnlocked(true, true));
+        assertFalse(NotificationDndPolicy.isScreenUnlocked(false, false));
+
+        assertFalse(NotificationDndPolicy.isFocusOrZenSpaceActive(0, 0, 0, 0, 0));
+        assertTrue(NotificationDndPolicy.isFocusOrZenSpaceActive(1, 0, 0, 0, 0));
+        assertTrue(NotificationDndPolicy.isFocusOrZenSpaceActive(0, 1, 0, 0, 0));
+        assertTrue(NotificationDndPolicy.isFocusOrZenSpaceActive(0, 0, 1, 0, 0));
+        assertTrue(NotificationDndPolicy.isFocusOrZenSpaceActive(0, 0, 0, 1, 0));
+        assertTrue(NotificationDndPolicy.isFocusOrZenSpaceActive(0, 0, 0, 0, 1));
+
+        assertFalse(NotificationDndPolicy.isGameForegroundActive(0, 0));
+        assertTrue(NotificationDndPolicy.isGameForegroundActive(1, 0));
+        assertTrue(NotificationDndPolicy.isGameForegroundActive(0, 1));
+    }
+
+    @Test public void evaluatesIndependentSilentReasonsWithoutCrossTriggering() {
+        assertEquals(NotificationDndPolicy.REASON_FOCUS, NotificationDndPolicy.evaluateSilentReason(
+                false, true, false, false, false,
+                true, true, true, true, true, "com.tencent.mm", "msg"));
+        assertEquals(NotificationDndPolicy.REASON_GAME, NotificationDndPolicy.evaluateSilentReason(
+                false, false, true, false, false,
+                true, true, true, true, true, "com.tencent.mm", "msg"));
+        assertEquals(NotificationDndPolicy.REASON_SCREEN_ON, NotificationDndPolicy.evaluateSilentReason(
+                false, false, false, true, false,
+                true, true, true, true, true, "com.tencent.mm", "msg"));
+        assertNull(NotificationDndPolicy.evaluateSilentReason(
+                false, true, true, true, false,
+                true, false, false, false, true, "com.tencent.mm", "msg"));
     }
 }

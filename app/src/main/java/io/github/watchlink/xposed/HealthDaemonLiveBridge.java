@@ -10,13 +10,9 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
-import android.database.ContentObserver;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.os.SystemClock;
-import android.provider.Settings;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import androidx.annotation.RequiresApi;
@@ -72,12 +68,10 @@ final class HealthDaemonLiveBridge {
 
     private HostSettings settings;
     private BroadcastReceiver syncReceiver;
-    private BroadcastReceiver dndReceiver;
-    private ContentObserver zenModeObserver;
+    private PhoneModeObserver modeObserver;
     private Method isPromotedMethod;
     private Method shortCriticalMethod;
     private volatile WeakReference<NotificationListenerService> listenerRef;
-    private volatile boolean phoneDndActive;
     private volatile long lastDndMuteLogElapsedMs;
     private volatile boolean watchSupported = true;
     private volatile boolean active;
@@ -103,8 +97,9 @@ final class HealthDaemonLiveBridge {
 
             resolveOptionalNotificationMethods();
             registerSyncReceiver(hostSettings);
-            registerDndObservers();
-            refreshPhoneDndState();
+            PhoneModeObserver observer = new PhoneModeObserver(app, worker);
+            observer.start();
+            modeObserver = observer;
 
             Class<?> listenerCls = Class.forName(LISTENER_CLASS, false, loader);
             Method onPosted = listenerCls.getDeclaredMethod("onNotificationPosted", StatusBarNotification.class);
@@ -114,7 +109,7 @@ final class HealthDaemonLiveBridge {
                 handles.add(buildHook(onConnected, "health.daemon.live.connected").intercept(chain -> {
                     captureListener(chain.getThisObject());
                     if (active) {
-                        try { worker.execute(this::refreshPhoneDndState); } catch (RuntimeException ignored) {}
+                        try { worker.execute(observer::refreshAll); } catch (RuntimeException ignored) {}
                     }
                     return chain.proceed();
                 }));
@@ -128,9 +123,13 @@ final class HealthDaemonLiveBridge {
                         Notification n = sbn.getNotification();
                         String category = n == null ? null : n.category;
                         boolean silentOnDnd = hostSettings.isNotifyMuteDndEnabled();
-                        boolean dndActive = phoneDndActive || isListenerDndActive(chain.getThisObject());
-                        boolean holdLiveForDnd = NotificationDndPolicy.shouldPushSilentlyToWatch(
-                                silentOnDnd, false, dndActive, false, sbn.getPackageName(), category);
+                        boolean silentOnFocus = hostSettings.isNotifySilentFocusEnabled();
+                        boolean dndActive = observer.isDndActive() || isListenerDndActive(chain.getThisObject());
+                        boolean focusActive = observer.isFocusActive();
+                        boolean holdLiveForQuiet = NotificationDndPolicy.evaluateSilentReason(
+                                silentOnDnd, silentOnFocus, false, false, false,
+                                dndActive, focusActive, false, false, false,
+                                sbn.getPackageName(), category) != null;
 
                         boolean regularEnabled = hostSettings.isLiveWindowEnabled();
                         boolean gameEnabled = hostSettings.isGameFlashbackEnabled();
@@ -138,7 +137,8 @@ final class HealthDaemonLiveBridge {
                             LiveWindowPayload payload = extractLivePayload(sbn);
                             if (payload != null) {
                                 boolean game = payload.isGameFlashback();
-                                boolean allowed = game ? gameEnabled : (regularEnabled && !holdLiveForDnd);
+                                // Game flashback penetrates game-foreground silent mode and DND/Focus quiet hold.
+                                boolean allowed = game ? gameEnabled : (regularEnabled && !holdLiveForQuiet);
                                 if (allowed) {
                                     if (activeKeys.size() < MAX_TRACKED_KEYS || activeKeys.contains(sbn.getKey())) {
                                         activeKeys.add(sbn.getKey());
@@ -151,7 +151,7 @@ final class HealthDaemonLiveBridge {
                                         // Suppress duplicate ordinary watch notification in-place.
                                         return null;
                                     }
-                                } else if (!holdLiveForDnd) {
+                                } else if (!holdLiveForQuiet) {
                                     closeIfTracked(sbn);
                                 }
                             } else {
@@ -170,17 +170,22 @@ final class HealthDaemonLiveBridge {
                     Object res = chain.proceed();
                     if (active && res instanceof Bundle out && chain.getArg(1) instanceof StatusBarNotification sbn) {
                         boolean silentOnDnd = hostSettings.isNotifyMuteDndEnabled();
+                        boolean silentOnFocus = hostSettings.isNotifySilentFocusEnabled();
+                        boolean silentOnGame = hostSettings.isNotifySilentGameEnabled();
+                        boolean silentOnScreenOn = hostSettings.isNotifySilentScreenOnEnabled();
                         boolean silentOnPhoneSilent = hostSettings.isNotifySilentPushEnabled();
-                        if (silentOnDnd || silentOnPhoneSilent) {
+                        if (silentOnDnd || silentOnFocus || silentOnGame || silentOnScreenOn || silentOnPhoneSilent) {
                             Notification n = sbn.getNotification();
                             String category = n == null ? null : n.category;
-                            boolean dndActive = phoneDndActive || isListenerDndActive(chain.getThisObject());
+                            boolean dndActive = observer.isDndActive() || isListenerDndActive(chain.getThisObject());
                             boolean phoneSilent = silentOnPhoneSilent
                                     && isPhoneNotificationSilent(chain.getThisObject(), sbn);
-                            if (NotificationDndPolicy.shouldPushSilentlyToWatch(
-                                    silentOnDnd, silentOnPhoneSilent, dndActive, phoneSilent,
-                                    sbn.getPackageName(), category)) {
-                                String reason = silentOnDnd && dndActive ? "DND" : "PHONE_SILENT";
+                            String reason = NotificationDndPolicy.evaluateSilentReason(
+                                    silentOnDnd, silentOnFocus, silentOnGame, silentOnScreenOn, silentOnPhoneSilent,
+                                    dndActive, observer.isFocusActive(), observer.isGameForeground(),
+                                    observer.isScreenUnlocked(), phoneSilent,
+                                    sbn.getPackageName(), category);
+                            if (reason != null) {
                                 out.putInt(EXTRA_REMINDER_STATUS, REMINDER_STATUS_SILENT);
                                 out.putBoolean(HealthSleepDndBridge.EXTRA_WATCHLINK_SILENT_PUSH, true);
                                 out.putString(HealthSleepDndBridge.EXTRA_WATCHLINK_SILENT_REASON, reason);
@@ -226,13 +231,9 @@ final class HealthDaemonLiveBridge {
         activeKeys.clear();
         activeGameKeys.clear();
         listenerRef = null;
-        if (dndReceiver != null) {
-            try { app.unregisterReceiver(dndReceiver); } catch (RuntimeException ignored) {}
-            dndReceiver = null;
-        }
-        if (zenModeObserver != null) {
-            try { app.getContentResolver().unregisterContentObserver(zenModeObserver); } catch (RuntimeException ignored) {}
-            zenModeObserver = null;
+        if (modeObserver != null) {
+            try { modeObserver.close(); } catch (RuntimeException ignored) {}
+            modeObserver = null;
         }
         if (syncReceiver != null) {
             try { app.unregisterReceiver(syncReceiver); } catch (RuntimeException ignored) {}
@@ -268,6 +269,18 @@ final class HealthDaemonLiveBridge {
                         hostSettings.setLocalNotifySilentPushFallback(
                                 intent.getBooleanExtra("notifySilentPushEnabled", false));
                     }
+                    if (intent.hasExtra("notifySilentScreenOnEnabled")) {
+                        hostSettings.setLocalNotifySilentScreenOnFallback(
+                                intent.getBooleanExtra("notifySilentScreenOnEnabled", false));
+                    }
+                    if (intent.hasExtra("notifySilentFocusEnabled")) {
+                        hostSettings.setLocalNotifySilentFocusFallback(
+                                intent.getBooleanExtra("notifySilentFocusEnabled", false));
+                    }
+                    if (intent.hasExtra("notifySilentGameEnabled")) {
+                        hostSettings.setLocalNotifySilentGameFallback(
+                                intent.getBooleanExtra("notifySilentGameEnabled", false));
+                    }
                     if (!enabled) activeKeys.removeIf(k -> !activeGameKeys.contains(k));
                     if (!gameEnabled) {
                         activeKeys.removeAll(activeGameKeys);
@@ -292,52 +305,6 @@ final class HealthDaemonLiveBridge {
         syncReceiver = r;
     }
 
-    private void registerDndObservers() {
-        try {
-            BroadcastReceiver r = new BroadcastReceiver() {
-                @Override public void onReceive(Context context, Intent intent) {
-                    if (!active) return;
-                    try {
-                        worker.execute(HealthDaemonLiveBridge.this::refreshPhoneDndState);
-                    } catch (RuntimeException ignored) {}
-                }
-            };
-            app.registerReceiver(r,
-                    new IntentFilter(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED),
-                    Context.RECEIVER_EXPORTED);
-            dndReceiver = r;
-        } catch (RuntimeException ignored) {}
-
-        try {
-            Uri zenUri = Settings.Global.getUriFor("zen_mode");
-            if (zenUri != null) {
-                ContentObserver obs = new ContentObserver(new Handler(Looper.getMainLooper())) {
-                    @Override public void onChange(boolean selfChange) {
-                        if (!active) return;
-                        try {
-                            worker.execute(HealthDaemonLiveBridge.this::refreshPhoneDndState);
-                        } catch (RuntimeException ignored) {}
-                    }
-                };
-                app.getContentResolver().registerContentObserver(zenUri, false, obs);
-                zenModeObserver = obs;
-            }
-        } catch (RuntimeException ignored) {}
-    }
-
-    private void refreshPhoneDndState() {
-        int filter = NotificationDndPolicy.INTERRUPTION_FILTER_UNKNOWN;
-        try {
-            NotificationManager nm = app.getSystemService(NotificationManager.class);
-            if (nm != null) filter = nm.getCurrentInterruptionFilter();
-        } catch (RuntimeException ignored) {}
-        int zenMode = 0;
-        try {
-            zenMode = Settings.Global.getInt(app.getContentResolver(), "zen_mode", 0);
-        } catch (RuntimeException ignored) {}
-        phoneDndActive = NotificationDndPolicy.isPhoneDndActive(filter, zenMode);
-    }
-
     private void applyListenerInterruptionFilter(int filter) {
         if (!active) return;
         WeakReference<NotificationListenerService> ref = listenerRef;
@@ -348,7 +315,8 @@ final class HealthDaemonLiveBridge {
         }
         try {
             listener.requestInterruptionFilter(filter);
-            refreshPhoneDndState();
+            PhoneModeObserver observer = modeObserver;
+            if (observer != null) observer.refreshDnd();
             ProbeLog.info("DAEMON_DND_REQUEST source=DAEMON dnd_result="
                     + (filter == NotificationManager.INTERRUPTION_FILTER_PRIORITY ? "ENABLE_DND" : "DISABLE_DND"));
         } catch (RuntimeException err) {

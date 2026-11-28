@@ -74,8 +74,12 @@ internal data class WatchLinkUiState(
     val gameFlashbackSaving: Boolean = false,
     val notifyMuteDndSaving: Boolean = false,
     val notifySilentPushSaving: Boolean = false,
+    val notifySilentScreenOnSaving: Boolean = false,
+    val notifySilentFocusSaving: Boolean = false,
+    val notifySilentGameSaving: Boolean = false,
     val sleepAutoDndSaving: Boolean = false,
     val wakeExitDndSaving: Boolean = false,
+    val sleepPauseMediaSaving: Boolean = false,
     val wifiAutoSaving: Boolean = false,
     val rawCommandDebugSaving: Boolean = false,
     val wifiSyncingCurrent: Boolean = false,
@@ -154,6 +158,33 @@ internal data class WatchLinkUiState(
         get() = !notifySilentPushSaving && (scope?.remotePrefsSupported() == true
                 || healthHost?.reachable() == true)
 
+    val effectiveNotifySilentScreenOnEnabled: Boolean
+        get() = scope?.remoteNotifySilentScreenOnEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.notifySilentScreenOnEnabled()
+            ?: false
+
+    val canToggleNotifySilentScreenOn: Boolean
+        get() = !notifySilentScreenOnSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
+    val effectiveNotifySilentFocusEnabled: Boolean
+        get() = scope?.remoteNotifySilentFocusEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.notifySilentFocusEnabled()
+            ?: false
+
+    val canToggleNotifySilentFocus: Boolean
+        get() = !notifySilentFocusSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
+    val effectiveNotifySilentGameEnabled: Boolean
+        get() = scope?.remoteNotifySilentGameEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.notifySilentGameEnabled()
+            ?: false
+
+    val canToggleNotifySilentGame: Boolean
+        get() = !notifySilentGameSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
     val effectiveSleepAutoDndEnabled: Boolean
         get() = scope?.remoteSleepAutoDndEnabled()
             ?: healthHost?.takeIf { it.reachable() }?.sleepAutoDndEnabled()
@@ -170,6 +201,15 @@ internal data class WatchLinkUiState(
 
     val canToggleWakeExitDnd: Boolean
         get() = !wakeExitDndSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
+    val effectiveSleepPauseMediaEnabled: Boolean
+        get() = scope?.remoteSleepPauseMediaEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.sleepPauseMediaEnabled()
+            ?: false
+
+    val canToggleSleepPauseMedia: Boolean
+        get() = !sleepPauseMediaSaving && (scope?.remotePrefsSupported() == true
                 || healthHost?.reachable() == true)
 
     val effectiveWifiAutoEnabled: Boolean
@@ -199,8 +239,12 @@ internal data class WatchLinkUiState(
             effectiveGameFlashbackEnabled,
             effectiveNotifyMuteDndEnabled,
             effectiveNotifySilentPushEnabled,
+            effectiveNotifySilentScreenOnEnabled,
+            effectiveNotifySilentFocusEnabled,
+            effectiveNotifySilentGameEnabled,
             effectiveSleepAutoDndEnabled,
             effectiveWakeExitDndEnabled,
+            effectiveSleepPauseMediaEnabled,
             effectiveWifiAutoEnabled,
         ).count { it }
 }
@@ -227,8 +271,12 @@ internal fun WatchLinkApp(
     onGameFlashbackLeadSec: (Int) -> Unit,
     onNotifyMuteDndEnable: (Boolean) -> Unit,
     onNotifySilentPushEnable: (Boolean) -> Unit,
+    onNotifySilentScreenOnEnable: (Boolean) -> Unit,
+    onNotifySilentFocusEnable: (Boolean) -> Unit,
+    onNotifySilentGameEnable: (Boolean) -> Unit,
     onSleepAutoDndEnable: (Boolean) -> Unit,
     onWakeExitDndEnable: (Boolean) -> Unit,
+    onSleepPauseMediaEnable: (Boolean) -> Unit,
     onOpenDndAccessSettings: () -> Unit,
     onWifiAutoEnable: (Boolean) -> Unit,
     onRawCommandDebugEnable: (Boolean) -> Unit,
@@ -313,8 +361,12 @@ internal fun WatchLinkApp(
                             state = state,
                             onNotifyMuteDndEnable = onNotifyMuteDndEnable,
                             onNotifySilentPushEnable = onNotifySilentPushEnable,
+                            onNotifySilentScreenOnEnable = onNotifySilentScreenOnEnable,
+                            onNotifySilentFocusEnable = onNotifySilentFocusEnable,
+                            onNotifySilentGameEnable = onNotifySilentGameEnable,
                             onSleepAutoDndEnable = onSleepAutoDndEnable,
                             onWakeExitDndEnable = onWakeExitDndEnable,
+                            onSleepPauseMediaEnable = onSleepPauseMediaEnable,
                             onOpenDndAccessSettings = onOpenDndAccessSettings,
                         )
                         Page.WIFI -> wifiPage(
@@ -366,12 +418,16 @@ private fun LazyListScope.homePage(state: WatchLinkUiState, onRefresh: () -> Uni
     val liveSummary = if (activeLive.isEmpty()) "取餐、出行、快递、排号与游戏闪回"
     else "已开启：${activeLive.joinToString(" · ")}"
     val activeNotify = buildList {
-        if (state.effectiveNotifyMuteDndEnabled) add("免打扰静默推送")
+        if (state.effectiveNotifyMuteDndEnabled) add("免打扰静默")
         if (state.effectiveNotifySilentPushEnabled) add("静默通知同步")
+        if (state.effectiveNotifySilentScreenOnEnabled) add("亮屏静默")
+        if (state.effectiveNotifySilentFocusEnabled) add("禅定专注静默")
+        if (state.effectiveNotifySilentGameEnabled) add("游戏前台静默")
         if (state.effectiveSleepAutoDndEnabled) add("入睡开免打扰")
         if (state.effectiveWakeExitDndEnabled) add("醒来退免打扰")
+        if (state.effectiveSleepPauseMediaEnabled) add("入睡暂停播放")
     }
-    val notifySummary = if (activeNotify.isEmpty()) "静默推送、入睡开启与醒来退出免打扰"
+    val notifySummary = if (activeNotify.isEmpty()) "多场景静默推送、睡眠免打扰与入睡暂停播放"
     else "已开启：${activeNotify.joinToString(" · ")}"
     val wifiSummary = if (state.effectiveWifiAutoEnabled) "已开启 · 自动同步与批量导入"
     else "自动同步新连接与批量导入"
@@ -668,14 +724,22 @@ private fun LazyListScope.notificationsPage(
     state: WatchLinkUiState,
     onNotifyMuteDndEnable: (Boolean) -> Unit,
     onNotifySilentPushEnable: (Boolean) -> Unit,
+    onNotifySilentScreenOnEnable: (Boolean) -> Unit,
+    onNotifySilentFocusEnable: (Boolean) -> Unit,
+    onNotifySilentGameEnable: (Boolean) -> Unit,
     onSleepAutoDndEnable: (Boolean) -> Unit,
     onWakeExitDndEnable: (Boolean) -> Unit,
+    onSleepPauseMediaEnable: (Boolean) -> Unit,
     onOpenDndAccessSettings: () -> Unit,
 ) {
     val muteDndEnabled = state.effectiveNotifyMuteDndEnabled
     val silentPushEnabled = state.effectiveNotifySilentPushEnabled
+    val silentScreenOnEnabled = state.effectiveNotifySilentScreenOnEnabled
+    val silentFocusEnabled = state.effectiveNotifySilentFocusEnabled
+    val silentGameEnabled = state.effectiveNotifySilentGameEnabled
     val sleepDndEnabled = state.effectiveSleepAutoDndEnabled
     val wakeDndEnabled = state.effectiveWakeExitDndEnabled
+    val sleepPauseMediaEnabled = state.effectiveSleepPauseMediaEnabled
     val health = state.healthHost
     val missingDndPolicy = (sleepDndEnabled || wakeDndEnabled)
             && health?.reachable() == true && !health.dndPolicyAccess()
@@ -690,6 +754,21 @@ private fun LazyListScope.notificationsPage(
         !state.canToggleNotifySilentPush -> "请先启用模块或打开运动健康"
         else -> "手机静默或无声无震动通知，手表静默接收不震动"
     }
+    val silentScreenOnSummary = when {
+        state.notifySilentScreenOnSaving -> "正在保存…"
+        !state.canToggleNotifySilentScreenOn -> "请先启用模块或打开运动健康"
+        else -> "手机亮屏且已解锁使用时，手表静默接收通知不震动"
+    }
+    val silentFocusSummary = when {
+        state.notifySilentFocusSaving -> "正在保存…"
+        !state.canToggleNotifySilentFocus -> "请先启用模块或打开运动健康"
+        else -> "开启禅定空间（含轻禅定）或专注模式时，手表静默接收"
+    }
+    val silentGameSummary = when {
+        state.notifySilentGameSaving -> "正在保存…"
+        !state.canToggleNotifySilentGame -> "请先启用模块或打开运动健康"
+        else -> "游戏运行于前台时普通通知静默，游戏闪回仍正常震动"
+    }
     val sleepDndSummary = when {
         state.sleepAutoDndSaving -> "正在保存…"
         !state.canToggleSleepAutoDnd -> "请先启用模块或打开运动健康"
@@ -701,6 +780,11 @@ private fun LazyListScope.notificationsPage(
         !state.canToggleWakeExitDnd -> "请先启用模块或打开运动健康"
         wakeDndEnabled && missingDndPolicy -> "需在系统「勿扰权限」允许华为运动健康"
         else -> "手表监测醒来时自动退出手机免打扰"
+    }
+    val sleepPauseMediaSummary = when {
+        state.sleepPauseMediaSaving -> "正在保存…"
+        !state.canToggleSleepPauseMedia -> "请先启用模块或打开运动健康"
+        else -> "手表监测入睡时自动暂停手机媒体播放，醒来不恢复"
     }
 
     item("notify-dnd-title") { SectionTitle("手表静默推送") }
@@ -721,10 +805,34 @@ private fun LazyListScope.notificationsPage(
                 state.canToggleNotifySilentPush,
                 onNotifySilentPushEnable,
             )
+            HorizontalDivider()
+            SwitchRow(
+                "亮屏时静默推送通知",
+                silentScreenOnSummary,
+                silentScreenOnEnabled,
+                state.canToggleNotifySilentScreenOn,
+                onNotifySilentScreenOnEnable,
+            )
+            HorizontalDivider()
+            SwitchRow(
+                "禅定与专注时静默推送",
+                silentFocusSummary,
+                silentFocusEnabled,
+                state.canToggleNotifySilentFocus,
+                onNotifySilentFocusEnable,
+            )
+            HorizontalDivider()
+            SwitchRow(
+                "游戏前台时静默推送",
+                silentGameSummary,
+                silentGameEnabled,
+                state.canToggleNotifySilentGame,
+                onNotifySilentGameEnable,
+            )
         }
     }
 
-    item("sleep-dnd-title") { SectionTitle("睡眠免打扰联动") }
+    item("sleep-dnd-title") { SectionTitle("睡眠联动") }
     item("sleep-dnd-card") {
         Card(Modifier.fillMaxWidth()) {
             SwitchRow(
@@ -741,6 +849,14 @@ private fun LazyListScope.notificationsPage(
                 wakeDndEnabled,
                 state.canToggleWakeExitDnd,
                 onWakeExitDndEnable,
+            )
+            HorizontalDivider()
+            SwitchRow(
+                "入睡自动暂停播放",
+                sleepPauseMediaSummary,
+                sleepPauseMediaEnabled,
+                state.canToggleSleepPauseMedia,
+                onSleepPauseMediaEnable,
             )
             if (missingDndPolicy) {
                 HorizontalDivider()
@@ -1264,8 +1380,8 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
             BasicComponent(
                 title = "通知与免打扰（基础作用域）",
                 summary = "仅需勾选「华为运动健康」，无需新增其他作用域。\n" +
-                    "「免打扰时静默推送通知」与「手机静默通知静默推送」基于华为 5.2.1 原生静默标记（bit 94）：分别在手机开启免打扰期间、或收到手机静默/无声无震动通知时，将通知静默推送到手表通知栏而不震动（不拦截闹钟、倒计时、日历强提醒与来电）。\n" +
-                    "「入睡开启免打扰」与「醒来退出免打扰」为两个独立开关，可分别控制手表监测入睡时开启手机免打扰、监测醒来时退出手机免打扰；「测试与诊断」中会持久记录最近一次入睡与醒来时间。"
+                    "「手表静默推送」基于华为 5.2.1 静默标记（TLV 13 02 00 00），支持免打扰、手机静默通知、亮屏且已解锁、禅定空间（含轻禅定）/专注模式与游戏前台五项独立开关，开启后通知静默进入手表通知栏而不震动（不拦截来电、闹钟、倒计时、日历强提醒，游戏闪回也会穿透游戏前台静默）。\n" +
+                    "「睡眠联动」提供入睡开启免打扰、醒来退出免打扰、入睡自动暂停播放三项独立开关；「测试与诊断」中会持久记录最近一次入睡与醒来时间。"
             )
             HorizontalDivider()
             BasicComponent(
@@ -1398,6 +1514,7 @@ private fun sleepDndDiagnosticsText(health: HealthHostControl.Reply?): String {
     val last = when (health.sleepLastEvent()) {
         "FALL_ASLEEP_DND_ON" -> "入睡已开启手机免打扰"
         "FALL_ASLEEP_SKIP_ALREADY_DND" -> "入睡时手机已免打扰（已跳过）"
+        "FALL_ASLEEP_MEDIA_PAUSED" -> "入睡已暂停手机媒体播放"
         "WAKE_UP_DND_OFF" -> "醒来已退出手机免打扰"
         "WAKE_UP_SKIP_ALREADY_OFF" -> "醒来时手机未开免打扰（已跳过）"
         "WAKE_UP_SKIP_NOT_OWNED" -> "醒来已跳过"

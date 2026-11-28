@@ -77,7 +77,39 @@ public final class ModuleScope {
                        TimerOptions timerOptions, Boolean remoteRawCommandDebugEnabled,
                        Boolean remoteGameFlashbackEnabled, Integer remoteGameFlashbackLeadSec,
                        Boolean remoteNotifyMuteDndEnabled, Boolean remoteSleepAutoDndEnabled,
-                       Boolean remoteWakeExitDndEnabled, Boolean remoteNotifySilentPushEnabled) {
+                       Boolean remoteWakeExitDndEnabled, Boolean remoteNotifySilentPushEnabled,
+                       Boolean remoteNotifySilentScreenOnEnabled, Boolean remoteNotifySilentFocusEnabled,
+                       Boolean remoteNotifySilentGameEnabled, Boolean remoteSleepPauseMediaEnabled) {
+        public View(boolean frameworkConnected,
+                    String frameworkName,
+                    String frameworkVersion,
+                    int frameworkApiVersion,
+                    boolean clockGranted, boolean healthGranted, boolean calendarGranted,
+                    boolean wirelessGranted, boolean umsGranted,
+                    boolean clockActive, boolean healthActive, boolean calendarActive,
+                    boolean wirelessActive, boolean umsActive,
+                    TargetRuntime clockRuntime, TargetRuntime healthRuntime,
+                    TargetRuntime calendarRuntime, TargetRuntime wirelessRuntime,
+                    TargetRuntime umsRuntime, TargetRuntime daemonRuntime,
+                    boolean checking,
+                    boolean requestPending, String requestResult,
+                    boolean remotePrefsSupported,
+                    Boolean remoteEnabled, Boolean remoteCalendarEnabled,
+                    Boolean remoteWifiAutoSyncEnabled, Boolean remoteLiveWindowEnabled,
+                    TimerOptions timerOptions, Boolean remoteRawCommandDebugEnabled,
+                    Boolean remoteGameFlashbackEnabled, Integer remoteGameFlashbackLeadSec,
+                    Boolean remoteNotifyMuteDndEnabled, Boolean remoteSleepAutoDndEnabled,
+                    Boolean remoteWakeExitDndEnabled, Boolean remoteNotifySilentPushEnabled) {
+            this(frameworkConnected, frameworkName, frameworkVersion, frameworkApiVersion, clockGranted,
+                    healthGranted, calendarGranted, wirelessGranted, umsGranted, clockActive, healthActive,
+                    calendarActive, wirelessActive, umsActive, clockRuntime, healthRuntime, calendarRuntime,
+                    wirelessRuntime, umsRuntime, daemonRuntime, checking, requestPending, requestResult,
+                    remotePrefsSupported, remoteEnabled, remoteCalendarEnabled, remoteWifiAutoSyncEnabled,
+                    remoteLiveWindowEnabled, timerOptions, remoteRawCommandDebugEnabled,
+                    remoteGameFlashbackEnabled, remoteGameFlashbackLeadSec,
+                    remoteNotifyMuteDndEnabled, remoteSleepAutoDndEnabled, remoteWakeExitDndEnabled,
+                    remoteNotifySilentPushEnabled, null, null, null, null);
+        }
         public View(boolean frameworkConnected,
                     String frameworkName,
                     String frameworkVersion,
@@ -354,8 +386,12 @@ public final class ModuleScope {
     private static Integer remoteGameFlashbackLeadSec;
     private static Boolean remoteNotifyMuteDndEnabled;
     private static Boolean remoteNotifySilentPushEnabled;
+    private static Boolean remoteNotifySilentScreenOnEnabled;
+    private static Boolean remoteNotifySilentFocusEnabled;
+    private static Boolean remoteNotifySilentGameEnabled;
     private static Boolean remoteSleepAutoDndEnabled;
     private static Boolean remoteWakeExitDndEnabled;
+    private static Boolean remoteSleepPauseMediaEnabled;
     private static Boolean remoteRawCommandDebugEnabled;
     private static TargetRuntime clockRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime healthRuntime = TargetRuntime.UNSUPPORTED;
@@ -455,6 +491,21 @@ public final class ModuleScope {
         writeRemoteBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED, enabled, callback);
     }
 
+    /** Persists the screen-unlocked watch silent-push toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteNotifySilentScreenOnEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_SCREEN_ON_ENABLED, enabled, callback);
+    }
+
+    /** Persists the ZenSpace/Focus-mode watch silent-push toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteNotifySilentFocusEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_FOCUS_ENABLED, enabled, callback);
+    }
+
+    /** Persists the game-foreground watch silent-push toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteNotifySilentGameEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED, enabled, callback);
+    }
+
     /** Persists the watch-sleep auto phone DND toggle to LSPosed RemotePreferences. */
     public static void writeRemoteSleepAutoDndEnabled(boolean enabled, Consumer<Boolean> callback) {
         writeRemoteBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, enabled, callback);
@@ -463,6 +514,11 @@ public final class ModuleScope {
     /** Persists the watch-wake auto exit phone DND toggle to LSPosed RemotePreferences. */
     public static void writeRemoteWakeExitDndEnabled(boolean enabled, Consumer<Boolean> callback) {
         writeRemoteBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, enabled, callback);
+    }
+
+    /** Persists the watch-sleep auto pause phone media playback toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteSleepPauseMediaEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, enabled, callback);
     }
 
     /** Persists the opt-in ADB raw watch command debug toggle to LSPosed RemotePreferences. */
@@ -526,8 +582,12 @@ public final class ModuleScope {
                         else if (WatchLinkPrefs.KEY_GAME_FLASHBACK_ENABLED.equals(key)) remoteGameFlashbackEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED.equals(key)) remoteNotifyMuteDndEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED.equals(key)) remoteNotifySilentPushEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_NOTIFY_SILENT_SCREEN_ON_ENABLED.equals(key)) remoteNotifySilentScreenOnEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_NOTIFY_SILENT_FOCUS_ENABLED.equals(key)) remoteNotifySilentFocusEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED.equals(key)) remoteNotifySilentGameEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED.equals(key)) remoteSleepAutoDndEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED.equals(key)) remoteWakeExitDndEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED.equals(key)) remoteSleepPauseMediaEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG.equals(key)) remoteRawCommandDebugEnabled = enabled;
                         ProbeLog.info("REMOTE_PREFS_SAVED");
                         publish();
@@ -741,8 +801,12 @@ public final class ModuleScope {
         remoteGameFlashbackLeadSec = null;
         remoteNotifyMuteDndEnabled = null;
         remoteNotifySilentPushEnabled = null;
+        remoteNotifySilentScreenOnEnabled = null;
+        remoteNotifySilentFocusEnabled = null;
+        remoteNotifySilentGameEnabled = null;
         remoteSleepAutoDndEnabled = null;
         remoteWakeExitDndEnabled = null;
+        remoteSleepPauseMediaEnabled = null;
         remoteRawCommandDebugEnabled = null;
         clockRuntime = TargetRuntime.UNSUPPORTED;
         healthRuntime = TargetRuntime.UNSUPPORTED;
@@ -783,8 +847,12 @@ public final class ModuleScope {
         remoteGameFlashbackLeadSec = null;
         remoteNotifyMuteDndEnabled = null;
         remoteNotifySilentPushEnabled = null;
+        remoteNotifySilentScreenOnEnabled = null;
+        remoteNotifySilentFocusEnabled = null;
+        remoteNotifySilentGameEnabled = null;
         remoteSleepAutoDndEnabled = null;
         remoteWakeExitDndEnabled = null;
+        remoteSleepPauseMediaEnabled = null;
         remoteRawCommandDebugEnabled = null;
         runningTargets.clear();
         daemonTarget = null;
@@ -833,10 +901,18 @@ public final class ModuleScope {
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED, false) : null;
                 remoteNotifySilentPushEnabled = prefs.contains(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED, false) : null;
+                remoteNotifySilentScreenOnEnabled = prefs.contains(WatchLinkPrefs.KEY_NOTIFY_SILENT_SCREEN_ON_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_SCREEN_ON_ENABLED, false) : null;
+                remoteNotifySilentFocusEnabled = prefs.contains(WatchLinkPrefs.KEY_NOTIFY_SILENT_FOCUS_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_FOCUS_ENABLED, false) : null;
+                remoteNotifySilentGameEnabled = prefs.contains(WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED, false) : null;
                 remoteSleepAutoDndEnabled = prefs.contains(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, false) : null;
                 remoteWakeExitDndEnabled = prefs.contains(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, false) : null;
+                remoteSleepPauseMediaEnabled = prefs.contains(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, false) : null;
                 remoteRawCommandDebugEnabled = prefs.contains(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, false) : null;
             } catch (RuntimeException error) {
@@ -962,7 +1038,8 @@ public final class ModuleScope {
                 remoteWifiAutoSyncEnabled, remoteLiveWindowEnabled, timerOptions, remoteRawCommandDebugEnabled,
                 remoteGameFlashbackEnabled, remoteGameFlashbackLeadSec,
                 remoteNotifyMuteDndEnabled, remoteSleepAutoDndEnabled, remoteWakeExitDndEnabled,
-                remoteNotifySilentPushEnabled);
+                remoteNotifySilentPushEnabled, remoteNotifySilentScreenOnEnabled,
+                remoteNotifySilentFocusEnabled, remoteNotifySilentGameEnabled, remoteSleepPauseMediaEnabled);
     }
 
     private ModuleScope() {}

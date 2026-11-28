@@ -24,8 +24,12 @@ final class HostSettings {
     private volatile Consumer<Integer> gameFlashbackLeadSecChangedCallback;
     private volatile Consumer<Boolean> notifyMuteDndChangedCallback;
     private volatile Consumer<Boolean> notifySilentPushChangedCallback;
+    private volatile Consumer<Boolean> notifySilentScreenOnChangedCallback;
+    private volatile Consumer<Boolean> notifySilentFocusChangedCallback;
+    private volatile Consumer<Boolean> notifySilentGameChangedCallback;
     private volatile Consumer<Boolean> sleepAutoDndChangedCallback;
     private volatile Consumer<Boolean> wakeExitDndChangedCallback;
+    private volatile Consumer<Boolean> sleepPauseMediaChangedCallback;
     private volatile Consumer<Boolean> rawCommandDebugChangedCallback;
 
     HostSettings(SharedPreferences remote, SharedPreferences local) {
@@ -77,6 +81,21 @@ final class HostSettings {
                     if (callback != null) {
                         callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED, false));
                     }
+                } else if (WatchLinkPrefs.KEY_NOTIFY_SILENT_SCREEN_ON_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = notifySilentScreenOnChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_SCREEN_ON_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_NOTIFY_SILENT_FOCUS_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = notifySilentFocusChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_FOCUS_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = notifySilentGameChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED, false));
+                    }
                 } else if (WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED.equals(key)) {
                     Consumer<Boolean> callback = sleepAutoDndChangedCallback;
                     if (callback != null) {
@@ -86,6 +105,11 @@ final class HostSettings {
                     Consumer<Boolean> callback = wakeExitDndChangedCallback;
                     if (callback != null) {
                         callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = sleepPauseMediaChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, false));
                     }
                 } else if (WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG.equals(key)) {
                     Consumer<Boolean> callback = rawCommandDebugChangedCallback;
@@ -171,12 +195,28 @@ final class HostSettings {
         return readBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED);
     }
 
+    boolean isNotifySilentScreenOnEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_SCREEN_ON_ENABLED);
+    }
+
+    boolean isNotifySilentFocusEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_FOCUS_ENABLED);
+    }
+
+    boolean isNotifySilentGameEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED);
+    }
+
     boolean isSleepAutoDndEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED);
     }
 
     boolean isWakeExitDndEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED);
+    }
+
+    boolean isSleepPauseMediaEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED);
     }
 
     boolean isRawCommandDebugEnabled() {
@@ -238,12 +278,28 @@ final class HostSettings {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED, enabled).commit();
     }
 
+    boolean setLocalNotifySilentScreenOnFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_SCREEN_ON_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalNotifySilentFocusFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_FOCUS_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalNotifySilentGameFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED, enabled).commit();
+    }
+
     boolean setLocalSleepAutoDndFallback(boolean enabled) {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, enabled).commit();
     }
 
     boolean setLocalWakeExitDndFallback(boolean enabled) {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalSleepPauseMediaFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED, enabled).commit();
     }
 
     boolean setLocalRawCommandDebugFallback(boolean enabled) {
@@ -282,12 +338,28 @@ final class HostSettings {
         notifySilentPushChangedCallback = callback;
     }
 
+    void onNotifySilentScreenOnChanged(Consumer<Boolean> callback) {
+        notifySilentScreenOnChangedCallback = callback;
+    }
+
+    void onNotifySilentFocusChanged(Consumer<Boolean> callback) {
+        notifySilentFocusChangedCallback = callback;
+    }
+
+    void onNotifySilentGameChanged(Consumer<Boolean> callback) {
+        notifySilentGameChangedCallback = callback;
+    }
+
     void onSleepAutoDndChanged(Consumer<Boolean> callback) {
         sleepAutoDndChangedCallback = callback;
     }
 
     void onWakeExitDndChanged(Consumer<Boolean> callback) {
         wakeExitDndChangedCallback = callback;
+    }
+
+    void onSleepPauseMediaChanged(Consumer<Boolean> callback) {
+        sleepPauseMediaChangedCallback = callback;
     }
 
     void onRawCommandDebugChanged(Consumer<Boolean> callback) {
@@ -304,8 +376,12 @@ final class HostSettings {
         gameFlashbackLeadSecChangedCallback = null;
         notifyMuteDndChangedCallback = null;
         notifySilentPushChangedCallback = null;
+        notifySilentScreenOnChangedCallback = null;
+        notifySilentFocusChangedCallback = null;
+        notifySilentGameChangedCallback = null;
         sleepAutoDndChangedCallback = null;
         wakeExitDndChangedCallback = null;
+        sleepPauseMediaChangedCallback = null;
         rawCommandDebugChangedCallback = null;
         if (remote != null && remoteListener != null) {
             try { remote.unregisterOnSharedPreferenceChangeListener(remoteListener); }
