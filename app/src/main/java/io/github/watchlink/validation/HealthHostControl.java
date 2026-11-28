@@ -39,6 +39,14 @@ public final class HealthHostControl {
             ENABLE_NOTIFY_SILENT_FOCUS = "ENABLE_NOTIFY_SILENT_FOCUS", DISABLE_NOTIFY_SILENT_FOCUS = "DISABLE_NOTIFY_SILENT_FOCUS",
             ENABLE_NOTIFY_SILENT_GAME = "ENABLE_NOTIFY_SILENT_GAME", DISABLE_NOTIFY_SILENT_GAME = "DISABLE_NOTIFY_SILENT_GAME",
             ENABLE_NOTIFY_DISCONNECT_STAGE = "ENABLE_NOTIFY_DISCONNECT_STAGE", DISABLE_NOTIFY_DISCONNECT_STAGE = "DISABLE_NOTIFY_DISCONNECT_STAGE",
+            ENABLE_NOTIFY_BURST_THROTTLE = "ENABLE_NOTIFY_BURST_THROTTLE", DISABLE_NOTIFY_BURST_THROTTLE = "DISABLE_NOTIFY_BURST_THROTTLE",
+            SET_NOTIFY_BURST_THROTTLE_SEC_PREFIX = "SET_NOTIFY_BURST_THROTTLE_SEC:",
+            ENABLE_BATTERY_PHONE_FULL_WATCH = "ENABLE_BATTERY_PHONE_FULL_WATCH", DISABLE_BATTERY_PHONE_FULL_WATCH = "DISABLE_BATTERY_PHONE_FULL_WATCH",
+            ENABLE_BATTERY_PHONE_LOW_WATCH = "ENABLE_BATTERY_PHONE_LOW_WATCH", DISABLE_BATTERY_PHONE_LOW_WATCH = "DISABLE_BATTERY_PHONE_LOW_WATCH",
+            SET_BATTERY_PHONE_LOW_THRESHOLD_PREFIX = "SET_BATTERY_PHONE_LOW_THRESHOLD:",
+            ENABLE_BATTERY_WATCH_FULL_PHONE = "ENABLE_BATTERY_WATCH_FULL_PHONE", DISABLE_BATTERY_WATCH_FULL_PHONE = "DISABLE_BATTERY_WATCH_FULL_PHONE",
+            ENABLE_BATTERY_WATCH_LOW_PHONE = "ENABLE_BATTERY_WATCH_LOW_PHONE", DISABLE_BATTERY_WATCH_LOW_PHONE = "DISABLE_BATTERY_WATCH_LOW_PHONE",
+            SET_BATTERY_WATCH_LOW_THRESHOLD_PREFIX = "SET_BATTERY_WATCH_LOW_THRESHOLD:",
             ENABLE_SLEEP_AUTO_DND = "ENABLE_SLEEP_AUTO_DND", DISABLE_SLEEP_AUTO_DND = "DISABLE_SLEEP_AUTO_DND",
             ENABLE_WAKE_EXIT_DND = "ENABLE_WAKE_EXIT_DND", DISABLE_WAKE_EXIT_DND = "DISABLE_WAKE_EXIT_DND",
             ENABLE_SLEEP_PAUSE_MEDIA = "ENABLE_SLEEP_PAUSE_MEDIA", DISABLE_SLEEP_PAUSE_MEDIA = "DISABLE_SLEEP_PAUSE_MEDIA",
@@ -77,6 +85,45 @@ public final class HealthHostControl {
             int v = Integer.parseInt(tail);
             return (v >= WatchLinkPrefs.MIN_GAME_FLASHBACK_LEAD_SEC && v <= WatchLinkPrefs.MAX_GAME_FLASHBACK_LEAD_SEC)
                     ? v : -1;
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
+    public static String setNotifyBurstThrottleSecCommand(int sec) {
+        return SET_NOTIFY_BURST_THROTTLE_SEC_PREFIX + WatchLinkPrefs.clampNotifyBurstThrottleSec(sec);
+    }
+
+    public static int parseNotifyBurstThrottleSecCommand(String command) {
+        return parseBoundedIntCommand(command, SET_NOTIFY_BURST_THROTTLE_SEC_PREFIX,
+                WatchLinkPrefs.MIN_NOTIFY_BURST_THROTTLE_SEC, WatchLinkPrefs.MAX_NOTIFY_BURST_THROTTLE_SEC);
+    }
+
+    public static String setBatteryPhoneLowThresholdCommand(int percent) {
+        return SET_BATTERY_PHONE_LOW_THRESHOLD_PREFIX + WatchLinkPrefs.clampBatteryLowThreshold(percent);
+    }
+
+    public static int parseBatteryPhoneLowThresholdCommand(String command) {
+        return parseBoundedIntCommand(command, SET_BATTERY_PHONE_LOW_THRESHOLD_PREFIX,
+                WatchLinkPrefs.MIN_BATTERY_LOW_THRESHOLD, WatchLinkPrefs.MAX_BATTERY_LOW_THRESHOLD);
+    }
+
+    public static String setBatteryWatchLowThresholdCommand(int percent) {
+        return SET_BATTERY_WATCH_LOW_THRESHOLD_PREFIX + WatchLinkPrefs.clampBatteryLowThreshold(percent);
+    }
+
+    public static int parseBatteryWatchLowThresholdCommand(String command) {
+        return parseBoundedIntCommand(command, SET_BATTERY_WATCH_LOW_THRESHOLD_PREFIX,
+                WatchLinkPrefs.MIN_BATTERY_LOW_THRESHOLD, WatchLinkPrefs.MAX_BATTERY_LOW_THRESHOLD);
+    }
+
+    private static int parseBoundedIntCommand(String command, String prefix, int min, int max) {
+        if (command == null || !command.startsWith(prefix)) return -1;
+        String tail = command.substring(prefix.length());
+        if (!tail.matches("\\d{1,3}")) return -1;
+        try {
+            int v = Integer.parseInt(tail);
+            return (v >= min && v <= max) ? v : -1;
         } catch (NumberFormatException ignored) {
             return -1;
         }
@@ -146,7 +193,55 @@ public final class HealthHostControl {
                         boolean myDevicesCardEnabled, String myDevicesTapTarget,
                         boolean sleepStopVideoEnabled, String sleepStopVideoCustomPkgs,
                         boolean writeSettingsAccess,
-                        boolean notifyDisconnectStageEnabled) {
+                        boolean notifyDisconnectStageEnabled,
+                        boolean notifyBurstThrottleEnabled, int notifyBurstThrottleSec,
+                        boolean batteryPhoneFullWatchEnabled, boolean batteryPhoneLowWatchEnabled,
+                        int batteryPhoneLowThreshold,
+                        boolean batteryWatchFullPhoneEnabled, boolean batteryWatchLowPhoneEnabled,
+                        int batteryWatchLowThreshold) {
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                     boolean rawCommandDebugEnabled,
+                     boolean gameFlashbackEnabled, int gameFlashbackLeadSec,
+                     boolean notifyMuteDndEnabled, boolean sleepAutoDndEnabled,
+                     String sleepWatchSupport, boolean sleepHookReady, boolean dndPolicyAccess,
+                     String sleepLastEvent, long sleepLastAt,
+                     long sleepLastFallAsleepAt, long sleepLastWakeUpAt,
+                     boolean wakeExitDndEnabled, boolean notifySilentPushEnabled,
+                     String silentPushWatchSupport,
+                     boolean notifySilentScreenOnEnabled, boolean notifySilentFocusEnabled,
+                     boolean notifySilentGameEnabled, boolean sleepPauseMediaEnabled,
+                     boolean watchConnected, String watchName, int watchBattery,
+                     boolean watchCharging, long watchBatteryAt,
+                     boolean myDevicesCardEnabled, String myDevicesTapTarget,
+                     boolean sleepStopVideoEnabled, String sleepStopVideoCustomPkgs,
+                     boolean writeSettingsAccess,
+                     boolean notifyDisconnectStageEnabled) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, rawCommandDebugEnabled,
+                    gameFlashbackEnabled, gameFlashbackLeadSec,
+                    notifyMuteDndEnabled, sleepAutoDndEnabled, sleepWatchSupport, sleepHookReady,
+                    dndPolicyAccess, sleepLastEvent, sleepLastAt, sleepLastFallAsleepAt, sleepLastWakeUpAt,
+                    wakeExitDndEnabled, notifySilentPushEnabled, silentPushWatchSupport,
+                    notifySilentScreenOnEnabled, notifySilentFocusEnabled, notifySilentGameEnabled,
+                    sleepPauseMediaEnabled, watchConnected, watchName, watchBattery, watchCharging,
+                    watchBatteryAt, myDevicesCardEnabled, myDevicesTapTarget,
+                    sleepStopVideoEnabled, sleepStopVideoCustomPkgs, writeSettingsAccess,
+                    notifyDisconnectStageEnabled,
+                    false, WatchLinkPrefs.DEFAULT_NOTIFY_BURST_THROTTLE_SEC,
+                    false, false, WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD,
+                    false, false, WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD);
+        }
         public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
                      boolean serviceWitness, boolean sdkObserver, String symbolSource,
                      String watchState, String lastDispatchMode, String lastActionSource,
@@ -570,6 +665,20 @@ public final class HealthHostControl {
                     : "";
             writeSettingsAccess = reachable && writeSettingsAccess;
             notifyDisconnectStageEnabled = reachable && notifyDisconnectStageEnabled;
+            notifyBurstThrottleEnabled = reachable && notifyBurstThrottleEnabled;
+            notifyBurstThrottleSec = reachable
+                    ? WatchLinkPrefs.clampNotifyBurstThrottleSec(notifyBurstThrottleSec)
+                    : WatchLinkPrefs.DEFAULT_NOTIFY_BURST_THROTTLE_SEC;
+            batteryPhoneFullWatchEnabled = reachable && batteryPhoneFullWatchEnabled;
+            batteryPhoneLowWatchEnabled = reachable && batteryPhoneLowWatchEnabled;
+            batteryPhoneLowThreshold = reachable
+                    ? WatchLinkPrefs.clampBatteryLowThreshold(batteryPhoneLowThreshold)
+                    : WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD;
+            batteryWatchFullPhoneEnabled = reachable && batteryWatchFullPhoneEnabled;
+            batteryWatchLowPhoneEnabled = reachable && batteryWatchLowPhoneEnabled;
+            batteryWatchLowThreshold = reachable
+                    ? WatchLinkPrefs.clampBatteryLowThreshold(batteryWatchLowThreshold)
+                    : WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD;
         }
 
         private static String sanitizeWatchName(String raw) {
@@ -599,6 +708,14 @@ public final class HealthHostControl {
                 || ENABLE_NOTIFY_SILENT_FOCUS.equals(value) || DISABLE_NOTIFY_SILENT_FOCUS.equals(value)
                 || ENABLE_NOTIFY_SILENT_GAME.equals(value) || DISABLE_NOTIFY_SILENT_GAME.equals(value)
                 || ENABLE_NOTIFY_DISCONNECT_STAGE.equals(value) || DISABLE_NOTIFY_DISCONNECT_STAGE.equals(value)
+                || ENABLE_NOTIFY_BURST_THROTTLE.equals(value) || DISABLE_NOTIFY_BURST_THROTTLE.equals(value)
+                || parseNotifyBurstThrottleSecCommand(value) >= 0
+                || ENABLE_BATTERY_PHONE_FULL_WATCH.equals(value) || DISABLE_BATTERY_PHONE_FULL_WATCH.equals(value)
+                || ENABLE_BATTERY_PHONE_LOW_WATCH.equals(value) || DISABLE_BATTERY_PHONE_LOW_WATCH.equals(value)
+                || parseBatteryPhoneLowThresholdCommand(value) >= 0
+                || ENABLE_BATTERY_WATCH_FULL_PHONE.equals(value) || DISABLE_BATTERY_WATCH_FULL_PHONE.equals(value)
+                || ENABLE_BATTERY_WATCH_LOW_PHONE.equals(value) || DISABLE_BATTERY_WATCH_LOW_PHONE.equals(value)
+                || parseBatteryWatchLowThresholdCommand(value) >= 0
                 || ENABLE_SLEEP_AUTO_DND.equals(value) || DISABLE_SLEEP_AUTO_DND.equals(value)
                 || ENABLE_WAKE_EXIT_DND.equals(value) || DISABLE_WAKE_EXIT_DND.equals(value)
                 || ENABLE_SLEEP_PAUSE_MEDIA.equals(value) || DISABLE_SLEEP_PAUSE_MEDIA.equals(value)
@@ -697,6 +814,14 @@ public final class HealthHostControl {
                             details.putString("sleepStopVideoCustomPkgs", reply.sleepStopVideoCustomPkgs());
                             details.putBoolean("writeSettingsAccess", reply.writeSettingsAccess());
                             details.putBoolean("notifyDisconnectStageEnabled", reply.notifyDisconnectStageEnabled());
+                            details.putBoolean("notifyBurstThrottleEnabled", reply.notifyBurstThrottleEnabled());
+                            details.putInt("notifyBurstThrottleSec", reply.notifyBurstThrottleSec());
+                            details.putBoolean("batteryPhoneFullWatchEnabled", reply.batteryPhoneFullWatchEnabled());
+                            details.putBoolean("batteryPhoneLowWatchEnabled", reply.batteryPhoneLowWatchEnabled());
+                            details.putInt("batteryPhoneLowThreshold", reply.batteryPhoneLowThreshold());
+                            details.putBoolean("batteryWatchFullPhoneEnabled", reply.batteryWatchFullPhoneEnabled());
+                            details.putBoolean("batteryWatchLowPhoneEnabled", reply.batteryWatchLowPhoneEnabled());
+                            details.putInt("batteryWatchLowThreshold", reply.batteryWatchLowThreshold());
                             pending.setResult(ACK, null, details);
                         } catch (RuntimeException e) {
                             ProbeLog.failure("HEALTH_HOST_CONTROL_FAILED", e);
@@ -799,7 +924,15 @@ public final class HealthHostControl {
                                         data.getBoolean("sleepStopVideoEnabled", false),
                                         data.getString("sleepStopVideoCustomPkgs", ""),
                                         data.getBoolean("writeSettingsAccess", false),
-                                        data.getBoolean("notifyDisconnectStageEnabled", false)));
+                                        data.getBoolean("notifyDisconnectStageEnabled", false),
+                                        data.getBoolean("notifyBurstThrottleEnabled", false),
+                                        data.getInt("notifyBurstThrottleSec", WatchLinkPrefs.DEFAULT_NOTIFY_BURST_THROTTLE_SEC),
+                                        data.getBoolean("batteryPhoneFullWatchEnabled", false),
+                                        data.getBoolean("batteryPhoneLowWatchEnabled", false),
+                                        data.getInt("batteryPhoneLowThreshold", WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD),
+                                        data.getBoolean("batteryWatchFullPhoneEnabled", false),
+                                        data.getBoolean("batteryWatchLowPhoneEnabled", false),
+                                        data.getInt("batteryWatchLowThreshold", WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD)));
                             } else callback.accept(unavailable());
                         }
                     }, main, 0, null, null);

@@ -84,7 +84,54 @@ public final class ModuleScope {
                        boolean myDevicesGranted, boolean myDevicesActive, TargetRuntime myDevicesRuntime,
                        Boolean remoteMyDevicesCardEnabled, String remoteMyDevicesTapTarget,
                        Boolean remoteSleepStopVideoEnabled, String remoteSleepStopVideoCustomPkgs,
-                       Boolean remoteNotifyDisconnectStageEnabled) {
+                       Boolean remoteNotifyDisconnectStageEnabled,
+                       Boolean remoteNotifyBurstThrottleEnabled, Integer remoteNotifyBurstThrottleSec,
+                       Boolean remoteBatteryPhoneFullWatchEnabled, Boolean remoteBatteryPhoneLowWatchEnabled,
+                       Integer remoteBatteryPhoneLowThreshold,
+                       Boolean remoteBatteryWatchFullPhoneEnabled, Boolean remoteBatteryWatchLowPhoneEnabled,
+                       Integer remoteBatteryWatchLowThreshold) {
+        public View(boolean frameworkConnected,
+                    String frameworkName,
+                    String frameworkVersion,
+                    int frameworkApiVersion,
+                    boolean clockGranted, boolean healthGranted, boolean calendarGranted,
+                    boolean wirelessGranted, boolean umsGranted,
+                    boolean clockActive, boolean healthActive, boolean calendarActive,
+                    boolean wirelessActive, boolean umsActive,
+                    TargetRuntime clockRuntime, TargetRuntime healthRuntime,
+                    TargetRuntime calendarRuntime, TargetRuntime wirelessRuntime,
+                    TargetRuntime umsRuntime, TargetRuntime daemonRuntime,
+                    boolean checking,
+                    boolean requestPending, String requestResult,
+                    boolean remotePrefsSupported,
+                    Boolean remoteEnabled, Boolean remoteCalendarEnabled,
+                    Boolean remoteWifiAutoSyncEnabled, Boolean remoteLiveWindowEnabled,
+                    TimerOptions timerOptions, Boolean remoteRawCommandDebugEnabled,
+                    Boolean remoteGameFlashbackEnabled, Integer remoteGameFlashbackLeadSec,
+                    Boolean remoteNotifyMuteDndEnabled, Boolean remoteSleepAutoDndEnabled,
+                    Boolean remoteWakeExitDndEnabled, Boolean remoteNotifySilentPushEnabled,
+                    Boolean remoteNotifySilentScreenOnEnabled, Boolean remoteNotifySilentFocusEnabled,
+                    Boolean remoteNotifySilentGameEnabled, Boolean remoteSleepPauseMediaEnabled,
+                    boolean myDevicesGranted, boolean myDevicesActive, TargetRuntime myDevicesRuntime,
+                    Boolean remoteMyDevicesCardEnabled, String remoteMyDevicesTapTarget,
+                    Boolean remoteSleepStopVideoEnabled, String remoteSleepStopVideoCustomPkgs,
+                    Boolean remoteNotifyDisconnectStageEnabled) {
+            this(frameworkConnected, frameworkName, frameworkVersion, frameworkApiVersion, clockGranted,
+                    healthGranted, calendarGranted, wirelessGranted, umsGranted, clockActive, healthActive,
+                    calendarActive, wirelessActive, umsActive, clockRuntime, healthRuntime, calendarRuntime,
+                    wirelessRuntime, umsRuntime, daemonRuntime, checking, requestPending, requestResult,
+                    remotePrefsSupported, remoteEnabled, remoteCalendarEnabled, remoteWifiAutoSyncEnabled,
+                    remoteLiveWindowEnabled, timerOptions, remoteRawCommandDebugEnabled,
+                    remoteGameFlashbackEnabled, remoteGameFlashbackLeadSec,
+                    remoteNotifyMuteDndEnabled, remoteSleepAutoDndEnabled, remoteWakeExitDndEnabled,
+                    remoteNotifySilentPushEnabled, remoteNotifySilentScreenOnEnabled,
+                    remoteNotifySilentFocusEnabled, remoteNotifySilentGameEnabled, remoteSleepPauseMediaEnabled,
+                    myDevicesGranted, myDevicesActive, myDevicesRuntime,
+                    remoteMyDevicesCardEnabled, remoteMyDevicesTapTarget,
+                    remoteSleepStopVideoEnabled, remoteSleepStopVideoCustomPkgs,
+                    remoteNotifyDisconnectStageEnabled,
+                    null, null, null, null, null, null, null, null);
+        }
         public View(boolean frameworkConnected,
                     String frameworkName,
                     String frameworkVersion,
@@ -512,6 +559,14 @@ public final class ModuleScope {
     private static Boolean remoteSleepStopVideoEnabled;
     private static String remoteSleepStopVideoCustomPkgs;
     private static Boolean remoteNotifyDisconnectStageEnabled;
+    private static Boolean remoteNotifyBurstThrottleEnabled;
+    private static Integer remoteNotifyBurstThrottleSec;
+    private static Boolean remoteBatteryPhoneFullWatchEnabled;
+    private static Boolean remoteBatteryPhoneLowWatchEnabled;
+    private static Integer remoteBatteryPhoneLowThreshold;
+    private static Boolean remoteBatteryWatchFullPhoneEnabled;
+    private static Boolean remoteBatteryWatchLowPhoneEnabled;
+    private static Integer remoteBatteryWatchLowThreshold;
     private static Boolean remoteMyDevicesCardEnabled;
     private static String remoteMyDevicesTapTarget;
     private static Boolean remoteRawCommandDebugEnabled;
@@ -634,6 +689,49 @@ public final class ModuleScope {
         writeRemoteBoolean(WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED, enabled, callback);
     }
 
+    /** Persists the same-app burst notification throttling toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteNotifyBurstThrottleEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_ENABLED, enabled, callback);
+    }
+
+    /** Persists the same-app burst notification throttle interval (1..300s) to LSPosed RemotePreferences. */
+    public static void writeRemoteNotifyBurstThrottleSec(int sec, Consumer<Boolean> callback) {
+        writeRemoteInt(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_SEC,
+                WatchLinkPrefs.clampNotifyBurstThrottleSec(sec), callback);
+    }
+
+    /** Persists the phone-full -> watch alert toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteBatteryPhoneFullWatchEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_BATTERY_PHONE_FULL_WATCH_ENABLED, enabled, callback);
+    }
+
+    /** Persists the phone-low -> watch alert toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteBatteryPhoneLowWatchEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_WATCH_ENABLED, enabled, callback);
+    }
+
+    /** Persists the phone low-battery alert threshold (1..80%) to LSPosed RemotePreferences. */
+    public static void writeRemoteBatteryPhoneLowThreshold(int percent, Consumer<Boolean> callback) {
+        writeRemoteInt(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_THRESHOLD,
+                WatchLinkPrefs.clampBatteryLowThreshold(percent), callback);
+    }
+
+    /** Persists the watch-full -> phone alert toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteBatteryWatchFullPhoneEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_BATTERY_WATCH_FULL_PHONE_ENABLED, enabled, callback);
+    }
+
+    /** Persists the watch-low -> phone alert toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteBatteryWatchLowPhoneEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_PHONE_ENABLED, enabled, callback);
+    }
+
+    /** Persists the watch low-battery alert threshold (1..80%) to LSPosed RemotePreferences. */
+    public static void writeRemoteBatteryWatchLowThreshold(int percent, Consumer<Boolean> callback) {
+        writeRemoteInt(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_THRESHOLD,
+                WatchLinkPrefs.clampBatteryLowThreshold(percent), callback);
+    }
+
     /** Persists the watch-sleep auto phone DND toggle to LSPosed RemotePreferences. */
     public static void writeRemoteSleepAutoDndEnabled(boolean enabled, Consumer<Boolean> callback) {
         writeRemoteBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, enabled, callback);
@@ -744,6 +842,12 @@ public final class ModuleScope {
                         remotePrefsSupported = true;
                         if (WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC.equals(key)) {
                             remoteGameFlashbackLeadSec = value;
+                        } else if (WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_SEC.equals(key)) {
+                            remoteNotifyBurstThrottleSec = value;
+                        } else if (WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_THRESHOLD.equals(key)) {
+                            remoteBatteryPhoneLowThreshold = value;
+                        } else if (WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_THRESHOLD.equals(key)) {
+                            remoteBatteryWatchLowThreshold = value;
                         }
                         ProbeLog.info("REMOTE_PREFS_SAVED");
                         publish();
@@ -783,6 +887,11 @@ public final class ModuleScope {
                         else if (WatchLinkPrefs.KEY_NOTIFY_SILENT_FOCUS_ENABLED.equals(key)) remoteNotifySilentFocusEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED.equals(key)) remoteNotifySilentGameEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED.equals(key)) remoteNotifyDisconnectStageEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_ENABLED.equals(key)) remoteNotifyBurstThrottleEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_BATTERY_PHONE_FULL_WATCH_ENABLED.equals(key)) remoteBatteryPhoneFullWatchEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_WATCH_ENABLED.equals(key)) remoteBatteryPhoneLowWatchEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_BATTERY_WATCH_FULL_PHONE_ENABLED.equals(key)) remoteBatteryWatchFullPhoneEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_PHONE_ENABLED.equals(key)) remoteBatteryWatchLowPhoneEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED.equals(key)) remoteSleepAutoDndEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED.equals(key)) remoteWakeExitDndEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_SLEEP_PAUSE_MEDIA_ENABLED.equals(key)) remoteSleepPauseMediaEnabled = enabled;
@@ -1010,6 +1119,14 @@ public final class ModuleScope {
         remoteNotifySilentFocusEnabled = null;
         remoteNotifySilentGameEnabled = null;
         remoteNotifyDisconnectStageEnabled = null;
+        remoteNotifyBurstThrottleEnabled = null;
+        remoteNotifyBurstThrottleSec = null;
+        remoteBatteryPhoneFullWatchEnabled = null;
+        remoteBatteryPhoneLowWatchEnabled = null;
+        remoteBatteryPhoneLowThreshold = null;
+        remoteBatteryWatchFullPhoneEnabled = null;
+        remoteBatteryWatchLowPhoneEnabled = null;
+        remoteBatteryWatchLowThreshold = null;
         remoteSleepAutoDndEnabled = null;
         remoteWakeExitDndEnabled = null;
         remoteSleepPauseMediaEnabled = null;
@@ -1062,6 +1179,14 @@ public final class ModuleScope {
         remoteNotifySilentFocusEnabled = null;
         remoteNotifySilentGameEnabled = null;
         remoteNotifyDisconnectStageEnabled = null;
+        remoteNotifyBurstThrottleEnabled = null;
+        remoteNotifyBurstThrottleSec = null;
+        remoteBatteryPhoneFullWatchEnabled = null;
+        remoteBatteryPhoneLowWatchEnabled = null;
+        remoteBatteryPhoneLowThreshold = null;
+        remoteBatteryWatchFullPhoneEnabled = null;
+        remoteBatteryWatchLowPhoneEnabled = null;
+        remoteBatteryWatchLowThreshold = null;
         remoteSleepAutoDndEnabled = null;
         remoteWakeExitDndEnabled = null;
         remoteSleepPauseMediaEnabled = null;
@@ -1126,6 +1251,28 @@ public final class ModuleScope {
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_GAME_ENABLED, false) : null;
                 remoteNotifyDisconnectStageEnabled = prefs.contains(WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED, false) : null;
+                remoteNotifyBurstThrottleEnabled = prefs.contains(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_ENABLED, false) : null;
+                remoteNotifyBurstThrottleSec = prefs.contains(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_SEC)
+                        ? WatchLinkPrefs.clampNotifyBurstThrottleSec(
+                                prefs.getInt(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_SEC,
+                                        WatchLinkPrefs.DEFAULT_NOTIFY_BURST_THROTTLE_SEC)) : null;
+                remoteBatteryPhoneFullWatchEnabled = prefs.contains(WatchLinkPrefs.KEY_BATTERY_PHONE_FULL_WATCH_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_BATTERY_PHONE_FULL_WATCH_ENABLED, false) : null;
+                remoteBatteryPhoneLowWatchEnabled = prefs.contains(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_WATCH_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_WATCH_ENABLED, false) : null;
+                remoteBatteryPhoneLowThreshold = prefs.contains(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_THRESHOLD)
+                        ? WatchLinkPrefs.clampBatteryLowThreshold(
+                                prefs.getInt(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_THRESHOLD,
+                                        WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD)) : null;
+                remoteBatteryWatchFullPhoneEnabled = prefs.contains(WatchLinkPrefs.KEY_BATTERY_WATCH_FULL_PHONE_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_BATTERY_WATCH_FULL_PHONE_ENABLED, false) : null;
+                remoteBatteryWatchLowPhoneEnabled = prefs.contains(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_PHONE_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_PHONE_ENABLED, false) : null;
+                remoteBatteryWatchLowThreshold = prefs.contains(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_THRESHOLD)
+                        ? WatchLinkPrefs.clampBatteryLowThreshold(
+                                prefs.getInt(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_THRESHOLD,
+                                        WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD)) : null;
                 remoteSleepAutoDndEnabled = prefs.contains(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, false) : null;
                 remoteWakeExitDndEnabled = prefs.contains(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED)
@@ -1284,7 +1431,12 @@ public final class ModuleScope {
                 myDevicesActive, myDevicesRuntime,
                 remoteMyDevicesCardEnabled, remoteMyDevicesTapTarget,
                 remoteSleepStopVideoEnabled, remoteSleepStopVideoCustomPkgs,
-                remoteNotifyDisconnectStageEnabled);
+                remoteNotifyDisconnectStageEnabled,
+                remoteNotifyBurstThrottleEnabled, remoteNotifyBurstThrottleSec,
+                remoteBatteryPhoneFullWatchEnabled, remoteBatteryPhoneLowWatchEnabled,
+                remoteBatteryPhoneLowThreshold,
+                remoteBatteryWatchFullPhoneEnabled, remoteBatteryWatchLowPhoneEnabled,
+                remoteBatteryWatchLowThreshold);
     }
 
     private ModuleScope() {}

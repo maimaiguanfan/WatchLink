@@ -23,6 +23,14 @@ public final class WatchLinkPrefs {
     public static final String KEY_NOTIFY_SILENT_FOCUS_ENABLED = "notify_silent_focus_enabled";
     public static final String KEY_NOTIFY_SILENT_GAME_ENABLED = "notify_silent_game_enabled";
     public static final String KEY_NOTIFY_DISCONNECT_STAGE_ENABLED = "notify_disconnect_stage_enabled";
+    public static final String KEY_NOTIFY_BURST_THROTTLE_ENABLED = "notify_burst_throttle_enabled";
+    public static final String KEY_NOTIFY_BURST_THROTTLE_SEC = "notify_burst_throttle_sec";
+    public static final String KEY_BATTERY_PHONE_FULL_WATCH_ENABLED = "battery_phone_full_watch_enabled";
+    public static final String KEY_BATTERY_PHONE_LOW_WATCH_ENABLED = "battery_phone_low_watch_enabled";
+    public static final String KEY_BATTERY_PHONE_LOW_THRESHOLD = "battery_phone_low_threshold";
+    public static final String KEY_BATTERY_WATCH_FULL_PHONE_ENABLED = "battery_watch_full_phone_enabled";
+    public static final String KEY_BATTERY_WATCH_LOW_PHONE_ENABLED = "battery_watch_low_phone_enabled";
+    public static final String KEY_BATTERY_WATCH_LOW_THRESHOLD = "battery_watch_low_threshold";
     public static final String KEY_SLEEP_AUTO_DND_ENABLED = "sleep_auto_dnd_enabled";
     public static final String KEY_WAKE_EXIT_DND_ENABLED = "wake_exit_dnd_enabled";
     public static final String KEY_SLEEP_PAUSE_MEDIA_ENABLED = "sleep_pause_media_enabled";
@@ -46,6 +54,22 @@ public final class WatchLinkPrefs {
 
     public static int clampGameFlashbackLeadSec(int leadSec) {
         return Math.max(MIN_GAME_FLASHBACK_LEAD_SEC, Math.min(MAX_GAME_FLASHBACK_LEAD_SEC, leadSec));
+    }
+
+    public static final int DEFAULT_NOTIFY_BURST_THROTTLE_SEC = 10;
+    public static final int MIN_NOTIFY_BURST_THROTTLE_SEC = 1;
+    public static final int MAX_NOTIFY_BURST_THROTTLE_SEC = 300;
+
+    public static int clampNotifyBurstThrottleSec(int sec) {
+        return Math.max(MIN_NOTIFY_BURST_THROTTLE_SEC, Math.min(MAX_NOTIFY_BURST_THROTTLE_SEC, sec));
+    }
+
+    public static final int DEFAULT_BATTERY_LOW_THRESHOLD = 20;
+    public static final int MIN_BATTERY_LOW_THRESHOLD = 1;
+    public static final int MAX_BATTERY_LOW_THRESHOLD = 80;
+
+    public static int clampBatteryLowThreshold(int percent) {
+        return Math.max(MIN_BATTERY_LOW_THRESHOLD, Math.min(MAX_BATTERY_LOW_THRESHOLD, percent));
     }
 
     private WatchLinkPrefs() {}

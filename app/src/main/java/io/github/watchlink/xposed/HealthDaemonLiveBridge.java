@@ -121,6 +121,13 @@ final class HealthDaemonLiveBridge {
                     Object arg = chain.getArg(0);
                     if (arg instanceof StatusBarNotification sbn) {
                         Notification n = sbn.getNotification();
+                        if (TargetProfile.HEALTH.packageName.equals(sbn.getPackageName())
+                                && n != null && n.extras != null
+                                && n.extras.getBoolean(
+                                        HealthBatteryAlertBridge.EXTRA_WATCHLINK_PHONE_LOCAL_BATTERY_ALERT, false)) {
+                            // Never echo WatchLink's local watch-battery phone notification back to the watch.
+                            return null;
+                        }
                         String category = n == null ? null : n.category;
                         boolean silentOnDnd = hostSettings.isNotifyMuteDndEnabled();
                         boolean silentOnFocus = hostSettings.isNotifySilentFocusEnabled();

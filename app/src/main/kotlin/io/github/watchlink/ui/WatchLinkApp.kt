@@ -82,6 +82,11 @@ internal data class WatchLinkUiState(
     val notifySilentFocusSaving: Boolean = false,
     val notifySilentGameSaving: Boolean = false,
     val notifyDisconnectStageSaving: Boolean = false,
+    val notifyBurstThrottleSaving: Boolean = false,
+    val batteryPhoneFullWatchSaving: Boolean = false,
+    val batteryPhoneLowWatchSaving: Boolean = false,
+    val batteryWatchFullPhoneSaving: Boolean = false,
+    val batteryWatchLowPhoneSaving: Boolean = false,
     val sleepAutoDndSaving: Boolean = false,
     val wakeExitDndSaving: Boolean = false,
     val sleepPauseMediaSaving: Boolean = false,
@@ -201,6 +206,66 @@ internal data class WatchLinkUiState(
         get() = !notifyDisconnectStageSaving && (scope?.remotePrefsSupported() == true
                 || healthHost?.reachable() == true)
 
+    val effectiveNotifyBurstThrottleEnabled: Boolean
+        get() = scope?.remoteNotifyBurstThrottleEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.notifyBurstThrottleEnabled()
+            ?: false
+
+    val effectiveNotifyBurstThrottleSec: Int
+        get() = scope?.remoteNotifyBurstThrottleSec()
+            ?: healthHost?.takeIf { it.reachable() }?.notifyBurstThrottleSec()
+            ?: WatchLinkPrefs.DEFAULT_NOTIFY_BURST_THROTTLE_SEC
+
+    val canToggleNotifyBurstThrottle: Boolean
+        get() = !notifyBurstThrottleSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
+    val effectiveBatteryPhoneFullWatchEnabled: Boolean
+        get() = scope?.remoteBatteryPhoneFullWatchEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.batteryPhoneFullWatchEnabled()
+            ?: false
+
+    val canToggleBatteryPhoneFullWatch: Boolean
+        get() = !batteryPhoneFullWatchSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
+    val effectiveBatteryPhoneLowWatchEnabled: Boolean
+        get() = scope?.remoteBatteryPhoneLowWatchEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.batteryPhoneLowWatchEnabled()
+            ?: false
+
+    val effectiveBatteryPhoneLowThreshold: Int
+        get() = scope?.remoteBatteryPhoneLowThreshold()
+            ?: healthHost?.takeIf { it.reachable() }?.batteryPhoneLowThreshold()
+            ?: WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD
+
+    val canToggleBatteryPhoneLowWatch: Boolean
+        get() = !batteryPhoneLowWatchSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
+    val effectiveBatteryWatchFullPhoneEnabled: Boolean
+        get() = scope?.remoteBatteryWatchFullPhoneEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.batteryWatchFullPhoneEnabled()
+            ?: false
+
+    val canToggleBatteryWatchFullPhone: Boolean
+        get() = !batteryWatchFullPhoneSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
+    val effectiveBatteryWatchLowPhoneEnabled: Boolean
+        get() = scope?.remoteBatteryWatchLowPhoneEnabled()
+            ?: healthHost?.takeIf { it.reachable() }?.batteryWatchLowPhoneEnabled()
+            ?: false
+
+    val effectiveBatteryWatchLowThreshold: Int
+        get() = scope?.remoteBatteryWatchLowThreshold()
+            ?: healthHost?.takeIf { it.reachable() }?.batteryWatchLowThreshold()
+            ?: WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD
+
+    val canToggleBatteryWatchLowPhone: Boolean
+        get() = !batteryWatchLowPhoneSaving && (scope?.remotePrefsSupported() == true
+                || healthHost?.reachable() == true)
+
     val effectiveSleepAutoDndEnabled: Boolean
         get() = scope?.remoteSleepAutoDndEnabled()
             ?: healthHost?.takeIf { it.reachable() }?.sleepAutoDndEnabled()
@@ -287,6 +352,11 @@ internal data class WatchLinkUiState(
             effectiveNotifySilentFocusEnabled,
             effectiveNotifySilentGameEnabled,
             effectiveNotifyDisconnectStageEnabled,
+            effectiveNotifyBurstThrottleEnabled,
+            effectiveBatteryPhoneFullWatchEnabled,
+            effectiveBatteryPhoneLowWatchEnabled,
+            effectiveBatteryWatchFullPhoneEnabled,
+            effectiveBatteryWatchLowPhoneEnabled,
             effectiveSleepAutoDndEnabled,
             effectiveWakeExitDndEnabled,
             effectiveSleepPauseMediaEnabled,
@@ -301,6 +371,7 @@ private enum class Page(val title: String) {
     REMINDERS("提醒同步"),
     LIVE("实况窗同步"),
     NOTIFICATIONS("通知与入睡"),
+    BATTERY("充电与电量提醒"),
     MY_DEVICES("设备空间卡片"),
     WIFI("Wi-Fi 同步"),
     WIFI_SYNC("批量同步 Wi-Fi"),
@@ -323,6 +394,14 @@ internal fun WatchLinkApp(
     onNotifySilentFocusEnable: (Boolean) -> Unit,
     onNotifySilentGameEnable: (Boolean) -> Unit,
     onNotifyDisconnectStageEnable: (Boolean) -> Unit,
+    onNotifyBurstThrottleEnable: (Boolean) -> Unit,
+    onNotifyBurstThrottleSec: (Int) -> Unit,
+    onBatteryPhoneFullWatchEnable: (Boolean) -> Unit,
+    onBatteryPhoneLowWatchEnable: (Boolean) -> Unit,
+    onBatteryPhoneLowThreshold: (Int) -> Unit,
+    onBatteryWatchFullPhoneEnable: (Boolean) -> Unit,
+    onBatteryWatchLowPhoneEnable: (Boolean) -> Unit,
+    onBatteryWatchLowThreshold: (Int) -> Unit,
     onSleepAutoDndEnable: (Boolean) -> Unit,
     onWakeExitDndEnable: (Boolean) -> Unit,
     onSleepPauseMediaEnable: (Boolean) -> Unit,
@@ -420,6 +499,8 @@ internal fun WatchLinkApp(
                             onNotifySilentFocusEnable = onNotifySilentFocusEnable,
                             onNotifySilentGameEnable = onNotifySilentGameEnable,
                             onNotifyDisconnectStageEnable = onNotifyDisconnectStageEnable,
+                            onNotifyBurstThrottleEnable = onNotifyBurstThrottleEnable,
+                            onNotifyBurstThrottleSec = onNotifyBurstThrottleSec,
                             onSleepAutoDndEnable = onSleepAutoDndEnable,
                             onWakeExitDndEnable = onWakeExitDndEnable,
                             onSleepPauseMediaEnable = onSleepPauseMediaEnable,
@@ -427,6 +508,15 @@ internal fun WatchLinkApp(
                             onSleepStopVideoCustomPkgs = onSleepStopVideoCustomPkgs,
                             onOpenDndAccessSettings = onOpenDndAccessSettings,
                             onOpenWriteSettingsAccess = onOpenWriteSettingsAccess,
+                        )
+                        Page.BATTERY -> batteryPage(
+                            state = state,
+                            onBatteryPhoneFullWatchEnable = onBatteryPhoneFullWatchEnable,
+                            onBatteryPhoneLowWatchEnable = onBatteryPhoneLowWatchEnable,
+                            onBatteryPhoneLowThreshold = onBatteryPhoneLowThreshold,
+                            onBatteryWatchFullPhoneEnable = onBatteryWatchFullPhoneEnable,
+                            onBatteryWatchLowPhoneEnable = onBatteryWatchLowPhoneEnable,
+                            onBatteryWatchLowThreshold = onBatteryWatchLowThreshold,
                         )
                         Page.MY_DEVICES -> myDevicesPage(
                             state = state,
@@ -476,7 +566,9 @@ private fun LazyListScope.homePage(state: WatchLinkUiState, onRefresh: () -> Uni
             HorizontalDivider()
             Menu(Page.LIVE.title, "流体云、实况通知与游戏闪回") { openPage(Page.LIVE) }
             HorizontalDivider()
-            Menu(Page.NOTIFICATIONS.title, "静默推送、断连暂存与入睡联动") { openPage(Page.NOTIFICATIONS) }
+            Menu(Page.NOTIFICATIONS.title, "静默推送、防轰炸、断连暂存与入睡联动") { openPage(Page.NOTIFICATIONS) }
+            HorizontalDivider()
+            Menu(Page.BATTERY.title, "手机与手表充满及低电量双向提醒") { openPage(Page.BATTERY) }
             HorizontalDivider()
             Menu(Page.MY_DEVICES.title, "在系统设备空间显示手表状态与电量") { openPage(Page.MY_DEVICES) }
             HorizontalDivider()
@@ -791,6 +883,8 @@ private fun LazyListScope.notificationsPage(
     onNotifySilentFocusEnable: (Boolean) -> Unit,
     onNotifySilentGameEnable: (Boolean) -> Unit,
     onNotifyDisconnectStageEnable: (Boolean) -> Unit,
+    onNotifyBurstThrottleEnable: (Boolean) -> Unit,
+    onNotifyBurstThrottleSec: (Int) -> Unit,
     onSleepAutoDndEnable: (Boolean) -> Unit,
     onWakeExitDndEnable: (Boolean) -> Unit,
     onSleepPauseMediaEnable: (Boolean) -> Unit,
@@ -805,6 +899,8 @@ private fun LazyListScope.notificationsPage(
     val silentFocusEnabled = state.effectiveNotifySilentFocusEnabled
     val silentGameEnabled = state.effectiveNotifySilentGameEnabled
     val disconnectStageEnabled = state.effectiveNotifyDisconnectStageEnabled
+    val burstThrottleEnabled = state.effectiveNotifyBurstThrottleEnabled
+    val burstThrottleSec = state.effectiveNotifyBurstThrottleSec
     val sleepDndEnabled = state.effectiveSleepAutoDndEnabled
     val wakeDndEnabled = state.effectiveWakeExitDndEnabled
     val sleepPauseMediaEnabled = state.effectiveSleepPauseMediaEnabled
@@ -846,6 +942,11 @@ private fun LazyListScope.notificationsPage(
         state.notifyDisconnectStageSaving -> "正在保存…"
         !state.canToggleNotifyDisconnectStage -> "请先启用模块或打开运动健康"
         else -> "断连 1 分钟内最多暂存 5 条通知，重连后仅 1 条震动提醒，其余静默补发"
+    }
+    val burstThrottleSummary = when {
+        state.notifyBurstThrottleSaving -> "正在保存…"
+        !state.canToggleNotifyBurstThrottle -> "请先启用模块或打开运动健康"
+        else -> "设定时间窗口内，同一应用仅首条震动，后续通知改为静默推送"
     }
     val sleepDndSummary = when {
         state.sleepAutoDndSaving -> "正在保存…"
@@ -912,6 +1013,78 @@ private fun LazyListScope.notificationsPage(
                 state.canToggleNotifySilentGame,
                 onNotifySilentGameEnable,
             )
+        }
+    }
+
+    item("notify-burst-title") { SectionTitle("连发防轰炸") }
+    item("notify-burst-card") {
+        Card(Modifier.fillMaxWidth()) {
+            SwitchRow(
+                "通知连发防轰炸",
+                burstThrottleSummary,
+                burstThrottleEnabled,
+                state.canToggleNotifyBurstThrottle,
+                onNotifyBurstThrottleEnable,
+            )
+            if (burstThrottleEnabled) {
+                HorizontalDivider()
+                var secInput by rememberSaveable(burstThrottleSec) { mutableStateOf(burstThrottleSec.toString()) }
+                var secError by remember { mutableStateOf<String?>(null) }
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "同应用防轰炸间隔（秒）",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "当前：$burstThrottleSec 秒；固定窗口内同一应用后续普通通知自动转为静默，不影响来电与强提醒",
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextField(
+                            value = secInput,
+                            onValueChange = { raw ->
+                                secInput = raw.filter { it.isDigit() }.take(3)
+                                secError = null
+                            },
+                            label = "${WatchLinkPrefs.MIN_NOTIFY_BURST_THROTTLE_SEC} ~ ${WatchLinkPrefs.MAX_NOTIFY_BURST_THROTTLE_SEC} 秒",
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            text = "保存",
+                            enabled = state.canToggleNotifyBurstThrottle && secInput.isNotBlank(),
+                            onClick = {
+                                val parsed = secInput.toIntOrNull()
+                                if (parsed == null || parsed < WatchLinkPrefs.MIN_NOTIFY_BURST_THROTTLE_SEC
+                                    || parsed > WatchLinkPrefs.MAX_NOTIFY_BURST_THROTTLE_SEC) {
+                                    secError = "请输入 ${WatchLinkPrefs.MIN_NOTIFY_BURST_THROTTLE_SEC} ~ ${WatchLinkPrefs.MAX_NOTIFY_BURST_THROTTLE_SEC} 之间的整数"
+                                } else {
+                                    secError = null
+                                    onNotifyBurstThrottleSec(parsed)
+                                }
+                            },
+                        )
+                    }
+                    secError?.let { err ->
+                        Text(
+                            text = err,
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -1060,6 +1233,206 @@ private fun LazyListScope.notificationsPage(
                                     },
                                 )
                             },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun LazyListScope.batteryPage(
+    state: WatchLinkUiState,
+    onBatteryPhoneFullWatchEnable: (Boolean) -> Unit,
+    onBatteryPhoneLowWatchEnable: (Boolean) -> Unit,
+    onBatteryPhoneLowThreshold: (Int) -> Unit,
+    onBatteryWatchFullPhoneEnable: (Boolean) -> Unit,
+    onBatteryWatchLowPhoneEnable: (Boolean) -> Unit,
+    onBatteryWatchLowThreshold: (Int) -> Unit,
+) {
+    val phoneFullEnabled = state.effectiveBatteryPhoneFullWatchEnabled
+    val phoneLowEnabled = state.effectiveBatteryPhoneLowWatchEnabled
+    val phoneLowThreshold = state.effectiveBatteryPhoneLowThreshold
+    val watchFullEnabled = state.effectiveBatteryWatchFullPhoneEnabled
+    val watchLowEnabled = state.effectiveBatteryWatchLowPhoneEnabled
+    val watchLowThreshold = state.effectiveBatteryWatchLowThreshold
+
+    val phoneFullSummary = when {
+        state.batteryPhoneFullWatchSaving -> "正在保存…"
+        !state.canToggleBatteryPhoneFullWatch -> "请先启用模块或打开运动健康"
+        else -> "手机充至 100% 或达到 ColorOS 充电上限时提醒手表（智能充电保护暂缓与旁路供电不触发），遵循手表静默推送规则"
+    }
+    val phoneLowSummary = when {
+        state.batteryPhoneLowWatchSaving -> "正在保存…"
+        !state.canToggleBatteryPhoneLowWatch -> "请先启用模块或打开运动健康"
+        else -> "手机未插电且电量降至设定阈值时提醒手表，遵循手表静默推送规则"
+    }
+    val watchFullSummary = when {
+        state.batteryWatchFullPhoneSaving -> "正在保存…"
+        !state.canToggleBatteryWatchFullPhone -> "请先启用模块或打开运动健康"
+        else -> "手表充电至 100% 时在手机弹出通知（自动过滤防回声）"
+    }
+    val watchLowSummary = when {
+        state.batteryWatchLowPhoneSaving -> "正在保存…"
+        !state.canToggleBatteryWatchLowPhone -> "请先启用模块或打开运动健康"
+        else -> "手表未充电且电量降至设定阈值时在手机弹出通知"
+    }
+
+    item("battery-phone-title") { SectionTitle("手机提醒手表") }
+    item("battery-phone-card") {
+        Card(Modifier.fillMaxWidth()) {
+            SwitchRow(
+                "手机充满提醒手表",
+                phoneFullSummary,
+                phoneFullEnabled,
+                state.canToggleBatteryPhoneFullWatch,
+                onBatteryPhoneFullWatchEnable,
+            )
+            HorizontalDivider()
+            SwitchRow(
+                "手机低电量提醒手表",
+                phoneLowSummary,
+                phoneLowEnabled,
+                state.canToggleBatteryPhoneLowWatch,
+                onBatteryPhoneLowWatchEnable,
+            )
+            if (phoneLowEnabled) {
+                HorizontalDivider()
+                var phoneInput by rememberSaveable(phoneLowThreshold) { mutableStateOf(phoneLowThreshold.toString()) }
+                var phoneError by remember { mutableStateOf<String?>(null) }
+                val resetAt = io.github.watchlink.notify.BatteryAlertPolicy.hysteresisResetLevel(phoneLowThreshold)
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "手机低电量阈值（%）",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "当前：$phoneLowThreshold%；插电或电量回升至 $resetAt% 后重置提醒状态",
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextField(
+                            value = phoneInput,
+                            onValueChange = { raw ->
+                                phoneInput = raw.filter { it.isDigit() }.take(2)
+                                phoneError = null
+                            },
+                            label = "${WatchLinkPrefs.MIN_BATTERY_LOW_THRESHOLD} ~ ${WatchLinkPrefs.MAX_BATTERY_LOW_THRESHOLD}%",
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            text = "保存",
+                            enabled = state.canToggleBatteryPhoneLowWatch && phoneInput.isNotBlank(),
+                            onClick = {
+                                val parsed = phoneInput.toIntOrNull()
+                                if (parsed == null || parsed < WatchLinkPrefs.MIN_BATTERY_LOW_THRESHOLD
+                                    || parsed > WatchLinkPrefs.MAX_BATTERY_LOW_THRESHOLD) {
+                                    phoneError = "请输入 ${WatchLinkPrefs.MIN_BATTERY_LOW_THRESHOLD} ~ ${WatchLinkPrefs.MAX_BATTERY_LOW_THRESHOLD} 之间的整数"
+                                } else {
+                                    phoneError = null
+                                    onBatteryPhoneLowThreshold(parsed)
+                                }
+                            },
+                        )
+                    }
+                    phoneError?.let { err ->
+                        Text(
+                            text = err,
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    item("battery-watch-title") { SectionTitle("手表提醒手机") }
+    item("battery-watch-card") {
+        Card(Modifier.fillMaxWidth()) {
+            SwitchRow(
+                "手表充满提醒手机",
+                watchFullSummary,
+                watchFullEnabled,
+                state.canToggleBatteryWatchFullPhone,
+                onBatteryWatchFullPhoneEnable,
+            )
+            HorizontalDivider()
+            SwitchRow(
+                "手表低电量提醒手机",
+                watchLowSummary,
+                watchLowEnabled,
+                state.canToggleBatteryWatchLowPhone,
+                onBatteryWatchLowPhoneEnable,
+            )
+            if (watchLowEnabled) {
+                HorizontalDivider()
+                var watchInput by rememberSaveable(watchLowThreshold) { mutableStateOf(watchLowThreshold.toString()) }
+                var watchError by remember { mutableStateOf<String?>(null) }
+                val resetAt = io.github.watchlink.notify.BatteryAlertPolicy.hysteresisResetLevel(watchLowThreshold)
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "手表低电量阈值（%）",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "当前：$watchLowThreshold%；开始充电或电量回升至 $resetAt% 后重置提醒状态",
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextField(
+                            value = watchInput,
+                            onValueChange = { raw ->
+                                watchInput = raw.filter { it.isDigit() }.take(2)
+                                watchError = null
+                            },
+                            label = "${WatchLinkPrefs.MIN_BATTERY_LOW_THRESHOLD} ~ ${WatchLinkPrefs.MAX_BATTERY_LOW_THRESHOLD}%",
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            text = "保存",
+                            enabled = state.canToggleBatteryWatchLowPhone && watchInput.isNotBlank(),
+                            onClick = {
+                                val parsed = watchInput.toIntOrNull()
+                                if (parsed == null || parsed < WatchLinkPrefs.MIN_BATTERY_LOW_THRESHOLD
+                                    || parsed > WatchLinkPrefs.MAX_BATTERY_LOW_THRESHOLD) {
+                                    watchError = "请输入 ${WatchLinkPrefs.MIN_BATTERY_LOW_THRESHOLD} ~ ${WatchLinkPrefs.MAX_BATTERY_LOW_THRESHOLD} 之间的整数"
+                                } else {
+                                    watchError = null
+                                    onBatteryWatchLowThreshold(parsed)
+                                }
+                            },
+                        )
+                    }
+                    watchError?.let { err ->
+                        Text(
+                            text = err,
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.error,
                         )
                     }
                 }
@@ -1677,8 +2050,16 @@ private fun LazyListScope.guidePage(onCoolapk: () -> Unit) {
                 title = "通知与入睡（基础作用域）",
                 summary = "仅需勾选「华为运动健康」，无需新增作用域。\n" +
                     "「手表静默推送」基于华为 5.2.1 静默标记，提供免打扰、手机静默通知、亮屏解锁、禅定与专注、游戏前台五项独立开关，开启后通知仅静默送达手表而不震动（不拦截来电与强提醒，游戏闪回也会穿透游戏前台静默）。\n" +
+                    "「通知连发防轰炸」可在自定义秒数（1–300 秒，默认 10 秒）内让同一应用的后续普通通知自动转为静默推送，仅首条震动提醒，不遗漏通知内容也不拦截来电与强提醒。\n" +
                     "「短时断连通知暂存」在手表短暂断连时于内存中暂存 1 分钟内最多 5 条普通通知（同条更新自动去重，手机端已读清除同步移除）；重连后按时间顺序补发，其中仅最新 1 条震动提醒，其余全部以静默方式补发，避免连续震动打扰。\n" +
                     "「入睡联动」提供入睡开启免打扰、醒来退出免打扰、入睡暂停媒体播放、入睡停止短视频与直播（返回桌面并自动息屏，支持自定义应用包名）四项独立开关。"
+            )
+            HorizontalDivider()
+            BasicComponent(
+                title = "充电与电量提醒（基础作用域）",
+                summary = "仅需勾选「华为运动健康」，提供手机充满提醒手表、手机低电量提醒手表、手表充满提醒手机、手表低电量提醒手机四项独立开关。\n" +
+                    "手机充满支持 100% 充满以及 ColorOS 充电上限（如 80%/85%/90%/95%），自动排除夜间智能充电保护暂缓与旁路供电；手机与手表低电量均支持 1–80% 自定义阈值（默认 20%，+5% 迟滞防抖）。\n" +
+                    "手机发往手表的电量提醒会遵循「手表静默推送」中已开启的静默规则。"
             )
             HorizontalDivider()
             BasicComponent(

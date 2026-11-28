@@ -30,6 +30,7 @@ public final class NotificationDndPolicy {
     public static final String REASON_SCREEN_ON = "SCREEN_ON";
     public static final String REASON_PHONE_SILENT = "PHONE_SILENT";
     public static final String REASON_DISCONNECT_STAGED = "DISCONNECT_STAGED";
+    public static final String REASON_BURST_THROTTLE = "BURST_THROTTLE";
 
     /**
      * Evaluates whether Do Not Disturb is currently enabled on the phone.

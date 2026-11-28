@@ -57,6 +57,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     private HealthRawCommandBridge rawCommandBridge;
     private HealthSleepDndBridge sleepDndBridge;
     private HealthDisconnectNotificationBridge disconnectNotifyBridge;
+    private HealthBatteryAlertBridge batteryAlertBridge;
     private HealthWatchStatusCollector watchStatusCollector;
     private HealthWatchImageResolver watchImageResolver;
     private volatile String lastSentIconHash = "";
@@ -154,9 +155,14 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         sleepDndBridge = sleepDnd;
 
         HealthDisconnectNotificationBridge disconnectNotify =
-                new HealthDisconnectNotificationBridge(app, settings, worker, readiness);
+                new HealthDisconnectNotificationBridge(app, settings, worker, readiness, sleepDnd);
         disconnectNotify.install(installer, symbols);
         disconnectNotifyBridge = disconnectNotify;
+
+        HealthBatteryAlertBridge batteryAlert = new HealthBatteryAlertBridge(
+                app, settings, worker, disconnectNotify::dispatchSyntheticWatchNotification);
+        batteryAlert.install(installer);
+        batteryAlertBridge = batteryAlert;
 
         watchImageResolver = new HealthWatchImageResolver(app);
         HealthWatchStatusCollector watchStatus = new HealthWatchStatusCollector(app, worker, readiness, sender);
@@ -165,6 +171,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
             HealthDisconnectNotificationBridge stage = disconnectNotifyBridge;
             if (stage != null && snap != null) {
                 stage.onWatchConnectionObserved(snap.connected());
+            }
+            HealthBatteryAlertBridge bat = batteryAlertBridge;
+            if (bat != null && snap != null) {
+                bat.onWatchStatusObserved(snap);
             }
         });
         watchStatus.install(installer, symbols);
@@ -360,6 +370,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         if (sleepDndBridge != null) {
             try { sleepDndBridge.close(); } catch (RuntimeException ignored) {}
             sleepDndBridge = null;
+        }
+        if (batteryAlertBridge != null) {
+            try { batteryAlertBridge.close(); } catch (RuntimeException ignored) {}
+            batteryAlertBridge = null;
         }
         if (disconnectNotifyBridge != null) {
             try { disconnectNotifyBridge.close(); } catch (RuntimeException ignored) {}
@@ -788,6 +802,30 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 settings.setLocalNotifyDisconnectStageFallback(false);
                 if (disconnectNotifyBridge != null) disconnectNotifyBridge.onSettingsFallbackChanged(false);
             }
+            case HealthHostControl.ENABLE_NOTIFY_BURST_THROTTLE -> {
+                settings.setLocalNotifyBurstThrottleFallback(true);
+                if (disconnectNotifyBridge != null) disconnectNotifyBridge.onBurstThrottleFallbackChanged(true);
+            }
+            case HealthHostControl.DISABLE_NOTIFY_BURST_THROTTLE -> {
+                settings.setLocalNotifyBurstThrottleFallback(false);
+                if (disconnectNotifyBridge != null) disconnectNotifyBridge.onBurstThrottleFallbackChanged(false);
+            }
+            case HealthHostControl.ENABLE_BATTERY_PHONE_FULL_WATCH ->
+                    settings.setLocalBatteryPhoneFullWatchFallback(true);
+            case HealthHostControl.DISABLE_BATTERY_PHONE_FULL_WATCH ->
+                    settings.setLocalBatteryPhoneFullWatchFallback(false);
+            case HealthHostControl.ENABLE_BATTERY_PHONE_LOW_WATCH ->
+                    settings.setLocalBatteryPhoneLowWatchFallback(true);
+            case HealthHostControl.DISABLE_BATTERY_PHONE_LOW_WATCH ->
+                    settings.setLocalBatteryPhoneLowWatchFallback(false);
+            case HealthHostControl.ENABLE_BATTERY_WATCH_FULL_PHONE ->
+                    settings.setLocalBatteryWatchFullPhoneFallback(true);
+            case HealthHostControl.DISABLE_BATTERY_WATCH_FULL_PHONE ->
+                    settings.setLocalBatteryWatchFullPhoneFallback(false);
+            case HealthHostControl.ENABLE_BATTERY_WATCH_LOW_PHONE ->
+                    settings.setLocalBatteryWatchLowPhoneFallback(true);
+            case HealthHostControl.DISABLE_BATTERY_WATCH_LOW_PHONE ->
+                    settings.setLocalBatteryWatchLowPhoneFallback(false);
             case HealthHostControl.ENABLE_SLEEP_AUTO_DND -> settings.setLocalSleepAutoDndFallback(true);
             case HealthHostControl.DISABLE_SLEEP_AUTO_DND -> settings.setLocalSleepAutoDndFallback(false);
             case HealthHostControl.ENABLE_WAKE_EXIT_DND -> settings.setLocalWakeExitDndFallback(true);
@@ -827,9 +865,24 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                     settings.setLocalGameFlashbackLeadSecFallback(leadSec);
                     if (liveBridge != null) liveBridge.onGameFlashbackLeadSecChanged(leadSec);
                 } else {
-                    String customPkgs = HealthHostControl.parseSleepStopVideoCustomPkgsCommand(command);
-                    if (customPkgs != null) {
-                        settings.setLocalSleepStopVideoCustomPkgsFallback(customPkgs);
+                    int burstSec = HealthHostControl.parseNotifyBurstThrottleSecCommand(command);
+                    if (burstSec >= 0) {
+                        settings.setLocalNotifyBurstThrottleSecFallback(burstSec);
+                    } else {
+                        int phoneLow = HealthHostControl.parseBatteryPhoneLowThresholdCommand(command);
+                        if (phoneLow >= 0) {
+                            settings.setLocalBatteryPhoneLowThresholdFallback(phoneLow);
+                        } else {
+                            int watchLow = HealthHostControl.parseBatteryWatchLowThresholdCommand(command);
+                            if (watchLow >= 0) {
+                                settings.setLocalBatteryWatchLowThresholdFallback(watchLow);
+                            } else {
+                                String customPkgs = HealthHostControl.parseSleepStopVideoCustomPkgsCommand(command);
+                                if (customPkgs != null) {
+                                    settings.setLocalSleepStopVideoCustomPkgsFallback(customPkgs);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -909,7 +962,15 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 settings.isSleepStopVideoEnabled(),
                 settings.sleepStopVideoCustomPkgs(),
                 sleep.writeSettingsAccess(),
-                settings.isNotifyDisconnectStageEnabled());
+                settings.isNotifyDisconnectStageEnabled(),
+                settings.isNotifyBurstThrottleEnabled(),
+                settings.notifyBurstThrottleSec(),
+                settings.isBatteryPhoneFullWatchEnabled(),
+                settings.isBatteryPhoneLowWatchEnabled(),
+                settings.batteryPhoneLowThreshold(),
+                settings.isBatteryWatchFullPhoneEnabled(),
+                settings.isBatteryWatchLowPhoneEnabled(),
+                settings.batteryWatchLowThreshold());
     }
 
     private void startManualTestLocked() {

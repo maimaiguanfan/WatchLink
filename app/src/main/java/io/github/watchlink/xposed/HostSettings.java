@@ -28,6 +28,14 @@ final class HostSettings {
     private volatile Consumer<Boolean> notifySilentFocusChangedCallback;
     private volatile Consumer<Boolean> notifySilentGameChangedCallback;
     private volatile Consumer<Boolean> notifyDisconnectStageChangedCallback;
+    private volatile Consumer<Boolean> notifyBurstThrottleChangedCallback;
+    private volatile Consumer<Integer> notifyBurstThrottleSecChangedCallback;
+    private volatile Consumer<Boolean> batteryPhoneFullWatchChangedCallback;
+    private volatile Consumer<Boolean> batteryPhoneLowWatchChangedCallback;
+    private volatile Consumer<Integer> batteryPhoneLowThresholdChangedCallback;
+    private volatile Consumer<Boolean> batteryWatchFullPhoneChangedCallback;
+    private volatile Consumer<Boolean> batteryWatchLowPhoneChangedCallback;
+    private volatile Consumer<Integer> batteryWatchLowThresholdChangedCallback;
     private volatile Consumer<Boolean> sleepAutoDndChangedCallback;
     private volatile Consumer<Boolean> wakeExitDndChangedCallback;
     private volatile Consumer<Boolean> sleepPauseMediaChangedCallback;
@@ -105,6 +113,52 @@ final class HostSettings {
                     Consumer<Boolean> callback = notifyDisconnectStageChangedCallback;
                     if (callback != null) {
                         callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = notifyBurstThrottleChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_SEC.equals(key)) {
+                    Consumer<Integer> callback = notifyBurstThrottleSecChangedCallback;
+                    if (callback != null) {
+                        callback.accept(WatchLinkPrefs.clampNotifyBurstThrottleSec(
+                                prefs.getInt(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_SEC,
+                                        WatchLinkPrefs.DEFAULT_NOTIFY_BURST_THROTTLE_SEC)));
+                    }
+                } else if (WatchLinkPrefs.KEY_BATTERY_PHONE_FULL_WATCH_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = batteryPhoneFullWatchChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_BATTERY_PHONE_FULL_WATCH_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_WATCH_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = batteryPhoneLowWatchChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_WATCH_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_THRESHOLD.equals(key)) {
+                    Consumer<Integer> callback = batteryPhoneLowThresholdChangedCallback;
+                    if (callback != null) {
+                        callback.accept(WatchLinkPrefs.clampBatteryLowThreshold(
+                                prefs.getInt(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_THRESHOLD,
+                                        WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD)));
+                    }
+                } else if (WatchLinkPrefs.KEY_BATTERY_WATCH_FULL_PHONE_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = batteryWatchFullPhoneChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_BATTERY_WATCH_FULL_PHONE_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_PHONE_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = batteryWatchLowPhoneChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_PHONE_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_THRESHOLD.equals(key)) {
+                    Consumer<Integer> callback = batteryWatchLowThresholdChangedCallback;
+                    if (callback != null) {
+                        callback.accept(WatchLinkPrefs.clampBatteryLowThreshold(
+                                prefs.getInt(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_THRESHOLD,
+                                        WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD)));
                     }
                 } else if (WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED.equals(key)) {
                     Consumer<Boolean> callback = sleepAutoDndChangedCallback;
@@ -245,6 +299,71 @@ final class HostSettings {
         return readBoolean(WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED);
     }
 
+    boolean isNotifyBurstThrottleEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_ENABLED);
+    }
+
+    int notifyBurstThrottleSec() {
+        if (remote != null) {
+            try {
+                if (remote.contains(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_SEC)) {
+                    return WatchLinkPrefs.clampNotifyBurstThrottleSec(
+                            remote.getInt(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_SEC,
+                                    WatchLinkPrefs.DEFAULT_NOTIFY_BURST_THROTTLE_SEC));
+                }
+            } catch (RuntimeException ignored) {}
+        }
+        return WatchLinkPrefs.clampNotifyBurstThrottleSec(
+                local.getInt(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_SEC,
+                        WatchLinkPrefs.DEFAULT_NOTIFY_BURST_THROTTLE_SEC));
+    }
+
+    boolean isBatteryPhoneFullWatchEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_BATTERY_PHONE_FULL_WATCH_ENABLED);
+    }
+
+    boolean isBatteryPhoneLowWatchEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_WATCH_ENABLED);
+    }
+
+    int batteryPhoneLowThreshold() {
+        if (remote != null) {
+            try {
+                if (remote.contains(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_THRESHOLD)) {
+                    return WatchLinkPrefs.clampBatteryLowThreshold(
+                            remote.getInt(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_THRESHOLD,
+                                    WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD));
+                }
+            } catch (RuntimeException ignored) {}
+        }
+        return WatchLinkPrefs.clampBatteryLowThreshold(
+                local.getInt(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_THRESHOLD,
+                        WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD));
+    }
+
+    boolean isBatteryWatchFullPhoneEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_BATTERY_WATCH_FULL_PHONE_ENABLED);
+    }
+
+    boolean isBatteryWatchLowPhoneEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_PHONE_ENABLED);
+    }
+
+    int batteryWatchLowThreshold() {
+        if (remote != null) {
+            try {
+                if (remote.contains(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_THRESHOLD)) {
+                    return WatchLinkPrefs.clampBatteryLowThreshold(
+                            remote.getInt(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_THRESHOLD,
+                                    WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD));
+                }
+            } catch (RuntimeException ignored) {}
+        }
+        return WatchLinkPrefs.clampBatteryLowThreshold(
+                local.getInt(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_THRESHOLD,
+                        WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD));
+    }
+
     boolean isSleepAutoDndEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED);
     }
@@ -370,6 +489,41 @@ final class HostSettings {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_DISCONNECT_STAGE_ENABLED, enabled).commit();
     }
 
+    boolean setLocalNotifyBurstThrottleFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalNotifyBurstThrottleSecFallback(int sec) {
+        return local.edit().putInt(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_SEC,
+                WatchLinkPrefs.clampNotifyBurstThrottleSec(sec)).commit();
+    }
+
+    boolean setLocalBatteryPhoneFullWatchFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_BATTERY_PHONE_FULL_WATCH_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalBatteryPhoneLowWatchFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_WATCH_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalBatteryPhoneLowThresholdFallback(int percent) {
+        return local.edit().putInt(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_THRESHOLD,
+                WatchLinkPrefs.clampBatteryLowThreshold(percent)).commit();
+    }
+
+    boolean setLocalBatteryWatchFullPhoneFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_BATTERY_WATCH_FULL_PHONE_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalBatteryWatchLowPhoneFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_PHONE_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalBatteryWatchLowThresholdFallback(int percent) {
+        return local.edit().putInt(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_THRESHOLD,
+                WatchLinkPrefs.clampBatteryLowThreshold(percent)).commit();
+    }
+
     boolean setLocalSleepAutoDndFallback(boolean enabled) {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, enabled).commit();
     }
@@ -453,6 +607,38 @@ final class HostSettings {
         notifyDisconnectStageChangedCallback = callback;
     }
 
+    void onNotifyBurstThrottleChanged(Consumer<Boolean> callback) {
+        notifyBurstThrottleChangedCallback = callback;
+    }
+
+    void onNotifyBurstThrottleSecChanged(Consumer<Integer> callback) {
+        notifyBurstThrottleSecChangedCallback = callback;
+    }
+
+    void onBatteryPhoneFullWatchChanged(Consumer<Boolean> callback) {
+        batteryPhoneFullWatchChangedCallback = callback;
+    }
+
+    void onBatteryPhoneLowWatchChanged(Consumer<Boolean> callback) {
+        batteryPhoneLowWatchChangedCallback = callback;
+    }
+
+    void onBatteryPhoneLowThresholdChanged(Consumer<Integer> callback) {
+        batteryPhoneLowThresholdChangedCallback = callback;
+    }
+
+    void onBatteryWatchFullPhoneChanged(Consumer<Boolean> callback) {
+        batteryWatchFullPhoneChangedCallback = callback;
+    }
+
+    void onBatteryWatchLowPhoneChanged(Consumer<Boolean> callback) {
+        batteryWatchLowPhoneChangedCallback = callback;
+    }
+
+    void onBatteryWatchLowThresholdChanged(Consumer<Integer> callback) {
+        batteryWatchLowThresholdChangedCallback = callback;
+    }
+
     void onSleepAutoDndChanged(Consumer<Boolean> callback) {
         sleepAutoDndChangedCallback = callback;
     }
@@ -499,6 +685,14 @@ final class HostSettings {
         notifySilentFocusChangedCallback = null;
         notifySilentGameChangedCallback = null;
         notifyDisconnectStageChangedCallback = null;
+        notifyBurstThrottleChangedCallback = null;
+        notifyBurstThrottleSecChangedCallback = null;
+        batteryPhoneFullWatchChangedCallback = null;
+        batteryPhoneLowWatchChangedCallback = null;
+        batteryPhoneLowThresholdChangedCallback = null;
+        batteryWatchFullPhoneChangedCallback = null;
+        batteryWatchLowPhoneChangedCallback = null;
+        batteryWatchLowThresholdChangedCallback = null;
         sleepAutoDndChangedCallback = null;
         wakeExitDndChangedCallback = null;
         sleepPauseMediaChangedCallback = null;

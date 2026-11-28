@@ -11,6 +11,7 @@ import android.os.SystemClock;
 import androidx.annotation.RequiresApi;
 import io.github.watchlink.alarm.probe.ProbeLog;
 import io.github.watchlink.notify.DisconnectNotificationQueue;
+import io.github.watchlink.notify.NotificationBurstThrottlePolicy;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -51,7 +52,9 @@ final class HealthDisconnectNotificationBridge {
     private final HostSettings settings;
     private final ScheduledExecutorService worker;
     private final HealthCooperativeReadiness readiness;
+    private final HealthSleepDndBridge sleepDndBridge;
     private final DisconnectNotificationQueue<Bundle> queue = new DisconnectNotificationQueue<>();
+    private final NotificationBurstThrottlePolicy burstThrottle = new NotificationBurstThrottlePolicy();
     private final ThreadLocal<Bundle> inflightBundle = new ThreadLocal<>();
 
     private BroadcastReceiver stateReceiver;
@@ -67,11 +70,13 @@ final class HealthDisconnectNotificationBridge {
 
     HealthDisconnectNotificationBridge(Context app, HostSettings settings,
                                        ScheduledExecutorService worker,
-                                       HealthCooperativeReadiness readiness) {
+                                       HealthCooperativeReadiness readiness,
+                                       HealthSleepDndBridge sleepDndBridge) {
         this.app = app;
         this.settings = settings;
         this.worker = worker;
         this.readiness = readiness;
+        this.sleepDndBridge = sleepDndBridge;
     }
 
     void install(AlarmObserverInstaller installer, HealthSymbolResolver.Symbols symbols) {
@@ -85,6 +90,11 @@ final class HealthDisconnectNotificationBridge {
                 catch (RuntimeException ignored) { queue.clear(); }
             }
         });
+        settings.onNotifyBurstThrottleChanged(enabled -> {
+            if (!Boolean.TRUE.equals(enabled)) {
+                burstThrottle.clear();
+            }
+        });
         installed = true;
         try {
             worker.execute(this::refreshInitialStateLocked);
@@ -96,6 +106,39 @@ final class HealthDisconnectNotificationBridge {
     void onSettingsFallbackChanged(boolean enabled) {
         if (!enabled) {
             clearStagedLocked();
+        }
+    }
+
+    void onBurstThrottleFallbackChanged(boolean enabled) {
+        if (!enabled) {
+            burstThrottle.clear();
+        }
+    }
+
+    /**
+     * Dispatches a synthetic watch notification (e.g. WatchLink phone battery alert) directly
+     * through Health's live IntegratedServicesReceiver when captured, falling back to an explicit
+     * package-scoped registered-only broadcast so it works even before the first regular notification.
+     */
+    void dispatchSyntheticWatchNotification(Intent pushIntent) {
+        if (!installed || pushIntent == null) return;
+        WeakReference<Object> ref = receiverRef;
+        Object receiver = ref == null ? null : ref.get();
+        Method onReceive = receiverOnReceive;
+        if (receiver != null && onReceive != null) {
+            try {
+                onReceive.invoke(receiver, app, pushIntent);
+                return;
+            } catch (Throwable err) {
+                ProbeLog.failure("HEALTH_BATTERY_ALERT_DEGRADED", err);
+            }
+        }
+        try {
+            pushIntent.setPackage(app.getPackageName());
+            pushIntent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY);
+            app.sendBroadcast(pushIntent);
+        } catch (RuntimeException err) {
+            ProbeLog.failure("HEALTH_BATTERY_ALERT_DEGRADED", err);
         }
     }
 
@@ -114,7 +157,9 @@ final class HealthDisconnectNotificationBridge {
     void close() {
         installed = false;
         settings.onNotifyDisconnectStageChanged(null);
+        settings.onNotifyBurstThrottleChanged(null);
         clearStagedLocked();
+        burstThrottle.clear();
         receiverRef = null;
         if (stateReceiver != null) {
             try { app.unregisterReceiver(stateReceiver); } catch (RuntimeException ignored) {}
@@ -159,21 +204,24 @@ final class HealthDisconnectNotificationBridge {
                 if (intent.getBooleanExtra(EXTRA_WATCHLINK_REPLAY, false)) {
                     return chain.proceed();
                 }
-                if (!settings.isNotifyDisconnectStageEnabled()) {
-                    return chain.proceed();
-                }
                 Bundle extras;
                 try {
                     extras = intent.getExtras();
                 } catch (RuntimeException ignored) {
                     return chain.proceed();
                 }
-                if (extras == null || !isEligibleBundle(extras)) {
+                if (extras == null) {
                     return chain.proceed();
                 }
-                if (!watchConnected || !bluetoothEnabled) {
+                boolean stageEnabled = settings.isNotifyDisconnectStageEnabled();
+                boolean eligibleForStage = stageEnabled && isEligibleBundle(extras);
+                if (eligibleForStage && (!watchConnected || !bluetoothEnabled)) {
                     stageBundle(extras);
                     return null;
+                }
+                maybeApplyBurstThrottle(intent, extras);
+                if (!eligibleForStage) {
+                    return chain.proceed();
                 }
                 inflightBundle.set(extras);
                 try {
@@ -335,9 +383,47 @@ final class HealthDisconnectNotificationBridge {
         return intent.getStringExtra("notification_key");
     }
 
+    private void maybeApplyBurstThrottle(Intent intent, Bundle extras) {
+        if (!settings.isNotifyBurstThrottleEnabled()) return;
+        try {
+            String switchChangeType = extras.getString("notificationSwitchChangeType");
+            String livePushType = extras.getString("LIVE_NOTIFICATION_PUSH_TYPE");
+            if ((switchChangeType != null && !switchChangeType.isEmpty())
+                    || (livePushType != null && !livePushType.isEmpty())) {
+                return;
+            }
+            String pkg = extras.getString("packagename");
+            if (pkg == null || pkg.isEmpty()) pkg = extras.getString("data_package_name");
+            String category = extras.getString("data_category");
+            boolean wechatCall = extras.getBoolean("data_extra_send_call_wechat", false);
+            boolean noWechatCall = extras.getBoolean("data_extra_send_call_no_wechat", false);
+            boolean isBatteryAlert = extras.getBoolean(HealthBatteryAlertBridge.EXTRA_WATCHLINK_BATTERY_ALERT, false);
+            boolean alreadySilent = extras.getBoolean(HealthSleepDndBridge.EXTRA_WATCHLINK_SILENT_PUSH, false)
+                    || extras.getBoolean(HealthSleepDndBridge.EXTRA_WATCHLINK_FORCE_SILENT_STAGED, false)
+                    || extras.getInt(EXTRA_REMINDER_STATUS, 15) == 0
+                    || (sleepDndBridge != null && sleepDndBridge.wouldBeSilentByMode(extras));
+            boolean shouldSilence = burstThrottle.shouldSilenceAndRecord(
+                    true,
+                    settings.notifyBurstThrottleSec(),
+                    pkg,
+                    category,
+                    wechatCall,
+                    noWechatCall,
+                    false,
+                    isBatteryAlert,
+                    alreadySilent,
+                    SystemClock.elapsedRealtime());
+            if (shouldSilence) {
+                intent.putExtra(EXTRA_REMINDER_STATUS, 0);
+                intent.putExtra(HealthSleepDndBridge.EXTRA_WATCHLINK_FORCE_SILENT_BURST, true);
+            }
+        } catch (RuntimeException ignored) {}
+    }
+
     private void stageBundle(Bundle extras) {
         try {
             Bundle copy = new Bundle(extras);
+            copy.remove(HealthSleepDndBridge.EXTRA_WATCHLINK_FORCE_SILENT_BURST);
             String notyKey = copy.getString("data_extra_noty_key");
             String altKey = copy.getString("notification_key");
             String pkg = copy.getString("packagename");

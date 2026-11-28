@@ -306,4 +306,59 @@ public class HostSettingsTest {
         assertFalse(settings.isNotifyDisconnectStageEnabled());
         assertFalse(staged.get());
     }
+
+    @Test public void burstThrottleAndBatteryAlertsDefaultSafelyAndClampValues() {
+        var remote = new MemoryPrefs();
+        var local = new MemoryPrefs();
+        var settings = new HostSettings(remote, local);
+
+        assertFalse(settings.isNotifyBurstThrottleEnabled());
+        assertEquals(WatchLinkPrefs.DEFAULT_NOTIFY_BURST_THROTTLE_SEC, settings.notifyBurstThrottleSec());
+        assertFalse(settings.isBatteryPhoneFullWatchEnabled());
+        assertFalse(settings.isBatteryPhoneLowWatchEnabled());
+        assertEquals(WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD, settings.batteryPhoneLowThreshold());
+        assertFalse(settings.isBatteryWatchFullPhoneEnabled());
+        assertFalse(settings.isBatteryWatchLowPhoneEnabled());
+        assertEquals(WatchLinkPrefs.DEFAULT_BATTERY_LOW_THRESHOLD, settings.batteryWatchLowThreshold());
+
+        var burstOn = new java.util.concurrent.atomic.AtomicBoolean();
+        var burstSec = new AtomicInteger(-1);
+        var phoneLow = new AtomicInteger(-1);
+        var watchLow = new AtomicInteger(-1);
+        settings.onNotifyBurstThrottleChanged(v -> burstOn.set(Boolean.TRUE.equals(v)));
+        settings.onNotifyBurstThrottleSecChanged(burstSec::set);
+        settings.onBatteryPhoneLowThresholdChanged(phoneLow::set);
+        settings.onBatteryWatchLowThresholdChanged(watchLow::set);
+
+        assertTrue(settings.setLocalNotifyBurstThrottleFallback(true));
+        assertTrue(settings.setLocalNotifyBurstThrottleSecFallback(25));
+        assertTrue(settings.setLocalBatteryPhoneFullWatchFallback(true));
+        assertTrue(settings.setLocalBatteryPhoneLowWatchFallback(true));
+        assertTrue(settings.setLocalBatteryPhoneLowThresholdFallback(15));
+        assertTrue(settings.setLocalBatteryWatchFullPhoneFallback(true));
+        assertTrue(settings.setLocalBatteryWatchLowPhoneFallback(true));
+        assertTrue(settings.setLocalBatteryWatchLowThresholdFallback(30));
+
+        assertTrue(settings.isNotifyBurstThrottleEnabled());
+        assertEquals(25, settings.notifyBurstThrottleSec());
+        assertTrue(settings.isBatteryPhoneFullWatchEnabled());
+        assertTrue(settings.isBatteryPhoneLowWatchEnabled());
+        assertEquals(15, settings.batteryPhoneLowThreshold());
+        assertTrue(settings.isBatteryWatchFullPhoneEnabled());
+        assertTrue(settings.isBatteryWatchLowPhoneEnabled());
+        assertEquals(30, settings.batteryWatchLowThreshold());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_ENABLED, true).commit();
+        remote.edit().putInt(WatchLinkPrefs.KEY_NOTIFY_BURST_THROTTLE_SEC, 999).commit();
+        remote.edit().putInt(WatchLinkPrefs.KEY_BATTERY_PHONE_LOW_THRESHOLD, 0).commit();
+        remote.edit().putInt(WatchLinkPrefs.KEY_BATTERY_WATCH_LOW_THRESHOLD, 95).commit();
+
+        assertTrue(burstOn.get());
+        assertEquals(WatchLinkPrefs.MAX_NOTIFY_BURST_THROTTLE_SEC, settings.notifyBurstThrottleSec());
+        assertEquals(WatchLinkPrefs.MAX_NOTIFY_BURST_THROTTLE_SEC, burstSec.get());
+        assertEquals(WatchLinkPrefs.MIN_BATTERY_LOW_THRESHOLD, settings.batteryPhoneLowThreshold());
+        assertEquals(WatchLinkPrefs.MIN_BATTERY_LOW_THRESHOLD, phoneLow.get());
+        assertEquals(WatchLinkPrefs.MAX_BATTERY_LOW_THRESHOLD, settings.batteryWatchLowThreshold());
+        assertEquals(WatchLinkPrefs.MAX_BATTERY_LOW_THRESHOLD, watchLow.get());
+    }
 }

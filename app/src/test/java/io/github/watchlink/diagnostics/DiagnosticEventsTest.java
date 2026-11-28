@@ -38,6 +38,12 @@ public final class DiagnosticEventsTest {
                 DiagnosticEvents.event("HEALTH_NOTIFY_DISCONNECT_FLUSHED source=HEALTH pkg=com.tencent.mm"));
         assertEquals("HEALTH_NOTIFY_SILENT_PUSH source=HEALTH silent_reason=DISCONNECT_STAGED",
                 DiagnosticEvents.event("HEALTH_NOTIFY_SILENT_PUSH source=HEALTH silent_reason=DISCONNECT_STAGED title=x"));
+        assertEquals("HEALTH_NOTIFY_SILENT_PUSH source=HEALTH silent_reason=BURST_THROTTLE",
+                DiagnosticEvents.event("HEALTH_NOTIFY_SILENT_PUSH source=HEALTH silent_reason=BURST_THROTTLE pkg=secret"));
+        assertEquals("HEALTH_BATTERY_PHONE_ALERT source=HEALTH battery_event=PHONE_FULL_LIMIT",
+                DiagnosticEvents.event("HEALTH_BATTERY_PHONE_ALERT source=HEALTH battery_event=PHONE_FULL_LIMIT level=90"));
+        assertEquals("HEALTH_BATTERY_WATCH_ALERT source=HEALTH battery_event=WATCH_LOW",
+                DiagnosticEvents.event("HEALTH_BATTERY_WATCH_ALERT source=HEALTH battery_event=WATCH_LOW name=secret"));
         assertNull(DiagnosticEvents.event("UNKNOWN_EVENT private=anything"));
         assertNull(DiagnosticEvents.event("DAILY_HEALTH_OUTBOUND\nDAILY_HEALTH_DISMISS"));
     }

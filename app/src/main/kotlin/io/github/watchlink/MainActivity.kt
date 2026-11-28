@@ -66,6 +66,14 @@ class MainActivity : ComponentActivity() {
                 onNotifySilentFocusEnable = ::setNotifySilentFocusEnabled,
                 onNotifySilentGameEnable = ::setNotifySilentGameEnabled,
                 onNotifyDisconnectStageEnable = ::setNotifyDisconnectStageEnabled,
+                onNotifyBurstThrottleEnable = ::setNotifyBurstThrottleEnabled,
+                onNotifyBurstThrottleSec = ::setNotifyBurstThrottleSec,
+                onBatteryPhoneFullWatchEnable = ::setBatteryPhoneFullWatchEnabled,
+                onBatteryPhoneLowWatchEnable = ::setBatteryPhoneLowWatchEnabled,
+                onBatteryPhoneLowThreshold = ::setBatteryPhoneLowThreshold,
+                onBatteryWatchFullPhoneEnable = ::setBatteryWatchFullPhoneEnabled,
+                onBatteryWatchLowPhoneEnable = ::setBatteryWatchLowPhoneEnabled,
+                onBatteryWatchLowThreshold = ::setBatteryWatchLowThreshold,
                 onSleepAutoDndEnable = ::setSleepAutoDndEnabled,
                 onWakeExitDndEnable = ::setWakeExitDndEnabled,
                 onSleepPauseMediaEnable = ::setSleepPauseMediaEnabled,
@@ -244,6 +252,62 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private suspend fun writeRemoteNotifyBurstThrottleEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteNotifyBurstThrottleEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteNotifyBurstThrottleSec(sec: Int): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteNotifyBurstThrottleSec(sec) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteBatteryPhoneFullWatchEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteBatteryPhoneFullWatchEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteBatteryPhoneLowWatchEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteBatteryPhoneLowWatchEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteBatteryPhoneLowThreshold(percent: Int): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteBatteryPhoneLowThreshold(percent) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteBatteryWatchFullPhoneEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteBatteryWatchFullPhoneEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteBatteryWatchLowPhoneEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteBatteryWatchLowPhoneEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteBatteryWatchLowThreshold(percent: Int): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteBatteryWatchLowThreshold(percent) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
     private suspend fun writeRemoteSleepAutoDndEnabled(enabled: Boolean): Boolean =
         suspendCancellableCoroutine { continuation ->
             ModuleScope.writeRemoteSleepAutoDndEnabled(enabled) { ok ->
@@ -318,7 +382,10 @@ class MainActivity : ComponentActivity() {
         if (ui.saving || ui.calendarSaving || ui.wifiAutoSaving || ui.liveWindowSaving
             || ui.gameFlashbackSaving || ui.notifyMuteDndSaving || ui.notifySilentPushSaving
             || ui.notifySilentScreenOnSaving || ui.notifySilentFocusSaving || ui.notifySilentGameSaving
-            || ui.notifyDisconnectStageSaving || ui.sleepAutoDndSaving || ui.wakeExitDndSaving || ui.sleepPauseMediaSaving
+            || ui.notifyDisconnectStageSaving || ui.notifyBurstThrottleSaving
+            || ui.batteryPhoneFullWatchSaving || ui.batteryPhoneLowWatchSaving
+            || ui.batteryWatchFullPhoneSaving || ui.batteryWatchLowPhoneSaving
+            || ui.sleepAutoDndSaving || ui.wakeExitDndSaving || ui.sleepPauseMediaSaving
             || ui.sleepStopVideoSaving || ui.myDevicesCardSaving || ui.rawCommandDebugSaving) return
         val revision = ++switchRevision
         val (clockReply, calendarReply, healthReply) = coroutineScope {
@@ -621,6 +688,171 @@ class MainActivity : ComponentActivity() {
                 healthHost = healthReply,
                 notifyDisconnectStageSaving = false,
                 message = if (!saved) "未能保存短时断连通知暂存开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setNotifyBurstThrottleEnabled(enable: Boolean) {
+        if (ui.notifyBurstThrottleSaving) return
+        ++switchRevision
+        ui = ui.copy(notifyBurstThrottleSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteNotifyBurstThrottleEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_NOTIFY_BURST_THROTTLE
+            else HealthHostControl.DISABLE_NOTIFY_BURST_THROTTLE
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.notifyBurstThrottleEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                notifyBurstThrottleSaving = false,
+                message = if (!saved) "未能保存通知连发防轰炸开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setNotifyBurstThrottleSec(sec: Int) {
+        if (ui.notifyBurstThrottleSaving) return
+        val clamped = io.github.watchlink.setup.WatchLinkPrefs.clampNotifyBurstThrottleSec(sec)
+        ++switchRevision
+        ui = ui.copy(notifyBurstThrottleSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteNotifyBurstThrottleSec(clamped)
+            val healthReply = healthCommand(HealthHostControl.setNotifyBurstThrottleSecCommand(clamped))
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.notifyBurstThrottleSec() == clamped)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                notifyBurstThrottleSaving = false,
+                message = if (!saved) "未能保存通知防轰炸秒数。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setBatteryPhoneFullWatchEnabled(enable: Boolean) {
+        if (ui.batteryPhoneFullWatchSaving) return
+        ++switchRevision
+        ui = ui.copy(batteryPhoneFullWatchSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteBatteryPhoneFullWatchEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_BATTERY_PHONE_FULL_WATCH
+            else HealthHostControl.DISABLE_BATTERY_PHONE_FULL_WATCH
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.batteryPhoneFullWatchEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                batteryPhoneFullWatchSaving = false,
+                message = if (!saved) "未能保存手机充满提醒手表开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setBatteryPhoneLowWatchEnabled(enable: Boolean) {
+        if (ui.batteryPhoneLowWatchSaving) return
+        ++switchRevision
+        ui = ui.copy(batteryPhoneLowWatchSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteBatteryPhoneLowWatchEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_BATTERY_PHONE_LOW_WATCH
+            else HealthHostControl.DISABLE_BATTERY_PHONE_LOW_WATCH
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.batteryPhoneLowWatchEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                batteryPhoneLowWatchSaving = false,
+                message = if (!saved) "未能保存手机低电量提醒手表开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setBatteryPhoneLowThreshold(percent: Int) {
+        if (ui.batteryPhoneLowWatchSaving) return
+        val clamped = io.github.watchlink.setup.WatchLinkPrefs.clampBatteryLowThreshold(percent)
+        ++switchRevision
+        ui = ui.copy(batteryPhoneLowWatchSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteBatteryPhoneLowThreshold(clamped)
+            val healthReply = healthCommand(HealthHostControl.setBatteryPhoneLowThresholdCommand(clamped))
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.batteryPhoneLowThreshold() == clamped)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                batteryPhoneLowWatchSaving = false,
+                message = if (!saved) "未能保存手机低电量阈值。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setBatteryWatchFullPhoneEnabled(enable: Boolean) {
+        if (ui.batteryWatchFullPhoneSaving) return
+        ++switchRevision
+        ui = ui.copy(batteryWatchFullPhoneSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteBatteryWatchFullPhoneEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_BATTERY_WATCH_FULL_PHONE
+            else HealthHostControl.DISABLE_BATTERY_WATCH_FULL_PHONE
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.batteryWatchFullPhoneEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                batteryWatchFullPhoneSaving = false,
+                message = if (!saved) "未能保存手表充满提醒手机开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setBatteryWatchLowPhoneEnabled(enable: Boolean) {
+        if (ui.batteryWatchLowPhoneSaving) return
+        ++switchRevision
+        ui = ui.copy(batteryWatchLowPhoneSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteBatteryWatchLowPhoneEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_BATTERY_WATCH_LOW_PHONE
+            else HealthHostControl.DISABLE_BATTERY_WATCH_LOW_PHONE
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.batteryWatchLowPhoneEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                batteryWatchLowPhoneSaving = false,
+                message = if (!saved) "未能保存手表低电量提醒手机开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setBatteryWatchLowThreshold(percent: Int) {
+        if (ui.batteryWatchLowPhoneSaving) return
+        val clamped = io.github.watchlink.setup.WatchLinkPrefs.clampBatteryLowThreshold(percent)
+        ++switchRevision
+        ui = ui.copy(batteryWatchLowPhoneSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteBatteryWatchLowThreshold(clamped)
+            val healthReply = healthCommand(HealthHostControl.setBatteryWatchLowThresholdCommand(clamped))
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.batteryWatchLowThreshold() == clamped)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                batteryWatchLowPhoneSaving = false,
+                message = if (!saved) "未能保存手表低电量阈值。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
             )
             readChecks()
         }
