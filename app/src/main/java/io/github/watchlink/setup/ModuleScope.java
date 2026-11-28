@@ -75,7 +75,92 @@ public final class ModuleScope {
                        Boolean remoteEnabled, Boolean remoteCalendarEnabled,
                        Boolean remoteWifiAutoSyncEnabled, Boolean remoteLiveWindowEnabled,
                        TimerOptions timerOptions, Boolean remoteRawCommandDebugEnabled,
-                       Boolean remoteGameFlashbackEnabled, Integer remoteGameFlashbackLeadSec) {
+                       Boolean remoteGameFlashbackEnabled, Integer remoteGameFlashbackLeadSec,
+                       Boolean remoteNotifyMuteDndEnabled, Boolean remoteSleepAutoDndEnabled,
+                       Boolean remoteWakeExitDndEnabled, Boolean remoteNotifySilentPushEnabled) {
+        public View(boolean frameworkConnected,
+                    String frameworkName,
+                    String frameworkVersion,
+                    int frameworkApiVersion,
+                    boolean clockGranted, boolean healthGranted, boolean calendarGranted,
+                    boolean wirelessGranted, boolean umsGranted,
+                    boolean clockActive, boolean healthActive, boolean calendarActive,
+                    boolean wirelessActive, boolean umsActive,
+                    TargetRuntime clockRuntime, TargetRuntime healthRuntime,
+                    TargetRuntime calendarRuntime, TargetRuntime wirelessRuntime,
+                    TargetRuntime umsRuntime, TargetRuntime daemonRuntime,
+                    boolean checking,
+                    boolean requestPending, String requestResult,
+                    boolean remotePrefsSupported,
+                    Boolean remoteEnabled, Boolean remoteCalendarEnabled,
+                    Boolean remoteWifiAutoSyncEnabled, Boolean remoteLiveWindowEnabled,
+                    TimerOptions timerOptions, Boolean remoteRawCommandDebugEnabled,
+                    Boolean remoteGameFlashbackEnabled, Integer remoteGameFlashbackLeadSec,
+                    Boolean remoteNotifyMuteDndEnabled, Boolean remoteSleepAutoDndEnabled,
+                    Boolean remoteWakeExitDndEnabled) {
+            this(frameworkConnected, frameworkName, frameworkVersion, frameworkApiVersion, clockGranted,
+                    healthGranted, calendarGranted, wirelessGranted, umsGranted, clockActive, healthActive,
+                    calendarActive, wirelessActive, umsActive, clockRuntime, healthRuntime, calendarRuntime,
+                    wirelessRuntime, umsRuntime, daemonRuntime, checking, requestPending, requestResult,
+                    remotePrefsSupported, remoteEnabled, remoteCalendarEnabled, remoteWifiAutoSyncEnabled,
+                    remoteLiveWindowEnabled, timerOptions, remoteRawCommandDebugEnabled,
+                    remoteGameFlashbackEnabled, remoteGameFlashbackLeadSec,
+                    remoteNotifyMuteDndEnabled, remoteSleepAutoDndEnabled, remoteWakeExitDndEnabled, null);
+        }
+        public View(boolean frameworkConnected,
+                    String frameworkName,
+                    String frameworkVersion,
+                    int frameworkApiVersion,
+                    boolean clockGranted, boolean healthGranted, boolean calendarGranted,
+                    boolean wirelessGranted, boolean umsGranted,
+                    boolean clockActive, boolean healthActive, boolean calendarActive,
+                    boolean wirelessActive, boolean umsActive,
+                    TargetRuntime clockRuntime, TargetRuntime healthRuntime,
+                    TargetRuntime calendarRuntime, TargetRuntime wirelessRuntime,
+                    TargetRuntime umsRuntime, TargetRuntime daemonRuntime,
+                    boolean checking,
+                    boolean requestPending, String requestResult,
+                    boolean remotePrefsSupported,
+                    Boolean remoteEnabled, Boolean remoteCalendarEnabled,
+                    Boolean remoteWifiAutoSyncEnabled, Boolean remoteLiveWindowEnabled,
+                    TimerOptions timerOptions, Boolean remoteRawCommandDebugEnabled,
+                    Boolean remoteGameFlashbackEnabled, Integer remoteGameFlashbackLeadSec,
+                    Boolean remoteNotifyMuteDndEnabled, Boolean remoteSleepAutoDndEnabled) {
+            this(frameworkConnected, frameworkName, frameworkVersion, frameworkApiVersion, clockGranted,
+                    healthGranted, calendarGranted, wirelessGranted, umsGranted, clockActive, healthActive,
+                    calendarActive, wirelessActive, umsActive, clockRuntime, healthRuntime, calendarRuntime,
+                    wirelessRuntime, umsRuntime, daemonRuntime, checking, requestPending, requestResult,
+                    remotePrefsSupported, remoteEnabled, remoteCalendarEnabled, remoteWifiAutoSyncEnabled,
+                    remoteLiveWindowEnabled, timerOptions, remoteRawCommandDebugEnabled,
+                    remoteGameFlashbackEnabled, remoteGameFlashbackLeadSec,
+                    remoteNotifyMuteDndEnabled, remoteSleepAutoDndEnabled, null);
+        }
+        public View(boolean frameworkConnected,
+                    String frameworkName,
+                    String frameworkVersion,
+                    int frameworkApiVersion,
+                    boolean clockGranted, boolean healthGranted, boolean calendarGranted,
+                    boolean wirelessGranted, boolean umsGranted,
+                    boolean clockActive, boolean healthActive, boolean calendarActive,
+                    boolean wirelessActive, boolean umsActive,
+                    TargetRuntime clockRuntime, TargetRuntime healthRuntime,
+                    TargetRuntime calendarRuntime, TargetRuntime wirelessRuntime,
+                    TargetRuntime umsRuntime, TargetRuntime daemonRuntime,
+                    boolean checking,
+                    boolean requestPending, String requestResult,
+                    boolean remotePrefsSupported,
+                    Boolean remoteEnabled, Boolean remoteCalendarEnabled,
+                    Boolean remoteWifiAutoSyncEnabled, Boolean remoteLiveWindowEnabled,
+                    TimerOptions timerOptions, Boolean remoteRawCommandDebugEnabled,
+                    Boolean remoteGameFlashbackEnabled, Integer remoteGameFlashbackLeadSec) {
+            this(frameworkConnected, frameworkName, frameworkVersion, frameworkApiVersion, clockGranted,
+                    healthGranted, calendarGranted, wirelessGranted, umsGranted, clockActive, healthActive,
+                    calendarActive, wirelessActive, umsActive, clockRuntime, healthRuntime, calendarRuntime,
+                    wirelessRuntime, umsRuntime, daemonRuntime, checking, requestPending, requestResult,
+                    remotePrefsSupported, remoteEnabled, remoteCalendarEnabled, remoteWifiAutoSyncEnabled,
+                    remoteLiveWindowEnabled, timerOptions, remoteRawCommandDebugEnabled,
+                    remoteGameFlashbackEnabled, remoteGameFlashbackLeadSec, null, null);
+        }
         public View(boolean frameworkConnected,
                     String frameworkName,
                     String frameworkVersion,
@@ -267,6 +352,10 @@ public final class ModuleScope {
     private static Boolean remoteLiveWindowEnabled;
     private static Boolean remoteGameFlashbackEnabled;
     private static Integer remoteGameFlashbackLeadSec;
+    private static Boolean remoteNotifyMuteDndEnabled;
+    private static Boolean remoteNotifySilentPushEnabled;
+    private static Boolean remoteSleepAutoDndEnabled;
+    private static Boolean remoteWakeExitDndEnabled;
     private static Boolean remoteRawCommandDebugEnabled;
     private static TargetRuntime clockRuntime = TargetRuntime.UNSUPPORTED;
     private static TargetRuntime healthRuntime = TargetRuntime.UNSUPPORTED;
@@ -356,6 +445,26 @@ public final class ModuleScope {
                 WatchLinkPrefs.clampGameFlashbackLeadSec(leadSec), callback);
     }
 
+    /** Persists the phone-DND watch notification silent-push toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteNotifyMuteDndEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED, enabled, callback);
+    }
+
+    /** Persists the phone-silent-notification watch silent-push toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteNotifySilentPushEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED, enabled, callback);
+    }
+
+    /** Persists the watch-sleep auto phone DND toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteSleepAutoDndEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, enabled, callback);
+    }
+
+    /** Persists the watch-wake auto exit phone DND toggle to LSPosed RemotePreferences. */
+    public static void writeRemoteWakeExitDndEnabled(boolean enabled, Consumer<Boolean> callback) {
+        writeRemoteBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, enabled, callback);
+    }
+
     /** Persists the opt-in ADB raw watch command debug toggle to LSPosed RemotePreferences. */
     public static void writeRemoteRawCommandDebugEnabled(boolean enabled, Consumer<Boolean> callback) {
         writeRemoteBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, enabled, callback);
@@ -415,6 +524,10 @@ public final class ModuleScope {
                         else if (WatchLinkPrefs.KEY_WIFI_AUTO_SYNC_ENABLED.equals(key)) remoteWifiAutoSyncEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_LIVE_WINDOW_ENABLED.equals(key)) remoteLiveWindowEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_GAME_FLASHBACK_ENABLED.equals(key)) remoteGameFlashbackEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED.equals(key)) remoteNotifyMuteDndEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED.equals(key)) remoteNotifySilentPushEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED.equals(key)) remoteSleepAutoDndEnabled = enabled;
+                        else if (WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED.equals(key)) remoteWakeExitDndEnabled = enabled;
                         else if (WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG.equals(key)) remoteRawCommandDebugEnabled = enabled;
                         ProbeLog.info("REMOTE_PREFS_SAVED");
                         publish();
@@ -626,6 +739,10 @@ public final class ModuleScope {
         remoteLiveWindowEnabled = null;
         remoteGameFlashbackEnabled = null;
         remoteGameFlashbackLeadSec = null;
+        remoteNotifyMuteDndEnabled = null;
+        remoteNotifySilentPushEnabled = null;
+        remoteSleepAutoDndEnabled = null;
+        remoteWakeExitDndEnabled = null;
         remoteRawCommandDebugEnabled = null;
         clockRuntime = TargetRuntime.UNSUPPORTED;
         healthRuntime = TargetRuntime.UNSUPPORTED;
@@ -664,6 +781,10 @@ public final class ModuleScope {
         remoteLiveWindowEnabled = null;
         remoteGameFlashbackEnabled = null;
         remoteGameFlashbackLeadSec = null;
+        remoteNotifyMuteDndEnabled = null;
+        remoteNotifySilentPushEnabled = null;
+        remoteSleepAutoDndEnabled = null;
+        remoteWakeExitDndEnabled = null;
         remoteRawCommandDebugEnabled = null;
         runningTargets.clear();
         daemonTarget = null;
@@ -708,6 +829,14 @@ public final class ModuleScope {
                         ? WatchLinkPrefs.clampGameFlashbackLeadSec(
                                 prefs.getInt(WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC,
                                         WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC)) : null;
+                remoteNotifyMuteDndEnabled = prefs.contains(WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED, false) : null;
+                remoteNotifySilentPushEnabled = prefs.contains(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED, false) : null;
+                remoteSleepAutoDndEnabled = prefs.contains(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, false) : null;
+                remoteWakeExitDndEnabled = prefs.contains(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED)
+                        ? prefs.getBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, false) : null;
                 remoteRawCommandDebugEnabled = prefs.contains(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG)
                         ? prefs.getBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, false) : null;
             } catch (RuntimeException error) {
@@ -831,7 +960,9 @@ public final class ModuleScope {
                 !awaiting.isEmpty(), result,
                 remotePrefsSupported, remoteEnabled, remoteCalendarEnabled,
                 remoteWifiAutoSyncEnabled, remoteLiveWindowEnabled, timerOptions, remoteRawCommandDebugEnabled,
-                remoteGameFlashbackEnabled, remoteGameFlashbackLeadSec);
+                remoteGameFlashbackEnabled, remoteGameFlashbackLeadSec,
+                remoteNotifyMuteDndEnabled, remoteSleepAutoDndEnabled, remoteWakeExitDndEnabled,
+                remoteNotifySilentPushEnabled);
     }
 
     private ModuleScope() {}

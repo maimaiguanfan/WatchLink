@@ -234,4 +234,55 @@ public class HostSettingsTest {
         assertEquals(WatchLinkPrefs.MAX_GAME_FLASHBACK_LEAD_SEC, settings.gameFlashbackLeadSec());
         assertEquals(WatchLinkPrefs.MAX_GAME_FLASHBACK_LEAD_SEC, lastLeadSec.get());
     }
+
+    @Test public void notifyMuteDndAndSleepAutoDndDefaultFalseAndNotifyListeners() {
+        var remote = new MemoryPrefs();
+        var local = new MemoryPrefs();
+        var settings = new HostSettings(remote, local);
+
+        assertFalse(settings.isNotifyMuteDndEnabled());
+        assertFalse(settings.isNotifySilentPushEnabled());
+        assertFalse(settings.isSleepAutoDndEnabled());
+        assertFalse(settings.isWakeExitDndEnabled());
+
+        var dndMuted = new java.util.concurrent.atomic.AtomicBoolean();
+        var silentPush = new java.util.concurrent.atomic.AtomicBoolean();
+        var sleepDnd = new java.util.concurrent.atomic.AtomicBoolean();
+        var wakeDnd = new java.util.concurrent.atomic.AtomicBoolean();
+        settings.onNotifyMuteDndChanged(v -> dndMuted.set(Boolean.TRUE.equals(v)));
+        settings.onNotifySilentPushChanged(v -> silentPush.set(Boolean.TRUE.equals(v)));
+        settings.onSleepAutoDndChanged(v -> sleepDnd.set(Boolean.TRUE.equals(v)));
+        settings.onWakeExitDndChanged(v -> wakeDnd.set(Boolean.TRUE.equals(v)));
+
+        assertTrue(settings.setLocalNotifyMuteDndFallback(true));
+        assertTrue(settings.setLocalNotifySilentPushFallback(true));
+        assertTrue(settings.setLocalSleepAutoDndFallback(true));
+        assertTrue(settings.setLocalWakeExitDndFallback(true));
+        assertTrue(settings.isNotifyMuteDndEnabled());
+        assertTrue(settings.isNotifySilentPushEnabled());
+        assertTrue(settings.isSleepAutoDndEnabled());
+        assertTrue(settings.isWakeExitDndEnabled());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED, true).commit();
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED, true).commit();
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, true).commit();
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, true).commit();
+        assertTrue(dndMuted.get());
+        assertTrue(silentPush.get());
+        assertTrue(sleepDnd.get());
+        assertTrue(wakeDnd.get());
+
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED, false).commit();
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED, false).commit();
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, false).commit();
+        remote.edit().putBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, false).commit();
+        assertFalse(settings.isNotifyMuteDndEnabled());
+        assertFalse(settings.isNotifySilentPushEnabled());
+        assertFalse(settings.isSleepAutoDndEnabled());
+        assertFalse(settings.isWakeExitDndEnabled());
+        assertFalse(dndMuted.get());
+        assertFalse(silentPush.get());
+        assertFalse(sleepDnd.get());
+        assertFalse(wakeDnd.get());
+    }
 }

@@ -22,6 +22,10 @@ final class HostSettings {
     private volatile Consumer<Boolean> liveWindowChangedCallback;
     private volatile Consumer<Boolean> gameFlashbackChangedCallback;
     private volatile Consumer<Integer> gameFlashbackLeadSecChangedCallback;
+    private volatile Consumer<Boolean> notifyMuteDndChangedCallback;
+    private volatile Consumer<Boolean> notifySilentPushChangedCallback;
+    private volatile Consumer<Boolean> sleepAutoDndChangedCallback;
+    private volatile Consumer<Boolean> wakeExitDndChangedCallback;
     private volatile Consumer<Boolean> rawCommandDebugChangedCallback;
 
     HostSettings(SharedPreferences remote, SharedPreferences local) {
@@ -62,6 +66,26 @@ final class HostSettings {
                                 prefs.getInt(WatchLinkPrefs.KEY_GAME_FLASHBACK_LEAD_SEC,
                                         WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC));
                         callback.accept(sec);
+                    }
+                } else if (WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = notifyMuteDndChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = notifySilentPushChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = sleepAutoDndChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, false));
+                    }
+                } else if (WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED.equals(key)) {
+                    Consumer<Boolean> callback = wakeExitDndChangedCallback;
+                    if (callback != null) {
+                        callback.accept(prefs.getBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, false));
                     }
                 } else if (WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG.equals(key)) {
                     Consumer<Boolean> callback = rawCommandDebugChangedCallback;
@@ -139,6 +163,22 @@ final class HostSettings {
                         WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC));
     }
 
+    boolean isNotifyMuteDndEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED);
+    }
+
+    boolean isNotifySilentPushEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED);
+    }
+
+    boolean isSleepAutoDndEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED);
+    }
+
+    boolean isWakeExitDndEnabled() {
+        return readBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED);
+    }
+
     boolean isRawCommandDebugEnabled() {
         return readBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG);
     }
@@ -190,6 +230,22 @@ final class HostSettings {
                 WatchLinkPrefs.clampGameFlashbackLeadSec(leadSec)).commit();
     }
 
+    boolean setLocalNotifyMuteDndFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_MUTE_DND_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalNotifySilentPushFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_NOTIFY_SILENT_PUSH_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalSleepAutoDndFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_SLEEP_AUTO_DND_ENABLED, enabled).commit();
+    }
+
+    boolean setLocalWakeExitDndFallback(boolean enabled) {
+        return local.edit().putBoolean(WatchLinkPrefs.KEY_WAKE_EXIT_DND_ENABLED, enabled).commit();
+    }
+
     boolean setLocalRawCommandDebugFallback(boolean enabled) {
         return local.edit().putBoolean(WatchLinkPrefs.KEY_RAW_COMMAND_DEBUG, enabled).commit();
     }
@@ -218,6 +274,22 @@ final class HostSettings {
         gameFlashbackLeadSecChangedCallback = callback;
     }
 
+    void onNotifyMuteDndChanged(Consumer<Boolean> callback) {
+        notifyMuteDndChangedCallback = callback;
+    }
+
+    void onNotifySilentPushChanged(Consumer<Boolean> callback) {
+        notifySilentPushChangedCallback = callback;
+    }
+
+    void onSleepAutoDndChanged(Consumer<Boolean> callback) {
+        sleepAutoDndChangedCallback = callback;
+    }
+
+    void onWakeExitDndChanged(Consumer<Boolean> callback) {
+        wakeExitDndChangedCallback = callback;
+    }
+
     void onRawCommandDebugChanged(Consumer<Boolean> callback) {
         rawCommandDebugChangedCallback = callback;
     }
@@ -230,6 +302,10 @@ final class HostSettings {
         liveWindowChangedCallback = null;
         gameFlashbackChangedCallback = null;
         gameFlashbackLeadSecChangedCallback = null;
+        notifyMuteDndChangedCallback = null;
+        notifySilentPushChangedCallback = null;
+        sleepAutoDndChangedCallback = null;
+        wakeExitDndChangedCallback = null;
         rawCommandDebugChangedCallback = null;
         if (remote != null && remoteListener != null) {
             try { remote.unregisterOnSharedPreferenceChangeListener(remoteListener); }

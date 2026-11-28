@@ -138,13 +138,17 @@ final class HealthLiveWindowBridge {
         wireReceiver = r;
 
         settings.onLiveWindowChanged(enabled -> worker.execute(() -> {
-            notifyDaemonState(Boolean.TRUE.equals(enabled), settings.isGameFlashbackEnabled(), isWatchCapableOrUnknown());
+            notifyDaemonState(Boolean.TRUE.equals(enabled), settings.isGameFlashbackEnabled(),
+                    isWatchCapableOrUnknown(), settings.isNotifyMuteDndEnabled(),
+                    settings.isNotifySilentPushEnabled());
             if (!Boolean.TRUE.equals(enabled)) {
                 closeGroupLocked(false);
             }
         }));
         settings.onGameFlashbackChanged(enabled -> worker.execute(() -> {
-            notifyDaemonState(settings.isLiveWindowEnabled(), Boolean.TRUE.equals(enabled), isWatchCapableOrUnknown());
+            notifyDaemonState(settings.isLiveWindowEnabled(), Boolean.TRUE.equals(enabled),
+                    isWatchCapableOrUnknown(), settings.isNotifyMuteDndEnabled(),
+                    settings.isNotifySilentPushEnabled());
             if (!Boolean.TRUE.equals(enabled)) {
                 closeGameFlashbackLocked();
             }
@@ -154,12 +158,22 @@ final class HealthLiveWindowBridge {
                 rescheduleGameReviveLocked(leadSec);
             }
         }));
+        settings.onNotifyMuteDndChanged(enabled -> worker.execute(() ->
+                notifyDaemonState(settings.isLiveWindowEnabled(), settings.isGameFlashbackEnabled(),
+                        isWatchCapableOrUnknown(), Boolean.TRUE.equals(enabled),
+                        settings.isNotifySilentPushEnabled())));
+        settings.onNotifySilentPushChanged(enabled -> worker.execute(() ->
+                notifyDaemonState(settings.isLiveWindowEnabled(), settings.isGameFlashbackEnabled(),
+                        isWatchCapableOrUnknown(), settings.isNotifyMuteDndEnabled(),
+                        Boolean.TRUE.equals(enabled))));
 
         cleanupFuture = worker.scheduleWithFixedDelay(
                 this::expireOrphansLocked, CLEANUP_INTERVAL_MS, CLEANUP_INTERVAL_MS, TimeUnit.MILLISECONDS);
         installed = true;
         worker.execute(this::closeForgottenTimers);
-        notifyDaemonState(settings.isLiveWindowEnabled(), settings.isGameFlashbackEnabled(), isWatchCapableOrUnknown());
+        notifyDaemonState(settings.isLiveWindowEnabled(), settings.isGameFlashbackEnabled(),
+                isWatchCapableOrUnknown(), settings.isNotifyMuteDndEnabled(),
+                settings.isNotifySilentPushEnabled());
         ProbeLog.info("HEALTH_LIVE_READY source=HEALTH");
     }
 
@@ -168,17 +182,31 @@ final class HealthLiveWindowBridge {
     }
 
     void onSettingsFallbackChanged(boolean enabled) {
-        notifyDaemonState(enabled, settings.isGameFlashbackEnabled(), isWatchCapableOrUnknown());
+        notifyDaemonState(enabled, settings.isGameFlashbackEnabled(),
+                isWatchCapableOrUnknown(), settings.isNotifyMuteDndEnabled(),
+                settings.isNotifySilentPushEnabled());
         if (!enabled) {
             closeGroupLocked(false);
         }
     }
 
     void onGameFlashbackFallbackChanged(boolean enabled) {
-        notifyDaemonState(settings.isLiveWindowEnabled(), enabled, isWatchCapableOrUnknown());
+        notifyDaemonState(settings.isLiveWindowEnabled(), enabled,
+                isWatchCapableOrUnknown(), settings.isNotifyMuteDndEnabled(),
+                settings.isNotifySilentPushEnabled());
         if (!enabled) {
             closeGameFlashbackLocked();
         }
+    }
+
+    void onNotifyMuteDndFallbackChanged(boolean enabled) {
+        notifyDaemonState(settings.isLiveWindowEnabled(), settings.isGameFlashbackEnabled(),
+                isWatchCapableOrUnknown(), enabled, settings.isNotifySilentPushEnabled());
+    }
+
+    void onNotifySilentPushFallbackChanged(boolean enabled) {
+        notifyDaemonState(settings.isLiveWindowEnabled(), settings.isGameFlashbackEnabled(),
+                isWatchCapableOrUnknown(), settings.isNotifyMuteDndEnabled(), enabled);
     }
 
     void onGameFlashbackLeadSecChanged(int leadSec) {
@@ -192,6 +220,8 @@ final class HealthLiveWindowBridge {
         settings.onLiveWindowChanged(null);
         settings.onGameFlashbackChanged(null);
         settings.onGameFlashbackLeadSecChanged(null);
+        settings.onNotifyMuteDndChanged(null);
+        settings.onNotifySilentPushChanged(null);
         cancelTestFutures();
         cancelAllReviveTimersLocked();
         gameRevive.clear();
@@ -354,7 +384,10 @@ final class HealthLiveWindowBridge {
 
         String support = readWatchSupport();
         boolean supported = !"UNSUPPORTED".equals(support);
-        if (!timer) notifyDaemonState(settings.isLiveWindowEnabled(), settings.isGameFlashbackEnabled(), supported);
+        if (!timer) {
+            notifyDaemonState(settings.isLiveWindowEnabled(), settings.isGameFlashbackEnabled(),
+                    supported, settings.isNotifyMuteDndEnabled(), settings.isNotifySilentPushEnabled());
+        }
         if ("WATCH_DISCONNECTED".equals(support)) {
             lastResult = "WATCH_DISCONNECTED";
             lastSource = incoming.source();
@@ -640,14 +673,18 @@ final class HealthLiveWindowBridge {
     }
 
     /** Same-package non-exported notification to Health :DaemonService for local fallback sync. */
-    private void notifyDaemonState(boolean enabled, boolean gameFlashbackEnabled, boolean watchSupported) {
+    private void notifyDaemonState(boolean enabled, boolean gameFlashbackEnabled,
+                                   boolean watchSupported, boolean notifyMuteDndEnabled,
+                                   boolean notifySilentPushEnabled) {
         try {
             Intent sync = new Intent(DAEMON_SYNC_ACTION)
                     .setPackage(TargetProfile.HEALTH.packageName)
                     .addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY)
                     .putExtra("enabled", enabled)
                     .putExtra("gameFlashbackEnabled", gameFlashbackEnabled)
-                    .putExtra("watchSupported", watchSupported);
+                    .putExtra("watchSupported", watchSupported)
+                    .putExtra("notifyMuteDndEnabled", notifyMuteDndEnabled)
+                    .putExtra("notifySilentPushEnabled", notifySilentPushEnabled);
             app.sendBroadcast(sync);
         } catch (RuntimeException ignored) {}
     }

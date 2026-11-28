@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.AlarmClock
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -59,6 +60,11 @@ class MainActivity : ComponentActivity() {
                 onLiveWindowEnable = ::setLiveWindowEnabled,
                 onGameFlashbackEnable = ::setGameFlashbackEnabled,
                 onGameFlashbackLeadSec = ::setGameFlashbackLeadSec,
+                onNotifyMuteDndEnable = ::setNotifyMuteDndEnabled,
+                onNotifySilentPushEnable = ::setNotifySilentPushEnabled,
+                onSleepAutoDndEnable = ::setSleepAutoDndEnabled,
+                onWakeExitDndEnable = ::setWakeExitDndEnabled,
+                onOpenDndAccessSettings = { open(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) },
                 onWifiAutoEnable = ::setWifiAutoEnabled,
                 onRawCommandDebugEnable = ::setRawCommandDebugEnabled,
                 onDismissMessage = { ui = ui.copy(message = null) },
@@ -182,6 +188,34 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    private suspend fun writeRemoteNotifyMuteDndEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteNotifyMuteDndEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteNotifySilentPushEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteNotifySilentPushEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteSleepAutoDndEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteSleepAutoDndEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
+    private suspend fun writeRemoteWakeExitDndEnabled(enabled: Boolean): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            ModuleScope.writeRemoteWakeExitDndEnabled(enabled) { ok ->
+                if (continuation.isActive) continuation.resume(ok)
+            }
+        }
+
     private suspend fun writeRemoteRawCommandDebugEnabled(enabled: Boolean): Boolean =
         suspendCancellableCoroutine { continuation ->
             ModuleScope.writeRemoteRawCommandDebugEnabled(enabled) { ok ->
@@ -205,7 +239,8 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun queryHosts() {
         if (ui.saving || ui.calendarSaving || ui.wifiAutoSaving || ui.liveWindowSaving
-            || ui.gameFlashbackSaving || ui.rawCommandDebugSaving) return
+            || ui.gameFlashbackSaving || ui.notifyMuteDndSaving || ui.notifySilentPushSaving
+            || ui.sleepAutoDndSaving || ui.wakeExitDndSaving || ui.rawCommandDebugSaving) return
         val revision = ++switchRevision
         val (clockReply, calendarReply, healthReply) = coroutineScope {
             val clockJob = async { clockCommand(ClockHostControl.QUERY) }
@@ -368,6 +403,100 @@ class MainActivity : ComponentActivity() {
                 healthHost = healthReply,
                 gameFlashbackSaving = false,
                 message = if (!saved) "未能保存复活提前震动秒数。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setNotifyMuteDndEnabled(enable: Boolean) {
+        if (ui.notifyMuteDndSaving) return
+        ++switchRevision
+        ui = ui.copy(notifyMuteDndSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteNotifyMuteDndEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_NOTIFY_MUTE_DND
+            else HealthHostControl.DISABLE_NOTIFY_MUTE_DND
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.notifyMuteDndEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                notifyMuteDndSaving = false,
+                message = if (!saved) "未能保存免打扰静默推送开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setNotifySilentPushEnabled(enable: Boolean) {
+        if (ui.notifySilentPushSaving) return
+        ++switchRevision
+        ui = ui.copy(notifySilentPushSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteNotifySilentPushEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_NOTIFY_SILENT_PUSH
+            else HealthHostControl.DISABLE_NOTIFY_SILENT_PUSH
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.notifySilentPushEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                notifySilentPushSaving = false,
+                message = if (!saved) "未能保存手机静默通知推送开关状态。请确认 LSPosed 已启用或运动健康在线后再试。" else null,
+            )
+            readChecks()
+        }
+    }
+
+    private fun setSleepAutoDndEnabled(enable: Boolean) {
+        if (ui.sleepAutoDndSaving) return
+        ++switchRevision
+        ui = ui.copy(sleepAutoDndSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteSleepAutoDndEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_SLEEP_AUTO_DND
+            else HealthHostControl.DISABLE_SLEEP_AUTO_DND
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.sleepAutoDndEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                sleepAutoDndSaving = false,
+                message = when {
+                    !saved -> "未能保存入睡开启免打扰开关状态。请确认 LSPosed 已启用或运动健康在线后再试。"
+                    enable && healthReply.reachable() && !healthReply.dndPolicyAccess() ->
+                        "已开启入睡开启免打扰。请在系统「勿扰权限」中允许华为运动健康控制免打扰。"
+                    else -> null
+                },
+            )
+            readChecks()
+        }
+    }
+
+    private fun setWakeExitDndEnabled(enable: Boolean) {
+        if (ui.wakeExitDndSaving) return
+        ++switchRevision
+        ui = ui.copy(wakeExitDndSaving = true, message = null)
+        lifecycleScope.launch {
+            val remoteOk = writeRemoteWakeExitDndEnabled(enable)
+            val healthAction = if (enable) HealthHostControl.ENABLE_WAKE_EXIT_DND
+            else HealthHostControl.DISABLE_WAKE_EXIT_DND
+            val healthReply = healthCommand(healthAction)
+            val scopeNow = withContext(Dispatchers.IO) { ModuleScope.inspect() }
+            val saved = remoteOk || (healthReply.reachable() && healthReply.wakeExitDndEnabled() == enable)
+            ui = ui.copy(
+                scope = scopeNow,
+                healthHost = healthReply,
+                wakeExitDndSaving = false,
+                message = when {
+                    !saved -> "未能保存醒来退出免打扰开关状态。请确认 LSPosed 已启用或运动健康在线后再试。"
+                    enable && healthReply.reachable() && !healthReply.dndPolicyAccess() ->
+                        "已开启醒来退出免打扰。请在系统「勿扰权限」中允许华为运动健康控制免打扰。"
+                    else -> null
+                },
             )
             readChecks()
         }

@@ -27,7 +27,7 @@ import java.util.zip.ZipFile;
  * structurally by interfaces, superclass, and log markers ONCE and caches by APK fingerprint.
  */
 final class HealthSymbolResolver {
-    static final String SCHEMA = "health-v4";
+    static final String SCHEMA = "health-v6";
     private static final String D_PLUGIN_PROXY = "Lcom/huawei/haf/bundle/AppBundlePluginProxy;";
     private static final String D_DEVICE_MGR_API = "Lcom/huawei/health/devicemgr/api/DeviceMgrApi;";
     private static final String D_SAMPLE_CMD_API = "Lcom/huawei/health/devicemgr/api/outofprocess/SendSampleCommandApi;";
@@ -39,6 +39,9 @@ final class HealthSymbolResolver {
     private static final String D_PARSER_INTERFACE = "Lcom/huawei/hwdevice/phoneprocess/binder/ParserInterface;";
     private static final String D_WIFI_CONNECT_RECEIVER = "Lcom/huawei/hwdevice/phoneprocess/mgr/hwwifisyncmgr/WifiConnectReceiver;";
     private static final String D_DATA_RECEIVE_CALLBACK = "Lcom/huawei/health/devicemgr/business/callback/DataReceiveCallback;";
+    private static final String D_BT_PROXY_SLEEP_CALLBACK = "Lcom/huawei/hwdevice/phoneprocess/mgr/btproxy/callback/BtProxySleepCallback;";
+    private static final String D_BUNDLE = "Landroid/os/Bundle;";
+    private static final String D_STRING = "Ljava/lang/String;";
     private static final String D_CONTEXT = "Landroid/content/Context;";
     private static final Pattern DEX = Pattern.compile("classes(?:[2-9]|[1-9][0-9]+)?\\.dex");
 
@@ -50,23 +53,42 @@ final class HealthSymbolResolver {
             String wifiSyncMgrClass,
             String liveNotifyMgrClass,
             String sampleCommandApiClass,
+            String sleepStatusMgrClass,
+            String notifySendDataClass,
+            String notifyReminderMethod,
             String source) {
+
+        Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
+                String deviceMgrFactoryClass, String wifiSyncMgrClass, String liveNotifyMgrClass,
+                String sampleCommandApiClass, String sleepStatusMgrClass, String source) {
+            this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
+                    wifiSyncMgrClass, liveNotifyMgrClass, sampleCommandApiClass, sleepStatusMgrClass,
+                    "", "", source);
+        }
+
+        Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
+                String deviceMgrFactoryClass, String wifiSyncMgrClass, String liveNotifyMgrClass,
+                String sampleCommandApiClass, String source) {
+            this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
+                    wifiSyncMgrClass, liveNotifyMgrClass, sampleCommandApiClass, "", "", "", source);
+        }
 
         Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
                 String deviceMgrFactoryClass, String wifiSyncMgrClass, String liveNotifyMgrClass, String source) {
             this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
-                    wifiSyncMgrClass, liveNotifyMgrClass, "", source);
+                    wifiSyncMgrClass, liveNotifyMgrClass, "", "", "", "", source);
         }
 
         Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
                 String deviceMgrFactoryClass, String wifiSyncMgrClass, String source) {
             this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
-                    wifiSyncMgrClass, "", "", source);
+                    wifiSyncMgrClass, "", "", "", "", "", source);
         }
 
         Symbols(String deviceCatalogClass, String sendFacadeClass, String receiveCallbackClass,
                 String deviceMgrFactoryClass, String source) {
-            this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass, "", "", "", source);
+            this(deviceCatalogClass, sendFacadeClass, receiveCallbackClass, deviceMgrFactoryClass,
+                    "", "", "", "", "", "", source);
         }
 
         boolean completeSdk() {
@@ -82,6 +104,9 @@ final class HealthSymbolResolver {
             map.put("wifiSyncMgrClass", empty(wifiSyncMgrClass));
             map.put("liveNotifyMgrClass", empty(liveNotifyMgrClass));
             map.put("sampleCommandApiClass", empty(sampleCommandApiClass));
+            map.put("sleepStatusMgrClass", empty(sleepStatusMgrClass));
+            map.put("notifySendDataClass", empty(notifySendDataClass));
+            map.put("notifyReminderMethod", empty(notifyReminderMethod));
             return map;
         }
 
@@ -94,9 +119,14 @@ final class HealthSymbolResolver {
             String wifi = map.getOrDefault("wifiSyncMgrClass", "");
             String live = map.getOrDefault("liveNotifyMgrClass", "");
             String sampleCmd = map.getOrDefault("sampleCommandApiClass", "");
+            String sleepMgr = map.getOrDefault("sleepStatusMgrClass", "");
+            String notifySend = map.getOrDefault("notifySendDataClass", "");
+            String notifyRem = map.getOrDefault("notifyReminderMethod", "");
             if (catalog.isEmpty() && send.isEmpty() && recv.isEmpty()
-                    && mgr.isEmpty() && wifi.isEmpty() && live.isEmpty() && sampleCmd.isEmpty()) return null;
-            return new Symbols(catalog, send, recv, mgr, wifi, live, sampleCmd, "CACHE");
+                    && mgr.isEmpty() && wifi.isEmpty() && live.isEmpty()
+                    && sampleCmd.isEmpty() && sleepMgr.isEmpty() && notifySend.isEmpty()) return null;
+            return new Symbols(catalog, send, recv, mgr, wifi, live, sampleCmd, sleepMgr,
+                    notifySend, notifyRem, "CACHE");
         }
 
         private static boolean notEmpty(String s) { return s != null && !s.isEmpty(); }
@@ -112,7 +142,8 @@ final class HealthSymbolResolver {
         Symbols fast = Build.VERSION.SDK_INT >= 34 ? tryFastPath(installer) : null;
         if (fast != null && fast.completeSdk() && !fast.deviceMgrFactoryClass().isEmpty()
                 && !fast.wifiSyncMgrClass().isEmpty() && !fast.liveNotifyMgrClass().isEmpty()
-                && !fast.sampleCommandApiClass().isEmpty()) {
+                && !fast.sampleCommandApiClass().isEmpty() && !fast.sleepStatusMgrClass().isEmpty()
+                && !fast.notifySendDataClass().isEmpty() && !fast.notifyReminderMethod().isEmpty()) {
             if (cache != null) cache.write(fp, fast.toMap());
             return fast;
         }
@@ -169,10 +200,64 @@ final class HealthSymbolResolver {
                     sampleCmd = "";
                 }
             }
-            return new Symbols(catalog.getName(), send.getName(), recv.getName(), mgr, wifiMgr, liveMgr, sampleCmd, "FAST_PATH");
+            String sleepMgr = "";
+            Class<?> nhp = opt(installer, "nhp");
+            Class<?> sleepCb = opt(installer, "com.huawei.hwdevice.phoneprocess.mgr.btproxy.callback.BtProxySleepCallback");
+            if (nhp != null && sleepCb != null && hasFieldOfType(nhp, sleepCb) && hasSleepStatusShape(nhp)) {
+                sleepMgr = nhp.getName();
+            }
+            String notifySend = "";
+            String notifyRem = "";
+            Class<?> ocp = opt(installer, "ocp");
+            Class<?> devCmd = opt(installer, "com.huawei.datatype.DeviceCommand");
+            if (ocp != null && devCmd != null && hasNotifySendDataShape(ocp, devCmd)) {
+                notifySend = ocp.getName();
+                try {
+                    java.lang.reflect.Method j = ocp.getDeclaredMethod("j", int.class, android.os.Bundle.class);
+                    if (j.getReturnType() == String.class) notifyRem = "j";
+                } catch (NoSuchMethodException ignored) {}
+            }
+            return new Symbols(catalog.getName(), send.getName(), recv.getName(), mgr, wifiMgr, liveMgr,
+                    sampleCmd, sleepMgr, notifySend, notifyRem, "FAST_PATH");
         } catch (ReflectiveOperationException | RuntimeException | LinkageError miss) {
             return null;
         }
+    }
+
+    private static boolean hasNotifySendDataShape(Class<?> cls, Class<?> deviceCommandCls) {
+        boolean hasExtend = false;
+        boolean hasOldReminder = false;
+        for (java.lang.reflect.Method m : cls.getDeclaredMethods()) {
+            int mod = m.getModifiers();
+            if (java.lang.reflect.Modifier.isStatic(mod) || m.isSynthetic()) continue;
+            Class<?>[] p = m.getParameterTypes();
+            if (m.getReturnType() == deviceCommandCls && p.length == 3
+                    && p[0] == android.os.Bundle.class && p[1] == int.class && p[2] == deviceCommandCls) {
+                hasExtend = true;
+            } else if (m.getReturnType() == String.class && p.length == 3
+                    && p[0] == int.class && p[1] == android.os.Bundle.class && p[2] == int.class) {
+                hasOldReminder = true;
+            }
+        }
+        return hasExtend && hasOldReminder;
+    }
+
+    private static boolean hasSleepStatusShape(Class<?> cls) {
+        boolean hasSingleton = false;
+        int actionMethods = 0;
+        for (java.lang.reflect.Method m : cls.getDeclaredMethods()) {
+            int mod = m.getModifiers();
+            if (!java.lang.reflect.Modifier.isPublic(mod) || m.isSynthetic()) continue;
+            if (java.lang.reflect.Modifier.isStatic(mod) && m.getReturnType() == cls && m.getParameterCount() == 0) {
+                hasSingleton = true;
+            } else if (!java.lang.reflect.Modifier.isStatic(mod) && m.getReturnType() == void.class
+                    && m.getParameterCount() == 2
+                    && m.getParameterTypes()[0] == String.class
+                    && m.getParameterTypes()[1] == int.class) {
+                actionMethods++;
+            }
+        }
+        return hasSingleton && actionMethods == 1;
     }
 
     private static boolean hasLiveNotifyShape(Class<?> cls) {
@@ -213,6 +298,9 @@ final class HealthSymbolResolver {
         Set<String> wifiSyncMgrs = new HashSet<>();
         Set<String> liveNotifyMgrs = new HashSet<>();
         Set<String> sampleCmdApis = new HashSet<>();
+        Set<String> sleepStatusMgrs = new HashSet<>();
+        Set<String> notifySendDatas = new HashSet<>();
+        Set<String> notifyReminderMethods = new HashSet<>();
         try {
             for (String source : sources) {
                 if (source == null) continue;
@@ -225,7 +313,8 @@ final class HealthSymbolResolver {
                             DexBackedDexFile dex = DexBackedDexFile.fromInputStream(null, in);
                             for (ClassDef type : dex.getClasses()) {
                                 inspectClass(type, catalogs, sendFacades, recvCallbacks,
-                                        mgrFactories, wifiSyncMgrs, liveNotifyMgrs, sampleCmdApis);
+                                        mgrFactories, wifiSyncMgrs, liveNotifyMgrs, sampleCmdApis,
+                                        sleepStatusMgrs, notifySendDatas, notifyReminderMethods);
                             }
                         }
                     }
@@ -242,13 +331,17 @@ final class HealthSymbolResolver {
                 unique(wifiSyncMgrs),
                 unique(liveNotifyMgrs),
                 unique(sampleCmdApis),
+                unique(sleepStatusMgrs),
+                unique(notifySendDatas),
+                unique(notifyReminderMethods),
                 "DEX_SCAN");
     }
 
     private static void inspectClass(ClassDef type, Set<String> catalogs, Set<String> sendFacades,
                                      Set<String> recvCallbacks, Set<String> mgrFactories,
                                      Set<String> wifiSyncMgrs, Set<String> liveNotifyMgrs,
-                                     Set<String> sampleCmdApis) {
+                                     Set<String> sampleCmdApis, Set<String> sleepStatusMgrs,
+                                     Set<String> notifySendDatas, Set<String> notifyReminderMethods) {
         String desc = type.getType();
         List<String> ifaces = type.getInterfaces();
         if (D_PLUGIN_PROXY.equals(type.getSuperclass()) && ifaces.contains(D_DEVICE_MGR_API)) {
@@ -271,6 +364,14 @@ final class HealthSymbolResolver {
         if (ifaces.contains(D_DATA_RECEIVE_CALLBACK) && isLiveNotificationManager(type)) {
             liveNotifyMgrs.add(toClassName(desc));
         }
+        if (isBtProxySleepStatusManager(type)) {
+            sleepStatusMgrs.add(toClassName(desc));
+        }
+        String reminderMethod = findNotifySendDataReminderMethod(type);
+        if (reminderMethod != null) {
+            notifySendDatas.add(toClassName(desc));
+            if (!reminderMethod.isEmpty()) notifyReminderMethods.add(reminderMethod);
+        }
         for (Method m : type.getDirectMethods()) {
             int flags = m.getAccessFlags();
             if (!AccessFlags.PUBLIC.isSet(flags) || !AccessFlags.STATIC.isSet(flags)
@@ -281,6 +382,71 @@ final class HealthSymbolResolver {
                 mgrFactories.add(toClassName(desc));
             }
         }
+    }
+
+    /**
+     * Identifies NotifySendData (ocp) via HwDeviceMgrInterface field + reminderTlv log markers,
+     * returning the packagingReminderHex method name (e.g. "j") or null if not NotifySendData.
+     */
+    private static String findNotifySendDataReminderMethod(ClassDef type) {
+        boolean hasDeviceMgrField = false;
+        for (com.android.tools.smali.dexlib2.iface.Field f : type.getInstanceFields()) {
+            if (D_HW_DEVICE_MGR.equals(f.getType())) {
+                hasDeviceMgrField = true;
+                break;
+            }
+        }
+        if (!hasDeviceMgrField) return null;
+        boolean hasTag = false;
+        boolean hasReminderMarker = false;
+        String reminderMethod = "";
+        for (Method m : type.getMethods()) {
+            if (m.getImplementation() == null) continue;
+            boolean isIntBundleString = !AccessFlags.STATIC.isSet(m.getAccessFlags())
+                    && D_STRING.equals(m.getReturnType())
+                    && m.getParameterTypes().size() == 2
+                    && "I".contentEquals(m.getParameterTypes().get(0))
+                    && D_BUNDLE.contentEquals(m.getParameterTypes().get(1));
+            for (Instruction insn : m.getImplementation().getInstructions()) {
+                if (insn instanceof ReferenceInstruction ref && ref.getReference() instanceof StringReference str) {
+                    String s = str.getString();
+                    if ("NotifySendData".equals(s)) {
+                        hasTag = true;
+                    } else if (s.contains("reminderTlv(1302000F=vibrate)")) {
+                        hasReminderMarker = true;
+                    } else if (isIntBundleString && s.contains("packagingReminderHex isReminderStatus")) {
+                        reminderMethod = m.getName();
+                    }
+                }
+            }
+        }
+        return (hasTag && hasReminderMarker) ? reminderMethod : null;
+    }
+
+    /** Identifies BtProxySleepStatusManager (nhp) via BtProxySleepCallback field + log markers. */
+    private static boolean isBtProxySleepStatusManager(ClassDef type) {
+        boolean hasCallbackField = false;
+        for (com.android.tools.smali.dexlib2.iface.Field f : type.getInstanceFields()) {
+            if (D_BT_PROXY_SLEEP_CALLBACK.equals(f.getType())) {
+                hasCallbackField = true;
+                break;
+            }
+        }
+        if (!hasCallbackField) return false;
+        boolean hasTag = false;
+        boolean hasActionLog = false;
+        for (Method m : type.getMethods()) {
+            if (m.getImplementation() == null) continue;
+            for (Instruction insn : m.getImplementation().getInstructions()) {
+                if (insn instanceof ReferenceInstruction ref && ref.getReference() instanceof StringReference str) {
+                    String s = str.getString();
+                    if ("BtProxySleepStatusManager".equals(s)) hasTag = true;
+                    else if ("dealDeviceSleepAction action: ".equals(s)) hasActionLog = true;
+                }
+            }
+            if (hasTag && hasActionLog) return true;
+        }
+        return false;
     }
 
     /** Identifies HwNotificationLiveMgr (oca) via DataReceiveCallback + SmartEdge tag/package markers. */

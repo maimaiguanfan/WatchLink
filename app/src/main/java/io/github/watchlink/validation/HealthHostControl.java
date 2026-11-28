@@ -33,6 +33,10 @@ public final class HealthHostControl {
             ENABLE_LIVE_WINDOW = "ENABLE_LIVE_WINDOW", DISABLE_LIVE_WINDOW = "DISABLE_LIVE_WINDOW",
             ENABLE_GAME_FLASHBACK = "ENABLE_GAME_FLASHBACK", DISABLE_GAME_FLASHBACK = "DISABLE_GAME_FLASHBACK",
             SET_GAME_FLASHBACK_LEAD_PREFIX = "SET_GAME_FLASHBACK_LEAD:",
+            ENABLE_NOTIFY_MUTE_DND = "ENABLE_NOTIFY_MUTE_DND", DISABLE_NOTIFY_MUTE_DND = "DISABLE_NOTIFY_MUTE_DND",
+            ENABLE_NOTIFY_SILENT_PUSH = "ENABLE_NOTIFY_SILENT_PUSH", DISABLE_NOTIFY_SILENT_PUSH = "DISABLE_NOTIFY_SILENT_PUSH",
+            ENABLE_SLEEP_AUTO_DND = "ENABLE_SLEEP_AUTO_DND", DISABLE_SLEEP_AUTO_DND = "DISABLE_SLEEP_AUTO_DND",
+            ENABLE_WAKE_EXIT_DND = "ENABLE_WAKE_EXIT_DND", DISABLE_WAKE_EXIT_DND = "DISABLE_WAKE_EXIT_DND",
             TEST_LIVE_WINDOW = "TEST_LIVE_WINDOW", CANCEL_LIVE_WINDOW = "CANCEL_LIVE_WINDOW",
             ENABLE_RAW_DEBUG = "ENABLE_RAW_DEBUG", DISABLE_RAW_DEBUG = "DISABLE_RAW_DEBUG",
             TEST = "TEST", CANCEL_TEST = "CANCEL_TEST";
@@ -85,6 +89,14 @@ public final class HealthHostControl {
     private static final Set<String> LIVE_SOURCES = Set.of("NONE", "UMS", "DAEMON", "TEST", "CLOCK_TIMER");
     private static final Set<String> LIVE_TEST_STATES = Set.of(
             "IDLE", "OPENED", "UPDATED", "CLOSED", "WATCH_UNAVAILABLE", "FAILED");
+    private static final Set<String> SLEEP_WATCH_SUPPORTS = Set.of(
+            "SUPPORTED_136", "UNSUPPORTED", "WATCH_DISCONNECTED", "UNKNOWN");
+    private static final Set<String> SILENT_PUSH_SUPPORTS = Set.of(
+            "SUPPORTED_94", "UNSUPPORTED", "WATCH_DISCONNECTED", "UNKNOWN");
+    private static final Set<String> SLEEP_EVENTS = Set.of(
+            "NONE", "FALL_ASLEEP_DND_ON", "FALL_ASLEEP_SKIP_ALREADY_DND",
+            "WAKE_UP_DND_OFF", "WAKE_UP_SKIP_ALREADY_OFF", "WAKE_UP_SKIP_NOT_OWNED",
+            "NO_POLICY_ACCESS", "FAILED");
 
     public record Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
                         boolean serviceWitness, boolean sdkObserver, String symbolSource,
@@ -95,7 +107,105 @@ public final class HealthHostControl {
                         boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
                         String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
                         boolean rawCommandDebugEnabled,
-                        boolean gameFlashbackEnabled, int gameFlashbackLeadSec) {
+                        boolean gameFlashbackEnabled, int gameFlashbackLeadSec,
+                        boolean notifyMuteDndEnabled, boolean sleepAutoDndEnabled,
+                        String sleepWatchSupport, boolean sleepHookReady, boolean dndPolicyAccess,
+                        String sleepLastEvent, long sleepLastAt,
+                        long sleepLastFallAsleepAt, long sleepLastWakeUpAt,
+                        boolean wakeExitDndEnabled, boolean notifySilentPushEnabled,
+                        String silentPushWatchSupport) {
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                     boolean rawCommandDebugEnabled,
+                     boolean gameFlashbackEnabled, int gameFlashbackLeadSec,
+                     boolean notifyMuteDndEnabled, boolean sleepAutoDndEnabled,
+                     String sleepWatchSupport, boolean sleepHookReady, boolean dndPolicyAccess,
+                     String sleepLastEvent, long sleepLastAt,
+                     long sleepLastFallAsleepAt, long sleepLastWakeUpAt,
+                     boolean wakeExitDndEnabled) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, rawCommandDebugEnabled,
+                    gameFlashbackEnabled, gameFlashbackLeadSec,
+                    notifyMuteDndEnabled, sleepAutoDndEnabled, sleepWatchSupport, sleepHookReady,
+                    dndPolicyAccess, sleepLastEvent, sleepLastAt, sleepLastFallAsleepAt, sleepLastWakeUpAt,
+                    wakeExitDndEnabled, false, "UNKNOWN");
+        }
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                     boolean rawCommandDebugEnabled,
+                     boolean gameFlashbackEnabled, int gameFlashbackLeadSec,
+                     boolean notifyMuteDndEnabled, boolean sleepAutoDndEnabled,
+                     String sleepWatchSupport, boolean sleepHookReady, boolean dndPolicyAccess,
+                     String sleepLastEvent, long sleepLastAt,
+                     long sleepLastFallAsleepAt, long sleepLastWakeUpAt) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, rawCommandDebugEnabled,
+                    gameFlashbackEnabled, gameFlashbackLeadSec,
+                    notifyMuteDndEnabled, sleepAutoDndEnabled, sleepWatchSupport, sleepHookReady,
+                    dndPolicyAccess, sleepLastEvent, sleepLastAt, sleepLastFallAsleepAt, sleepLastWakeUpAt, false);
+        }
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                     boolean rawCommandDebugEnabled,
+                     boolean gameFlashbackEnabled, int gameFlashbackLeadSec,
+                     boolean notifyMuteDndEnabled, boolean sleepAutoDndEnabled,
+                     String sleepWatchSupport, boolean sleepHookReady, boolean dndPolicyAccess,
+                     String sleepLastEvent, long sleepLastAt) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, rawCommandDebugEnabled,
+                    gameFlashbackEnabled, gameFlashbackLeadSec,
+                    notifyMuteDndEnabled, sleepAutoDndEnabled, sleepWatchSupport, sleepHookReady,
+                    dndPolicyAccess, sleepLastEvent, sleepLastAt, 0L, 0L);
+        }
+        public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
+                     boolean serviceWitness, boolean sdkObserver, String symbolSource,
+                     String watchState, String lastDispatchMode, String lastActionSource,
+                     String testState, String testDispatchMode, String testActionSource,
+                     boolean wifiAutoSyncEnabled, String wifiWatchSupport, boolean wifiAckReady,
+                     int wifiSyncedCount, String wifiLastResult, String wifiLastSource, long wifiLastAt,
+                     boolean liveWindowEnabled, String liveWatchSupport, int liveActiveCount,
+                     String liveLastResult, String liveLastSource, String liveDispatchMode, String liveTestState,
+                     boolean rawCommandDebugEnabled,
+                     boolean gameFlashbackEnabled, int gameFlashbackLeadSec) {
+            this(reachable, enabled, calendarEnabled, remotePrefs, serviceWitness, sdkObserver, symbolSource,
+                    watchState, lastDispatchMode, lastActionSource, testState, testDispatchMode, testActionSource,
+                    wifiAutoSyncEnabled, wifiWatchSupport, wifiAckReady, wifiSyncedCount, wifiLastResult,
+                    wifiLastSource, wifiLastAt,
+                    liveWindowEnabled, liveWatchSupport, liveActiveCount, liveLastResult, liveLastSource,
+                    liveDispatchMode, liveTestState, rawCommandDebugEnabled,
+                    gameFlashbackEnabled, gameFlashbackLeadSec,
+                    false, false, "UNKNOWN", false, false, "NONE", 0L);
+        }
         public Reply(boolean reachable, boolean enabled, boolean calendarEnabled, boolean remotePrefs,
                      boolean serviceWitness, boolean sdkObserver, String symbolSource,
                      String watchState, String lastDispatchMode, String lastActionSource,
@@ -194,6 +304,18 @@ public final class HealthHostControl {
             gameFlashbackLeadSec = reachable
                     ? WatchLinkPrefs.clampGameFlashbackLeadSec(gameFlashbackLeadSec)
                     : WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC;
+            notifyMuteDndEnabled = reachable && notifyMuteDndEnabled;
+            sleepAutoDndEnabled = reachable && sleepAutoDndEnabled;
+            sleepWatchSupport = pick(reachable, SLEEP_WATCH_SUPPORTS, sleepWatchSupport, "UNKNOWN");
+            sleepHookReady = reachable && sleepHookReady;
+            dndPolicyAccess = reachable && dndPolicyAccess;
+            sleepLastEvent = pick(reachable, SLEEP_EVENTS, sleepLastEvent, "NONE");
+            sleepLastAt = reachable ? Math.max(0L, sleepLastAt) : 0L;
+            sleepLastFallAsleepAt = reachable ? Math.max(0L, sleepLastFallAsleepAt) : 0L;
+            sleepLastWakeUpAt = reachable ? Math.max(0L, sleepLastWakeUpAt) : 0L;
+            wakeExitDndEnabled = reachable && wakeExitDndEnabled;
+            notifySilentPushEnabled = reachable && notifySilentPushEnabled;
+            silentPushWatchSupport = pick(reachable, SILENT_PUSH_SUPPORTS, silentPushWatchSupport, "UNKNOWN");
         }
 
         private static String pick(boolean reachable, Set<String> allowed, String value, String fallback) {
@@ -211,6 +333,10 @@ public final class HealthHostControl {
                 || ENABLE_LIVE_WINDOW.equals(value) || DISABLE_LIVE_WINDOW.equals(value)
                 || ENABLE_GAME_FLASHBACK.equals(value) || DISABLE_GAME_FLASHBACK.equals(value)
                 || parseGameFlashbackLeadSecCommand(value) >= 0
+                || ENABLE_NOTIFY_MUTE_DND.equals(value) || DISABLE_NOTIFY_MUTE_DND.equals(value)
+                || ENABLE_NOTIFY_SILENT_PUSH.equals(value) || DISABLE_NOTIFY_SILENT_PUSH.equals(value)
+                || ENABLE_SLEEP_AUTO_DND.equals(value) || DISABLE_SLEEP_AUTO_DND.equals(value)
+                || ENABLE_WAKE_EXIT_DND.equals(value) || DISABLE_WAKE_EXIT_DND.equals(value)
                 || TEST_LIVE_WINDOW.equals(value) || CANCEL_LIVE_WINDOW.equals(value)
                 || ENABLE_RAW_DEBUG.equals(value) || DISABLE_RAW_DEBUG.equals(value)
                 || TEST.equals(value) || CANCEL_TEST.equals(value);
@@ -275,6 +401,18 @@ public final class HealthHostControl {
                             details.putBoolean("rawCommandDebugEnabled", reply.rawCommandDebugEnabled());
                             details.putBoolean("gameFlashbackEnabled", reply.gameFlashbackEnabled());
                             details.putInt("gameFlashbackLeadSec", reply.gameFlashbackLeadSec());
+                            details.putBoolean("notifyMuteDndEnabled", reply.notifyMuteDndEnabled());
+                            details.putBoolean("sleepAutoDndEnabled", reply.sleepAutoDndEnabled());
+                            details.putString("sleepWatchSupport", reply.sleepWatchSupport());
+                            details.putBoolean("sleepHookReady", reply.sleepHookReady());
+                            details.putBoolean("dndPolicyAccess", reply.dndPolicyAccess());
+                            details.putString("sleepLastEvent", reply.sleepLastEvent());
+                            details.putLong("sleepLastAt", reply.sleepLastAt());
+                            details.putLong("sleepLastFallAsleepAt", reply.sleepLastFallAsleepAt());
+                            details.putLong("sleepLastWakeUpAt", reply.sleepLastWakeUpAt());
+                            details.putBoolean("wakeExitDndEnabled", reply.wakeExitDndEnabled());
+                            details.putBoolean("notifySilentPushEnabled", reply.notifySilentPushEnabled());
+                            details.putString("silentPushWatchSupport", reply.silentPushWatchSupport());
                             pending.setResult(ACK, null, details);
                         } catch (RuntimeException e) {
                             ProbeLog.failure("HEALTH_HOST_CONTROL_FAILED", e);
@@ -350,7 +488,19 @@ public final class HealthHostControl {
                                         data.getString("liveTestState"),
                                         data.getBoolean("rawCommandDebugEnabled", false),
                                         data.getBoolean("gameFlashbackEnabled", false),
-                                        data.getInt("gameFlashbackLeadSec", WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC)));
+                                        data.getInt("gameFlashbackLeadSec", WatchLinkPrefs.DEFAULT_GAME_FLASHBACK_LEAD_SEC),
+                                        data.getBoolean("notifyMuteDndEnabled", false),
+                                        data.getBoolean("sleepAutoDndEnabled", false),
+                                        data.getString("sleepWatchSupport"),
+                                        data.getBoolean("sleepHookReady", false),
+                                        data.getBoolean("dndPolicyAccess", false),
+                                        data.getString("sleepLastEvent"),
+                                        data.getLong("sleepLastAt", 0L),
+                                        data.getLong("sleepLastFallAsleepAt", 0L),
+                                        data.getLong("sleepLastWakeUpAt", 0L),
+                                        data.getBoolean("wakeExitDndEnabled", false),
+                                        data.getBoolean("notifySilentPushEnabled", false),
+                                        data.getString("silentPushWatchSupport")));
                             } else callback.accept(unavailable());
                         }
                     }, main, 0, null, null);

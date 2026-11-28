@@ -158,6 +158,46 @@ final class HealthCooperativeReadiness {
         }
     }
 
+    /** Returns watch silent-notification capability support (ExpandCapability bit 94) for connected primary wearable. */
+    String readSilentPushSupport() {
+        try {
+            List<?> devices = connectedDevices(mainDevices);
+            if (devices == null || devices.isEmpty()) return "WATCH_DISCONNECTED";
+            boolean sawFalse = false;
+            for (Object device : devices) {
+                if (device == null) continue;
+                Object raw = expand.invoke(device);
+                String hex = raw instanceof String s ? s : null;
+                Boolean bit94 = capabilityBit(hex, 94);
+                if (Boolean.TRUE.equals(bit94)) return "SUPPORTED_94";
+                if (Boolean.FALSE.equals(bit94)) sawFalse = true;
+            }
+            return sawFalse ? "UNSUPPORTED" : "UNKNOWN";
+        } catch (Exception unavailable) {
+            return "UNKNOWN";
+        }
+    }
+
+    /** Returns watch sleep-status capability support (ExpandCapability bit 136) for connected primary wearable. */
+    String readSleepWatchSupport() {
+        try {
+            List<?> devices = connectedDevices(mainDevices);
+            if (devices == null || devices.isEmpty()) return "WATCH_DISCONNECTED";
+            boolean sawFalse = false;
+            for (Object device : devices) {
+                if (device == null) continue;
+                Object raw = expand.invoke(device);
+                String hex = raw instanceof String s ? s : null;
+                Boolean bit136 = capabilityBit(hex, 136);
+                if (Boolean.TRUE.equals(bit136)) return "SUPPORTED_136";
+                if (Boolean.FALSE.equals(bit136)) sawFalse = true;
+            }
+            return sawFalse ? "UNSUPPORTED" : "UNKNOWN";
+        } catch (Exception unavailable) {
+            return "UNKNOWN";
+        }
+    }
+
     private Result read(Context context, String expectedDeviceToken, boolean requireSingle) {
         String matched = "";
         try {

@@ -9,14 +9,14 @@ public class HealthSymbolResolverTest {
         HealthSymbolResolver.Symbols scanned = new HealthSymbolResolver.Symbols(
                 "eqd", "zcj",
                 "com.huawei.devicesdk.service.DevicesManagementService$8",
-                "nfz", "oai", "oca", "DEX_SCAN");
+                "nfz", "oai", "oca", "eqe", "nhp", "ocp", "j", "DEX_SCAN");
         assertTrue(scanned.completeSdk());
 
         ApkSymbolCache cache = new ApkSymbolCache(new ClockSymbolResolverTest.MemoryPrefs());
-        cache.write("health-v3|/health.apk:900:1000", scanned.toMap());
+        cache.write("health-v6|/health.apk:900:1000", scanned.toMap());
 
         HealthSymbolResolver.Symbols cached = HealthSymbolResolver.Symbols.fromCache(
-                cache.read("health-v3|/health.apk:900:1000"));
+                cache.read("health-v6|/health.apk:900:1000"));
         assertNotNull(cached);
         assertEquals("CACHE", cached.source());
         assertEquals("eqd", cached.deviceCatalogClass());
@@ -25,13 +25,20 @@ public class HealthSymbolResolverTest {
         assertEquals("nfz", cached.deviceMgrFactoryClass());
         assertEquals("oai", cached.wifiSyncMgrClass());
         assertEquals("oca", cached.liveNotifyMgrClass());
+        assertEquals("eqe", cached.sampleCommandApiClass());
+        assertEquals("nhp", cached.sleepStatusMgrClass());
+        assertEquals("ocp", cached.notifySendDataClass());
+        assertEquals("j", cached.notifyReminderMethod());
         assertTrue(cached.completeSdk());
 
-        assertNull(HealthSymbolResolver.Symbols.fromCache(cache.read("health-v3|/health.apk:901:1000")));
+        assertNull(HealthSymbolResolver.Symbols.fromCache(cache.read("health-v6|/health.apk:901:1000")));
     }
 
     @Test public void scansRealPulledHealthApkWhenAvailableLocally() {
         File healthApk = new File("/tmp/watchlink-apks/health.apk");
+        if (!healthApk.isFile()) {
+            healthApk = new File("/home/leo/.gemini/antigravity-cli/brain/2157be28-1c8e-4554-b0c7-7d29afda6b4a/scratch/health.apk");
+        }
         if (!healthApk.isFile()) return;
         ApkSymbolCache cache = new ApkSymbolCache(new ClockSymbolResolverTest.MemoryPrefs());
 
@@ -46,6 +53,10 @@ public class HealthSymbolResolverTest {
         assertEquals("nfz", scanned.deviceMgrFactoryClass());
         assertEquals("oai", scanned.wifiSyncMgrClass());
         assertEquals("oca", scanned.liveNotifyMgrClass());
+        assertEquals("eqe", scanned.sampleCommandApiClass());
+        assertEquals("nhp", scanned.sleepStatusMgrClass());
+        assertEquals("ocp", scanned.notifySendDataClass());
+        assertEquals("j", scanned.notifyReminderMethod());
 
         // Second call returns cached symbols with zero DEX parsing.
         HealthSymbolResolver.Symbols cached = HealthSymbolResolver.resolve(null, cache, healthApk.getAbsolutePath());
@@ -57,5 +68,9 @@ public class HealthSymbolResolverTest {
         assertEquals(scanned.deviceMgrFactoryClass(), cached.deviceMgrFactoryClass());
         assertEquals(scanned.wifiSyncMgrClass(), cached.wifiSyncMgrClass());
         assertEquals(scanned.liveNotifyMgrClass(), cached.liveNotifyMgrClass());
+        assertEquals(scanned.sampleCommandApiClass(), cached.sampleCommandApiClass());
+        assertEquals(scanned.sleepStatusMgrClass(), cached.sleepStatusMgrClass());
+        assertEquals(scanned.notifySendDataClass(), cached.notifySendDataClass());
+        assertEquals(scanned.notifyReminderMethod(), cached.notifyReminderMethod());
     }
 }

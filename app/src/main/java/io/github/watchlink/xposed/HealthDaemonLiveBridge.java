@@ -1,6 +1,8 @@
 package io.github.watchlink.xposed;
 
 import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -8,7 +10,14 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.database.ContentObserver;
+import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.provider.Settings;
+import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import androidx.annotation.RequiresApi;
 import io.github.libxposed.api.XposedInterface;
@@ -19,7 +28,10 @@ import io.github.watchlink.alarm.probe.TargetProfile;
 import io.github.watchlink.live.LiveWindowPayload;
 import io.github.watchlink.live.LiveWindowWire;
 import io.github.watchlink.live.PantanalFluidParser;
+import io.github.watchlink.notify.NotificationDndPolicy;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -38,7 +50,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RequiresApi(34)
 final class HealthDaemonLiveBridge {
     private static final String LISTENER_CLASS = "com.huawei.bone.ui.setting.NotificationPushListener";
+    private static final String EXTRA_REMINDER_STATUS = "data_extra_reminder_status";
+    private static final int REMINDER_STATUS_SILENT = 0;
     private static final int MAX_TRACKED_KEYS = 32;
+    private static final long DND_MUTE_LOG_INTERVAL_MS = 10_000L;
 
     private final XposedInterface module;
     private final ClassLoader loader;
@@ -57,8 +72,13 @@ final class HealthDaemonLiveBridge {
 
     private HostSettings settings;
     private BroadcastReceiver syncReceiver;
+    private BroadcastReceiver dndReceiver;
+    private ContentObserver zenModeObserver;
     private Method isPromotedMethod;
     private Method shortCriticalMethod;
+    private volatile WeakReference<NotificationListenerService> listenerRef;
+    private volatile boolean phoneDndActive;
+    private volatile long lastDndMuteLogElapsedMs;
     private volatile boolean watchSupported = true;
     private volatile boolean active;
 
@@ -83,43 +103,94 @@ final class HealthDaemonLiveBridge {
 
             resolveOptionalNotificationMethods();
             registerSyncReceiver(hostSettings);
+            registerDndObservers();
+            refreshPhoneDndState();
 
             Class<?> listenerCls = Class.forName(LISTENER_CLASS, false, loader);
             Method onPosted = listenerCls.getDeclaredMethod("onNotificationPosted", StatusBarNotification.class);
             Method onRemoved = listenerCls.getDeclaredMethod("onNotificationRemoved", StatusBarNotification.class);
+            try {
+                Method onConnected = listenerCls.getDeclaredMethod("onListenerConnected");
+                handles.add(buildHook(onConnected, "health.daemon.live.connected").intercept(chain -> {
+                    captureListener(chain.getThisObject());
+                    if (active) {
+                        try { worker.execute(this::refreshPhoneDndState); } catch (RuntimeException ignored) {}
+                    }
+                    return chain.proceed();
+                }));
+            } catch (NoSuchMethodException ignored) {}
 
             handles.add(buildHook(onPosted, "health.daemon.live.posted").intercept(chain -> {
-                boolean regularEnabled = hostSettings.isLiveWindowEnabled();
-                boolean gameEnabled = hostSettings.isGameFlashbackEnabled();
-                if (active && watchSupported && (regularEnabled || gameEnabled)) {
+                captureListener(chain.getThisObject());
+                if (active) {
                     Object arg = chain.getArg(0);
                     if (arg instanceof StatusBarNotification sbn) {
-                        LiveWindowPayload payload = extractLivePayload(sbn);
-                        if (payload != null) {
-                            boolean allowed = payload.isGameFlashback() ? gameEnabled : regularEnabled;
-                            if (allowed) {
-                                if (activeKeys.size() < MAX_TRACKED_KEYS || activeKeys.contains(sbn.getKey())) {
-                                    activeKeys.add(sbn.getKey());
-                                    if (payload.isGameFlashback()) {
-                                        activeGameKeys.add(sbn.getKey());
-                                    } else {
-                                        activeGameKeys.remove(sbn.getKey());
+                        Notification n = sbn.getNotification();
+                        String category = n == null ? null : n.category;
+                        boolean silentOnDnd = hostSettings.isNotifyMuteDndEnabled();
+                        boolean dndActive = phoneDndActive || isListenerDndActive(chain.getThisObject());
+                        boolean holdLiveForDnd = NotificationDndPolicy.shouldPushSilentlyToWatch(
+                                silentOnDnd, false, dndActive, false, sbn.getPackageName(), category);
+
+                        boolean regularEnabled = hostSettings.isLiveWindowEnabled();
+                        boolean gameEnabled = hostSettings.isGameFlashbackEnabled();
+                        if (watchSupported && (regularEnabled || gameEnabled)) {
+                            LiveWindowPayload payload = extractLivePayload(sbn);
+                            if (payload != null) {
+                                boolean game = payload.isGameFlashback();
+                                boolean allowed = game ? gameEnabled : (regularEnabled && !holdLiveForDnd);
+                                if (allowed) {
+                                    if (activeKeys.size() < MAX_TRACKED_KEYS || activeKeys.contains(sbn.getKey())) {
+                                        activeKeys.add(sbn.getKey());
+                                        if (game) {
+                                            activeGameKeys.add(sbn.getKey());
+                                        } else {
+                                            activeGameKeys.remove(sbn.getKey());
+                                        }
+                                        forwardAsync(payload, false);
+                                        // Suppress duplicate ordinary watch notification in-place.
+                                        return null;
                                     }
-                                    forwardAsync(payload, false);
-                                    // Suppress duplicate ordinary watch notification in-place.
-                                    return null;
+                                } else if (!holdLiveForDnd) {
+                                    closeIfTracked(sbn);
                                 }
                             } else {
+                                // A notification ID can be reused for an unrelated card.
                                 closeIfTracked(sbn);
                             }
-                        } else {
-                            // A notification ID can be reused for an unrelated card.
-                            closeIfTracked(sbn);
                         }
                     }
                 }
                 return chain.proceed();
             }));
+
+            Method buildPushBundle = uniquePushBundleMethod(listenerCls);
+            if (buildPushBundle != null) {
+                handles.add(buildHook(buildPushBundle, "health.daemon.notify.bundle").intercept(chain -> {
+                    Object res = chain.proceed();
+                    if (active && res instanceof Bundle out && chain.getArg(1) instanceof StatusBarNotification sbn) {
+                        boolean silentOnDnd = hostSettings.isNotifyMuteDndEnabled();
+                        boolean silentOnPhoneSilent = hostSettings.isNotifySilentPushEnabled();
+                        if (silentOnDnd || silentOnPhoneSilent) {
+                            Notification n = sbn.getNotification();
+                            String category = n == null ? null : n.category;
+                            boolean dndActive = phoneDndActive || isListenerDndActive(chain.getThisObject());
+                            boolean phoneSilent = silentOnPhoneSilent
+                                    && isPhoneNotificationSilent(chain.getThisObject(), sbn);
+                            if (NotificationDndPolicy.shouldPushSilentlyToWatch(
+                                    silentOnDnd, silentOnPhoneSilent, dndActive, phoneSilent,
+                                    sbn.getPackageName(), category)) {
+                                String reason = silentOnDnd && dndActive ? "DND" : "PHONE_SILENT";
+                                out.putInt(EXTRA_REMINDER_STATUS, REMINDER_STATUS_SILENT);
+                                out.putBoolean(HealthSleepDndBridge.EXTRA_WATCHLINK_SILENT_PUSH, true);
+                                out.putString(HealthSleepDndBridge.EXTRA_WATCHLINK_SILENT_REASON, reason);
+                                logSilentPushThrottled(reason);
+                            }
+                        }
+                    }
+                    return res;
+                }));
+            }
 
             handles.add(buildHook(onRemoved, "health.daemon.live.removed").intercept(chain -> {
                 if (active) {
@@ -154,6 +225,15 @@ final class HealthDaemonLiveBridge {
         active = false;
         activeKeys.clear();
         activeGameKeys.clear();
+        listenerRef = null;
+        if (dndReceiver != null) {
+            try { app.unregisterReceiver(dndReceiver); } catch (RuntimeException ignored) {}
+            dndReceiver = null;
+        }
+        if (zenModeObserver != null) {
+            try { app.getContentResolver().unregisterContentObserver(zenModeObserver); } catch (RuntimeException ignored) {}
+            zenModeObserver = null;
+        }
         if (syncReceiver != null) {
             try { app.unregisterReceiver(syncReceiver); } catch (RuntimeException ignored) {}
             syncReceiver = null;
@@ -172,21 +252,169 @@ final class HealthDaemonLiveBridge {
     private void registerSyncReceiver(HostSettings hostSettings) {
         BroadcastReceiver r = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
-                if (!HealthLiveWindowBridge.DAEMON_SYNC_ACTION.equals(intent.getAction())) return;
-                boolean enabled = intent.getBooleanExtra("enabled", false);
-                boolean gameEnabled = intent.getBooleanExtra("gameFlashbackEnabled", false);
-                watchSupported = intent.getBooleanExtra("watchSupported", true);
-                hostSettings.setLocalLiveWindowFallback(enabled);
-                hostSettings.setLocalGameFlashbackFallback(gameEnabled);
-                if (!enabled) activeKeys.removeIf(k -> !activeGameKeys.contains(k));
-                if (!gameEnabled) {
-                    activeKeys.removeAll(activeGameKeys);
-                    activeGameKeys.clear();
+                if (intent == null) return;
+                String action = intent.getAction();
+                if (HealthLiveWindowBridge.DAEMON_SYNC_ACTION.equals(action)) {
+                    boolean enabled = intent.getBooleanExtra("enabled", false);
+                    boolean gameEnabled = intent.getBooleanExtra("gameFlashbackEnabled", false);
+                    watchSupported = intent.getBooleanExtra("watchSupported", true);
+                    hostSettings.setLocalLiveWindowFallback(enabled);
+                    hostSettings.setLocalGameFlashbackFallback(gameEnabled);
+                    if (intent.hasExtra("notifyMuteDndEnabled")) {
+                        hostSettings.setLocalNotifyMuteDndFallback(
+                                intent.getBooleanExtra("notifyMuteDndEnabled", false));
+                    }
+                    if (intent.hasExtra("notifySilentPushEnabled")) {
+                        hostSettings.setLocalNotifySilentPushFallback(
+                                intent.getBooleanExtra("notifySilentPushEnabled", false));
+                    }
+                    if (!enabled) activeKeys.removeIf(k -> !activeGameKeys.contains(k));
+                    if (!gameEnabled) {
+                        activeKeys.removeAll(activeGameKeys);
+                        activeGameKeys.clear();
+                    }
+                } else if (HealthSleepDndBridge.DAEMON_DND_ACTION.equals(action)) {
+                    int filter = intent.getIntExtra(
+                            HealthSleepDndBridge.EXTRA_FILTER,
+                            NotificationDndPolicy.INTERRUPTION_FILTER_UNKNOWN);
+                    if (filter == NotificationManager.INTERRUPTION_FILTER_PRIORITY
+                            || filter == NotificationManager.INTERRUPTION_FILTER_ALL) {
+                        try {
+                            worker.execute(() -> applyListenerInterruptionFilter(filter));
+                        } catch (RuntimeException ignored) {}
+                    }
                 }
             }
         };
-        app.registerReceiver(r, new IntentFilter(HealthLiveWindowBridge.DAEMON_SYNC_ACTION), Context.RECEIVER_NOT_EXPORTED);
+        IntentFilter filter = new IntentFilter(HealthLiveWindowBridge.DAEMON_SYNC_ACTION);
+        filter.addAction(HealthSleepDndBridge.DAEMON_DND_ACTION);
+        app.registerReceiver(r, filter, Context.RECEIVER_NOT_EXPORTED);
         syncReceiver = r;
+    }
+
+    private void registerDndObservers() {
+        try {
+            BroadcastReceiver r = new BroadcastReceiver() {
+                @Override public void onReceive(Context context, Intent intent) {
+                    if (!active) return;
+                    try {
+                        worker.execute(HealthDaemonLiveBridge.this::refreshPhoneDndState);
+                    } catch (RuntimeException ignored) {}
+                }
+            };
+            app.registerReceiver(r,
+                    new IntentFilter(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED),
+                    Context.RECEIVER_EXPORTED);
+            dndReceiver = r;
+        } catch (RuntimeException ignored) {}
+
+        try {
+            Uri zenUri = Settings.Global.getUriFor("zen_mode");
+            if (zenUri != null) {
+                ContentObserver obs = new ContentObserver(new Handler(Looper.getMainLooper())) {
+                    @Override public void onChange(boolean selfChange) {
+                        if (!active) return;
+                        try {
+                            worker.execute(HealthDaemonLiveBridge.this::refreshPhoneDndState);
+                        } catch (RuntimeException ignored) {}
+                    }
+                };
+                app.getContentResolver().registerContentObserver(zenUri, false, obs);
+                zenModeObserver = obs;
+            }
+        } catch (RuntimeException ignored) {}
+    }
+
+    private void refreshPhoneDndState() {
+        int filter = NotificationDndPolicy.INTERRUPTION_FILTER_UNKNOWN;
+        try {
+            NotificationManager nm = app.getSystemService(NotificationManager.class);
+            if (nm != null) filter = nm.getCurrentInterruptionFilter();
+        } catch (RuntimeException ignored) {}
+        int zenMode = 0;
+        try {
+            zenMode = Settings.Global.getInt(app.getContentResolver(), "zen_mode", 0);
+        } catch (RuntimeException ignored) {}
+        phoneDndActive = NotificationDndPolicy.isPhoneDndActive(filter, zenMode);
+    }
+
+    private void applyListenerInterruptionFilter(int filter) {
+        if (!active) return;
+        WeakReference<NotificationListenerService> ref = listenerRef;
+        NotificationListenerService listener = ref == null ? null : ref.get();
+        if (listener == null) {
+            ProbeLog.info("DAEMON_DND_REQUEST source=DAEMON dnd_result=FAILED");
+            return;
+        }
+        try {
+            listener.requestInterruptionFilter(filter);
+            refreshPhoneDndState();
+            ProbeLog.info("DAEMON_DND_REQUEST source=DAEMON dnd_result="
+                    + (filter == NotificationManager.INTERRUPTION_FILTER_PRIORITY ? "ENABLE_DND" : "DISABLE_DND"));
+        } catch (RuntimeException err) {
+            ProbeLog.failure("DAEMON_DND_REQUEST", err);
+        }
+    }
+
+    private void captureListener(Object self) {
+        if (!(self instanceof NotificationListenerService nls)) return;
+        WeakReference<NotificationListenerService> existing = listenerRef;
+        if (existing == null || existing.get() != nls) {
+            listenerRef = new WeakReference<>(nls);
+        }
+    }
+
+    private static boolean isListenerDndActive(Object listenerObj) {
+        if (!(listenerObj instanceof NotificationListenerService nls)) return false;
+        try {
+            return NotificationDndPolicy.isPhoneDndActive(nls.getCurrentInterruptionFilter(), 0);
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private boolean isPhoneNotificationSilent(Object listenerObj, StatusBarNotification sbn) {
+        if (!(listenerObj instanceof NotificationListenerService nls) || sbn == null) return false;
+        String key = sbn.getKey();
+        if (key == null || key.isEmpty()) return false;
+        try {
+            NotificationListenerService.RankingMap map = nls.getCurrentRanking();
+            if (map == null) return false;
+            NotificationListenerService.Ranking ranking = new NotificationListenerService.Ranking();
+            if (!map.getRanking(key, ranking)) return false;
+            NotificationChannel ch = ranking.getChannel();
+            boolean hasChannel = ch != null;
+            int chImp = hasChannel ? ch.getImportance() : NotificationDndPolicy.IMPORTANCE_UNSPECIFIED;
+            boolean hasSound = hasChannel && ch.getSound() != null && !Uri.EMPTY.equals(ch.getSound());
+            boolean shouldVibrate = hasChannel && ch.shouldVibrate();
+            return NotificationDndPolicy.isPhoneNotificationSilent(
+                    ranking.getImportance(), ranking.isAmbient(), hasChannel, chImp, hasSound, shouldVibrate);
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private static Method uniquePushBundleMethod(Class<?> listenerCls) {
+        Method found = null;
+        for (Method m : listenerCls.getDeclaredMethods()) {
+            int mod = m.getModifiers();
+            if (Modifier.isStatic(mod) || m.isSynthetic()) continue;
+            if (m.getReturnType() != Bundle.class || m.getParameterCount() != 2) continue;
+            Class<?>[] p = m.getParameterTypes();
+            if (p[0] == Bundle.class && p[1] == StatusBarNotification.class) {
+                if (found != null) return null;
+                found = m;
+            }
+        }
+        return found;
+    }
+
+    private void logSilentPushThrottled(String reason) {
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastDndMuteLogElapsedMs >= DND_MUTE_LOG_INTERVAL_MS) {
+            lastDndMuteLogElapsedMs = now;
+            ProbeLog.info("DAEMON_NOTIFY_SILENT_PUSH source=DAEMON silent_reason=" + reason);
+        }
     }
 
     private void resolveOptionalNotificationMethods() {

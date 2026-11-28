@@ -52,6 +52,7 @@ final class HealthAlarmBridge extends BroadcastReceiver {
     private HealthWifiBridge wifiBridge;
     private HealthLiveWindowBridge liveBridge;
     private HealthRawCommandBridge rawCommandBridge;
+    private HealthSleepDndBridge sleepDndBridge;
     private BroadcastReceiver controlReceiver;
     private boolean registered;
     private volatile boolean installed;
@@ -139,6 +140,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         HealthRawCommandBridge raw = new HealthRawCommandBridge(app, settings, worker, sender, readiness);
         raw.install(installer, symbols);
         rawCommandBridge = raw;
+
+        HealthSleepDndBridge sleepDnd = new HealthSleepDndBridge(app, settings, worker, readiness);
+        sleepDnd.install(installer, symbols);
+        sleepDndBridge = sleepDnd;
         settings.onTimerChanged(() -> worker.execute(() -> {
             if (!settings.isTimerEnabled()) cancelActiveDailyFor(TargetProfile.CLOCK, true);
             if (!settings.isTimerEnabled() || !settings.isTimerLiveWindowEnabled()) live.closeGroupLocked(true);
@@ -243,6 +248,10 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         settings.onTimerChanged(null);
         settings.onCalendarDisabled(null);
         daily.stop();
+        if (sleepDndBridge != null) {
+            try { sleepDndBridge.close(); } catch (RuntimeException ignored) {}
+            sleepDndBridge = null;
+        }
         if (rawCommandBridge != null) {
             try { rawCommandBridge.close(); } catch (RuntimeException ignored) {}
             rawCommandBridge = null;
@@ -618,6 +627,26 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 settings.setLocalGameFlashbackFallback(false);
                 if (liveBridge != null) liveBridge.onGameFlashbackFallbackChanged(false);
             }
+            case HealthHostControl.ENABLE_NOTIFY_MUTE_DND -> {
+                settings.setLocalNotifyMuteDndFallback(true);
+                if (liveBridge != null) liveBridge.onNotifyMuteDndFallbackChanged(true);
+            }
+            case HealthHostControl.DISABLE_NOTIFY_MUTE_DND -> {
+                settings.setLocalNotifyMuteDndFallback(false);
+                if (liveBridge != null) liveBridge.onNotifyMuteDndFallbackChanged(false);
+            }
+            case HealthHostControl.ENABLE_NOTIFY_SILENT_PUSH -> {
+                settings.setLocalNotifySilentPushFallback(true);
+                if (liveBridge != null) liveBridge.onNotifySilentPushFallbackChanged(true);
+            }
+            case HealthHostControl.DISABLE_NOTIFY_SILENT_PUSH -> {
+                settings.setLocalNotifySilentPushFallback(false);
+                if (liveBridge != null) liveBridge.onNotifySilentPushFallbackChanged(false);
+            }
+            case HealthHostControl.ENABLE_SLEEP_AUTO_DND -> settings.setLocalSleepAutoDndFallback(true);
+            case HealthHostControl.DISABLE_SLEEP_AUTO_DND -> settings.setLocalSleepAutoDndFallback(false);
+            case HealthHostControl.ENABLE_WAKE_EXIT_DND -> settings.setLocalWakeExitDndFallback(true);
+            case HealthHostControl.DISABLE_WAKE_EXIT_DND -> settings.setLocalWakeExitDndFallback(false);
             case HealthHostControl.TEST_LIVE_WINDOW -> {
                 if (liveBridge != null) liveBridge.startLiveTest();
             }
@@ -649,6 +678,9 @@ final class HealthAlarmBridge extends BroadcastReceiver {
         HealthLiveWindowBridge.StatusSnapshot live = liveBridge != null
                 ? liveBridge.statusSnapshot()
                 : new HealthLiveWindowBridge.StatusSnapshot("UNKNOWN", 0, "NONE", "NONE", "NONE", "IDLE");
+        HealthSleepDndBridge.StatusSnapshot sleep = sleepDndBridge != null
+                ? sleepDndBridge.statusSnapshot()
+                : new HealthSleepDndBridge.StatusSnapshot("UNKNOWN", false, false, "NONE", 0L, 0L, 0L);
         return new HealthHostControl.Reply(
                 true,
                 settings.isEnabled(),
@@ -679,7 +711,19 @@ final class HealthAlarmBridge extends BroadcastReceiver {
                 live.testState(),
                 settings.isRawCommandDebugEnabled(),
                 settings.isGameFlashbackEnabled(),
-                settings.gameFlashbackLeadSec());
+                settings.gameFlashbackLeadSec(),
+                settings.isNotifyMuteDndEnabled(),
+                settings.isSleepAutoDndEnabled(),
+                sleep.watchSupport(),
+                sleep.hookReady(),
+                sleep.dndPolicyAccess(),
+                sleep.lastEvent(),
+                sleep.lastAt(),
+                sleep.lastFallAsleepAt(),
+                sleep.lastWakeUpAt(),
+                settings.isWakeExitDndEnabled(),
+                settings.isNotifySilentPushEnabled(),
+                readiness == null ? "UNKNOWN" : readiness.readSilentPushSupport());
     }
 
     private void startManualTestLocked() {

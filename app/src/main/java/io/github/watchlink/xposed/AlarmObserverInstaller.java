@@ -370,6 +370,11 @@ final class AlarmObserverInstaller {
                 .intercept(chain -> active.get() ? hooker.intercept(chain) : chain.proceed()));
     }
 
+    void intercept(String hookId, Method method, XposedInterface.Hooker hooker) {
+        handles.add(hookBuilder(method, hookId)
+                .intercept(chain -> active.get() ? hooker.intercept(chain) : chain.proceed()));
+    }
+
     void observeAround(String hookId, Method method, BeforeCapture before, AfterCapture after) {
         handles.add(hookBuilder(method, hookId).intercept(chain -> {
             boolean capture = active.get();

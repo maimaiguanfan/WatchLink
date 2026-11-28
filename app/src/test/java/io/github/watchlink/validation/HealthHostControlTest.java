@@ -121,4 +121,45 @@ public class HealthHostControlTest {
         assertTrue(reply.gameFlashbackEnabled());
         assertEquals(30, reply.gameFlashbackLeadSec());
     }
+
+    @Test public void sanitizesNotifyAndSleepDndTelemetryAllowlists() {
+        var valid = new HealthHostControl.Reply(
+                true, true, false, true, true, true, "CACHE",
+                "READY_SUPPORTED_ON", "START_SERVICE", "SDK_AND_INTENT",
+                "IDLE", "NONE", "NONE",
+                false, "UNKNOWN", false, 0, "NONE", "NONE", 0L,
+                false, "SUPPORTED_LIVE_LEVEL", 0, "NONE", "NONE", "NONE", "IDLE",
+                false, false, 5,
+                true, true, "SUPPORTED_136", true, true, "FALL_ASLEEP_DND_ON",
+                1700000000000L, 1700000000000L, 1700025200000L, true, true, "SUPPORTED_94");
+        assertTrue(valid.notifyMuteDndEnabled());
+        assertTrue(valid.notifySilentPushEnabled());
+        assertEquals("SUPPORTED_94", valid.silentPushWatchSupport());
+        assertTrue(valid.sleepAutoDndEnabled());
+        assertTrue(valid.wakeExitDndEnabled());
+        assertEquals("SUPPORTED_136", valid.sleepWatchSupport());
+        assertTrue(valid.sleepHookReady());
+        assertTrue(valid.dndPolicyAccess());
+        assertEquals("FALL_ASLEEP_DND_ON", valid.sleepLastEvent());
+        assertEquals(1700000000000L, valid.sleepLastAt());
+        assertEquals(1700000000000L, valid.sleepLastFallAsleepAt());
+        assertEquals(1700025200000L, valid.sleepLastWakeUpAt());
+
+        var poisoned = new HealthHostControl.Reply(
+                true, false, false, true, true, true, "CACHE",
+                "READY_SUPPORTED_ON", "NONE", "NONE",
+                "IDLE", "NONE", "NONE",
+                false, "UNKNOWN", false, 0, "NONE", "NONE", 0L,
+                false, "UNKNOWN", 0, "NONE", "NONE", "NONE", "IDLE",
+                false, false, 5,
+                true, true, "bad_cap", true, true, "secret_msg", -5L, -10L, -20L, false, true, "evil94");
+        assertFalse(poisoned.wakeExitDndEnabled());
+        assertTrue(poisoned.notifySilentPushEnabled());
+        assertEquals("UNKNOWN", poisoned.silentPushWatchSupport());
+        assertEquals("UNKNOWN", poisoned.sleepWatchSupport());
+        assertEquals("NONE", poisoned.sleepLastEvent());
+        assertEquals(0L, poisoned.sleepLastAt());
+        assertEquals(0L, poisoned.sleepLastFallAsleepAt());
+        assertEquals(0L, poisoned.sleepLastWakeUpAt());
+    }
 }
